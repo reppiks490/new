@@ -9,12 +9,14 @@ from pydantic import BaseModel, Field
 # untrusted sources. Files this function inspects come from this project's
 # own bake/render pipeline (app/qa/bake_output_verification.py,
 # app/render/output_verification.py), not arbitrary uploads, and this
-# project's own defined ceiling is the 16K render/texture tier
-# (15360x8640 = 132,710,400 pixels -- see app/render/output_resolution.py).
+# project's own largest outputs are the 16K render tier (15360x8640 =
+# 132,710,400 px -- app/render/output_resolution.py) and 16K square biome
+# textures (16384x16384 = 268,435,456 px --
+# app/world/biome_texture_synthesis.py::MAX_TEXTURE_SIZE).
 # Rather than disable the guard entirely, raise it to a fixed, still-bounded
-# cap comfortably above that known ceiling, so a genuinely oversized/hostile
-# file is still rejected.
-Image.MAX_IMAGE_PIXELS = 200_000_000
+# cap above that known ceiling, so a genuinely oversized/hostile file is
+# still rejected.
+Image.MAX_IMAGE_PIXELS = 300_000_000
 
 
 class TextureQAReport(BaseModel):

@@ -104,9 +104,12 @@ def test_decompression_bomb_guard_is_raised_but_still_bounded_not_disabled():
     # accommodate this project's own 16K ceiling, rather than disabling it
     # outright (None would mean "no limit at all").
     assert PILImage.MAX_IMAGE_PIXELS is not None
-    assert PILImage.MAX_IMAGE_PIXELS == 200_000_000
-    # The 16K tier (132,710,400 px) must fit comfortably under the raised
-    # cap, and the cap must still be well below "unlimited".
+    assert PILImage.MAX_IMAGE_PIXELS == 300_000_000
+    # The 16K render tier (132,710,400 px) and the largest synthesized
+    # texture (16384^2 = 268,435,456 px) must both fit under the raised cap,
+    # and the cap must still be well below "unlimited".
     from app.render.output_resolution import RenderResolutionTier, render_output_spec_for_tier
+    from app.world.biome_texture_synthesis import MAX_TEXTURE_SIZE
     spec = render_output_spec_for_tier(RenderResolutionTier.UHD_16K)
     assert spec.width * spec.height < PILImage.MAX_IMAGE_PIXELS
+    assert MAX_TEXTURE_SIZE * MAX_TEXTURE_SIZE < PILImage.MAX_IMAGE_PIXELS

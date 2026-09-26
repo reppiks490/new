@@ -867,9 +867,10 @@ def terrain_generate_best_of_n(req: TerrainBestOfNRequest):
 
 class BiomeTextureSynthesisRequest(BaseModel):
     terrain: TerrainSpec
-    texture_size: int = Field(default=1024, gt=0, le=16384)
+    texture_size: int = Field(default=2048, ge=8, le=16384)
     basecolor_path: str
     roughness_path: str
+    normal_path: str | None = None
 
 
 @app.post("/v1/world/terrain/biome-texture")
@@ -883,6 +884,7 @@ def world_terrain_biome_texture(req: BiomeTextureSynthesisRequest):
             texture_size=req.texture_size,
             basecolor_path=req.basecolor_path,
             roughness_path=req.roughness_path,
+            normal_path=req.normal_path,
             seed=req.terrain.seed,
         )
     except ValueError as e:
