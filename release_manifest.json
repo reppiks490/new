@@ -1,5 +1,5 @@
 {
-  "file_count": 199,
+  "file_count": 194,
   "files": [
     {
       "path": ".claude/settings.local.json",
@@ -413,8 +413,8 @@
     },
     {
       "path": "app/release/source_package.py",
-      "sha256": "08687009df1e6e24dadc4a981bc647768b681e7c5d520467e4f5d2c28b8ecab1",
-      "size_bytes": 3811
+      "sha256": "812b727eb4e148f43a061b5f673b8a92a04d42e439852af20002a82ff27ad869",
+      "size_bytes": 4490
     },
     {
       "path": "app/render/__init__.py",
@@ -620,31 +620,6 @@
       "path": "blender_scripts/production_pipeline.py",
       "sha256": "851fdd3adcf377cb698ef138e78125634deb11aed266b889206794bdae44e597",
       "size_bytes": 3739
-    },
-    {
-      "path": "character3d_masterbuild.egg-info/PKG-INFO",
-      "sha256": "c025cd29d59a21c8a9370e298fc948c291cc2227215ffe08368de8774471a8c9",
-      "size_bytes": 694
-    },
-    {
-      "path": "character3d_masterbuild.egg-info/SOURCES.txt",
-      "sha256": "13778c73937a55b2c03a9c5ea498855360d0ba1605ba8d8fbe0f0acc6a84ce2f",
-      "size_bytes": 4204
-    },
-    {
-      "path": "character3d_masterbuild.egg-info/dependency_links.txt",
-      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-      "size_bytes": 1
-    },
-    {
-      "path": "character3d_masterbuild.egg-info/requires.txt",
-      "sha256": "4dd2768898338419a0205c2af1b98d5f324cc91cb26179da7886d372e3214257",
-      "size_bytes": 217
-    },
-    {
-      "path": "character3d_masterbuild.egg-info/top_level.txt",
-      "sha256": "8a8f60ecb09b7e64c6d5214a8043865e608507db8c3f61f995eae6d078875901",
-      "size_bytes": 4
     },
     {
       "path": "config/capability_packs.yaml",
@@ -978,8 +953,8 @@
     },
     {
       "path": "tests/test_v12_source_package.py",
-      "sha256": "e562d86eda91dbebe40e98f1ead345976fca6fdcf966602e399365be9dc302d8",
-      "size_bytes": 1105
+      "sha256": "b0ad4c8edf83d9ce1d50bf3ca26d91ac695c3d5a73f8b9feafc8868e3f236e69",
+      "size_bytes": 3082
     },
     {
       "path": "tests/test_v13_api.py",
@@ -999,7 +974,7 @@
   ],
   "project": "character3d-masterbuild",
   "schema_version": "character3d-source-release-v1",
-  "source_digest_sha256": "83645c3332abd4860710a5832506a3127e85ee27ff0da786ba05a0f6db2cdfc6",
-  "total_bytes": 680645,
+  "source_digest_sha256": "9421c4e4aa8856eda53e58a8f851f463807009dc995e0d9b901163a71e634bf1",
+  "total_bytes": 678181,
   "version": "1.3.0"
 }
