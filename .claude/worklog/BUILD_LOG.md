@@ -478,3 +478,46 @@ it directly rather than just asserting it's fine:
 - Everything else logged across sessions 3, 5, 6, 7, 8 remains open:
   Hi3D mode routing integration, world biome/streaming architecture,
   USD scene assembly (blocked on `pxr`), interactive editing surfaces.
+
+## Session 10: biome/region composition for terrain (closes hook item 2's main gap)
+
+Real work, one honest debugging detour worth recording:
+
+- `app/world/biomes.py`: `classify_biomes()` -- deterministic elevation +
+  slope classification (water/beach/plains/forest/rock/mountain/snow)
+  over the existing normalized [0,1] heightmap from
+  `diamond_square_heightmap`. Slope (via `np.gradient`) overrides
+  elevation-only classification to ROCK on steep terrain, except it
+  never overrides WATER or SNOW (a steep underwater slope is still
+  water; a steep snow-capped peak is still snow, not "rock").
+  `biome_vertex_colors()` maps labels to real RGBA vertex colors.
+- `app/world/terrain.py::generate_terrain_mesh_with_biomes()` — wires
+  this onto the *actual* mesh (`mesh.visual.vertex_colors`), not a
+  separate unused label grid sitting beside the geometry.
+- First test run: **2 of 7 tests failed**, correctly, on my own test
+  construction rather than the code: (1) a 4-row-per-band heightmap
+  meant every row's central-difference gradient crossed into a
+  neighboring band, so the whole "forest" row got legitimately
+  slope-overridden to ROCK by the code doing exactly what it should;
+  (2) a "ridge" test picked an elevation (0.9) that was already inside
+  the snow band by the thresholds I'd chosen, so classify_biomes
+  correctly left it SNOW per its own explicit no-override-snow rule —
+  not a bug, a bad test fixture. Fixed by probing real gradient values
+  with numpy first (confirmed slope=0.13 at a chosen step boundary,
+  just above the 0.12 threshold) before rewriting the tests around
+  verified numbers, same discipline as sessions 5 and 6's live probes.
+- `tests/test_biomes.py`: 7 tests, including a full pipeline test that
+  generates a real terrain mesh, finds the actual lowest/highest real
+  vertex by height, and confirms the mesh's own stored vertex color at
+  those exact indices matches the expected biome color -- verifying the
+  heightmap -> biome -> mesh-vertex-color chain on the real object, not
+  just that the label grid alone looks right.
+- Full suite: **187/187 passed, `-W error`** (180 prior + 7 new).
+
+## Next candidates
+
+- World-scale streaming/LOD (multiple terrain tiles/cells stitched
+  together, level-of-detail swapping by distance) is still unbuilt --
+  biome composition closes one part of "vast worlds," tiling/streaming
+  is the remaining part.
+- Everything else logged across sessions 3, 5, 6, 7, 8, 9 remains open.

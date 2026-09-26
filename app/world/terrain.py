@@ -104,3 +104,17 @@ def heightmap_to_mesh(heightmap: np.ndarray, *, size_meters: float, height_scale
 def generate_terrain_mesh(spec: TerrainSpec) -> trimesh.Trimesh:
     heightmap = diamond_square_heightmap(spec)
     return heightmap_to_mesh(heightmap, size_meters=spec.size_meters, height_scale_meters=spec.height_scale_meters)
+
+
+def generate_terrain_mesh_with_biomes(spec: TerrainSpec, thresholds=None) -> trimesh.Trimesh:
+    """Same as generate_terrain_mesh, but also classifies each vertex into a
+    biome (water/beach/plains/forest/rock/mountain/snow) from the same
+    heightmap and assigns real per-vertex colors on the mesh -- not a
+    separate, unused label grid sitting beside the geometry."""
+    from app.world.biomes import biome_vertex_colors, classify_biomes
+
+    heightmap = diamond_square_heightmap(spec)
+    mesh = heightmap_to_mesh(heightmap, size_meters=spec.size_meters, height_scale_meters=spec.height_scale_meters)
+    labels = classify_biomes(heightmap, thresholds)
+    mesh.visual.vertex_colors = biome_vertex_colors(labels)
+    return mesh
