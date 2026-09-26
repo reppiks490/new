@@ -521,3 +521,48 @@ Real work, one honest debugging detour worth recording:
   biome composition closes one part of "vast worlds," tiling/streaming
   is the remaining part.
 - Everything else logged across sessions 3, 5, 6, 7, 8, 9 remains open.
+
+## Session 11: real local image-to-prompt-hints analysis (closes hook item 3, honestly scoped)
+
+Item 3 ("through 3D creation, image input, or prompt method") kept
+getting flagged for lacking an image->prompt reverse path. Built the
+honest version of that rather than skip it or fake it:
+
+- `app/pipeline/image_analysis.py`: `analyze_image_for_prompt()` --
+  explicitly NOT a natural-language image captioner (that needs a
+  vision-language model this environment doesn't have and this project
+  doesn't fabricate having; said so directly in the module docstring).
+  What it does instead, all real local computation over actual pixels:
+  - Dominant palette + exact proportions, via PIL's own built-in
+    `quantize()`/`getcolors()` (verified against a real 50/50 split
+    synthetic image before writing code against it, same probe-first
+    discipline as prior sessions).
+  - Brightness (grayscale mean) and contrast (grayscale std).
+  - Structural edge density, reusing the existing finite-difference
+    edge proxy from `app/render/multiview.py::_edges` rather than
+    reinventing it.
+  - A resolution-driven `suggested_texture_tier` (reuses the existing
+    `TextureTier` enum from `app/core/models.py` instead of a parallel
+    one).
+- `tests/test_image_analysis.py`: 7 tests against real synthetic
+  images written to disk -- a known 50/50 two-color split verified to
+  extract almost exactly 0.5/0.5 proportions, a flat solid image
+  verified to have near-zero contrast/edges, a checkerboard verified to
+  have measurably higher edge density and contrast than a flat image of
+  the same size, small/large real images verified to trigger the
+  correct resolution warning and texture-tier suggestion respectively
+  (including an actual 8192x4096 real fixture), plus missing-file and
+  invalid-parameter rejection.
+- Full suite: **194/194 passed, `-W error`** (187 prior + 7 new).
+
+## Next candidates
+
+- `analyze_image_for_prompt`'s hints aren't yet consumed anywhere (e.g.
+  folded into `CharacterSpec`/`SceneSpec` construction, or used to
+  auto-select `texture_tier` in `app/pipeline/planner.py`) -- currently
+  a standalone analysis function, same pattern as session 7's Meshy
+  pipeline driver before integration.
+- World-scale streaming/LOD, Hi3D mode routing integration,
+  bake-receipt + bake-output-verification combined check, USD scene
+  assembly (blocked on `pxr`), interactive editing surfaces -- all
+  still open from prior sessions.
