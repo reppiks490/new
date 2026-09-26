@@ -67,12 +67,30 @@ def extract_tile_heightmap(master: np.ndarray, spec: WorldGridSpec, tile_x: int,
     return master[z0:z0 + sz + 1, x0:x0 + sx + 1]
 
 
-def tile_mesh(master: np.ndarray, spec: WorldGridSpec, tile_x: int, tile_z: int, *, lod: int = 0) -> trimesh.Trimesh:
+def tile_mesh(
+    master: np.ndarray,
+    spec: WorldGridSpec,
+    tile_x: int,
+    tile_z: int,
+    *,
+    lod: int = 0,
+    with_biomes: bool = False,
+    biome_thresholds=None,
+) -> trimesh.Trimesh:
     heightmap = extract_tile_heightmap(master, spec, tile_x, tile_z)
     if lod > 0:
         step = 2 ** lod
         heightmap = heightmap[::step, ::step]
-    return heightmap_to_mesh(heightmap, size_meters=spec.tile_size_meters, height_scale_meters=spec.height_scale_meters)
+    mesh = heightmap_to_mesh(heightmap, size_meters=spec.tile_size_meters, height_scale_meters=spec.height_scale_meters)
+    if with_biomes:
+        # Classify on the SAME (possibly LOD-downsampled) heightmap the mesh
+        # was just built from, so labels and vertices stay index-aligned at
+        # every LOD level, not just LOD0.
+        from app.world.biomes import biome_vertex_colors, classify_biomes
+
+        labels = classify_biomes(heightmap, biome_thresholds)
+        mesh.visual.vertex_colors = biome_vertex_colors(labels)
+    return mesh
 
 
 class WorldStreamingManager:
@@ -83,9 +101,16 @@ class WorldStreamingManager:
     text-only environment has no GUI toolkit to build.
     """
 
-    def __init__(self, spec: WorldGridSpec, *, lod_distances: tuple[float, ...] = (200.0, 500.0, 1000.0)):
+    def __init__(
+        self,
+        spec: WorldGridSpec,
+        *,
+        lod_distances: tuple[float, ...] = (200.0, 500.0, 1000.0),
+        with_biomes: bool = True,
+    ):
         self.spec = spec
         self.lod_distances = lod_distances
+        self.with_biomes = with_biomes
         self._master: np.ndarray | None = None
         self._tile_cache: dict[tuple[int, int, int], trimesh.Trimesh] = {}
 
@@ -122,7 +147,9 @@ class WorldStreamingManager:
     def load_tile(self, tile_x: int, tile_z: int, *, lod: int) -> trimesh.Trimesh:
         key = (tile_x, tile_z, lod)
         if key not in self._tile_cache:
-            self._tile_cache[key] = tile_mesh(self.master, self.spec, tile_x, tile_z, lod=lod)
+            self._tile_cache[key] = tile_mesh(
+                self.master, self.spec, tile_x, tile_z, lod=lod, with_biomes=self.with_biomes,
+            )
         return self._tile_cache[key]
 
     def update(self, viewer_xz: tuple[float, float], view_distance_meters: float) -> dict[tuple[int, int], trimesh.Trimesh]:

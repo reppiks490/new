@@ -621,3 +621,29 @@ session 10; tiling/streaming/LOD was still open).
   no vertex-color biome data unless a caller separately calls
   `classify_biomes` on the same extracted heightmap.
 - Everything else logged across sessions 3, 7, 8, 9, 11 remains open.
+
+## Session 13: biome coloring wired into the tile-streaming pipeline
+
+Closed session 12's own logged follow-up: tile meshes coming out of
+`WorldStreamingManager` had geometry/LOD but no biome data unless a
+caller separately re-ran `classify_biomes`.
+
+- `tile_mesh()` gains `with_biomes`/`biome_thresholds`: classifies the
+  SAME (possibly LOD-downsampled) heightmap the mesh was just built
+  from, so labels stay index-aligned with vertices at every LOD level,
+  not just LOD0 -- verified directly in a test by independently
+  recomputing the expected LOD1 colors from a manually-downsampled
+  heightmap and asserting exact array equality against what the real
+  pipeline produced.
+- `WorldStreamingManager(with_biomes=True default)` plumbs the flag
+  into `load_tile`, and can be turned off.
+- 4 new tests: real (non-default) vertex colors are actually assigned,
+  LOD1 color/vertex alignment verified against an independently
+  computed expectation, the streaming manager's default `update()`
+  output is biome-colored, and disabling `with_biomes` leaves trimesh's
+  own untouched default visuals (checked by confirming the biome
+  palette's water color is absent, not just "some color exists").
+- Full suite: **206/206 passed, `-W error`** (202 prior + 4 new).
+
+Pushed immediately per explicit request ("hurry up and ship") rather
+than batching further.

@@ -115,3 +115,50 @@ def test_out_of_range_tile_request_raises():
     master = generate_master_heightmap(spec)
     with pytest.raises(ValueError):
         extract_tile_heightmap(master, spec, spec.tile_count_x, 0)
+
+
+def test_tile_mesh_with_biomes_assigns_real_vertex_colors():
+    spec = _spec()
+    master = generate_master_heightmap(spec)
+    mesh = tile_mesh(master, spec, 0, 0, with_biomes=True)
+    colors = np.asarray(mesh.visual.vertex_colors)
+    assert colors.shape[0] == len(mesh.vertices)
+    # Not all-default/uninitialized -- real biome colors were actually assigned.
+    assert len(set(map(tuple, colors[:, :4]))) >= 1
+    assert (colors[:, 3] == 255).all()  # fully opaque alpha for every assigned biome
+
+
+def test_biome_colors_stay_aligned_with_vertices_at_lod1():
+    from app.world.biomes import classify_biomes, biome_vertex_colors
+
+    spec = _spec()
+    master = generate_master_heightmap(spec)
+    heightmap = extract_tile_heightmap(master, spec, 0, 0)
+    downsampled = heightmap[::2, ::2]
+    expected_labels = classify_biomes(downsampled)
+    expected_colors = biome_vertex_colors(expected_labels)
+
+    mesh = tile_mesh(master, spec, 0, 0, lod=1, with_biomes=True)
+    actual_colors = np.asarray(mesh.visual.vertex_colors)[:, :4]
+    assert np.array_equal(actual_colors, expected_colors)
+
+
+def test_streaming_manager_defaults_to_biome_colored_tiles():
+    spec = _spec(tile_count_x=2, tile_count_z=2, tile_size_meters=50.0)
+    mgr = WorldStreamingManager(spec)
+    loaded = mgr.update((0.0, 0.0), view_distance_meters=200.0)
+    assert loaded
+    for mesh in loaded.values():
+        colors = np.asarray(mesh.visual.vertex_colors)
+        assert colors.shape[0] == len(mesh.vertices)
+
+
+def test_streaming_manager_can_disable_biome_coloring():
+    spec = _spec(tile_count_x=2, tile_count_z=2, tile_size_meters=50.0)
+    mgr = WorldStreamingManager(spec, with_biomes=False)
+    loaded = mgr.update((0.0, 0.0), view_distance_meters=200.0)
+    mesh = next(iter(loaded.values()))
+    # trimesh defaults to a flat gray ColorVisuals when none was assigned;
+    # confirm it's the untouched default rather than our biome palette.
+    colors = np.asarray(mesh.visual.vertex_colors)[:, :3]
+    assert not (colors == (30, 80, 160)).all(axis=1).any()  # no water color present
