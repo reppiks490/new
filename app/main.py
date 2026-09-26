@@ -1,7 +1,7 @@
 from pathlib import Path
 import os
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from app.core.models import CharacterSpec, HardwareProfile
 from app.core.policy import evaluate_policy
 from app.pipeline.planner import compile_plan
@@ -780,7 +780,7 @@ from app.qa.scene import qa_scene_placement
 from app.world.terrain import TerrainSpec, generate_terrain_mesh, generate_terrain_mesh_with_biomes
 from app.world.world_grid import WorldGridSpec, generate_master_heightmap, tile_mesh
 from app.core.body_morphs import BodyMorphSpec
-from app.rigging.body_morph_apply import apply_body_morphs
+from app.rigging.body_morph_apply import apply_body_morphs, apply_body_morphs_auto
 from app.render.job import compile_render_job
 from app.render.output_resolution import RenderOutputSpec, render_output_spec_for_tier
 from app.render.output_verification import verify_render_output
@@ -844,8 +844,23 @@ def world_tile_generate(req: WorldTileRequest):
 class BodyMorphApplyRequest(BaseModel):
     input_path: str
     output_path: str
-    morphs: BodyMorphSpec
-    region_weights: dict[str, list[float]]
+    # Either morphs (raw -1..1 sliders) or percentages (-100..100, the
+    # friendlier scale most mainstream character creators present) --
+    # exactly one must be supplied.
+    morphs: BodyMorphSpec | None = None
+    percentages: dict[str, float] | None = None
+    # Any region not present here is auto-estimated from the mesh's own
+    # bounding box when auto_weights=True (the default) -- no manual setup
+    # needed for the 11 supported regions (everything except arms/hands;
+    # see app/rigging/auto_region_weights.py::UNSUPPORTED_REGIONS).
+    region_weights: dict[str, list[float]] = {}
+    auto_weights: bool = True
+
+    @model_validator(mode="after")
+    def validate_exactly_one_morph_input(self):
+        if (self.morphs is None) == (self.percentages is None):
+            raise ValueError("exactly one of morphs or percentages must be supplied")
+        return self
 
 
 @app.post("/v1/body-morphs/apply")
@@ -858,8 +873,12 @@ def body_morphs_apply(req: BodyMorphApplyRequest):
         raise HTTPException(status_code=404, detail=f"{in_path} does not exist")
     mesh = trimesh.load(in_path, force="mesh", process=False)
     weights = {name: np.asarray(values, dtype=np.float64) for name, values in req.region_weights.items()}
+    morphs = req.morphs if req.morphs is not None else BodyMorphSpec.from_percentages(req.percentages)
     try:
-        out_mesh = apply_body_morphs(mesh, req.morphs, weights)
+        if req.auto_weights:
+            out_mesh = apply_body_morphs_auto(mesh, morphs, weights)
+        else:
+            out_mesh = apply_body_morphs(mesh, morphs, weights)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     out = Path(req.output_path)

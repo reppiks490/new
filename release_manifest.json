@@ -1,5 +1,5 @@
 {
-  "file_count": 194,
+  "file_count": 196,
   "files": [
     {
       "path": ".claude/settings.local.json",
@@ -63,8 +63,8 @@
     },
     {
       "path": "app/core/body_morphs.py",
-      "sha256": "a96505680f3ddc622e64d0835b39efd145b42abf10bae0755b5119c79c471317",
-      "size_bytes": 6219
+      "sha256": "89ca295d9fc9f3786e4e27f91c5e82762598a954d1a8e8b71f5e770b657b7b8e",
+      "size_bytes": 7108
     },
     {
       "path": "app/core/content_filters.py",
@@ -118,8 +118,8 @@
     },
     {
       "path": "app/main.py",
-      "sha256": "b3a66a734a2d83b88027dede72fb82053ee3eac134381e261f22d571c28c3986",
-      "size_bytes": 36342
+      "sha256": "be5642401a23bee1e5faf6cc419250eca2d31c7757ca2bf3b8759bb016c83b69",
+      "size_bytes": 37414
     },
     {
       "path": "app/materials/__init__.py",
@@ -452,9 +452,14 @@
       "size_bytes": 0
     },
     {
+      "path": "app/rigging/auto_region_weights.py",
+      "sha256": "1a52c978386778258f89b69d61641c86071df240528adf0763e0dd177fc04888",
+      "size_bytes": 3804
+    },
+    {
       "path": "app/rigging/body_morph_apply.py",
-      "sha256": "07704bfda753fe9e3ab87f2cc60ae6d8f8dd2843312e15a42187d6b427f832a9",
-      "size_bytes": 2844
+      "sha256": "d48109d675ba01577755ee96c63391f90716a8e3e06a5eb112317974f5d317a0",
+      "size_bytes": 4958
     },
     {
       "path": "app/rigging/correctives.py",
@@ -747,6 +752,11 @@
       "size_bytes": 1733
     },
     {
+      "path": "tests/test_auto_region_weights.py",
+      "sha256": "7cdba05c1c59cbfba6f749ad33e270f97c7aac795264ce4497f3b5302a57289d",
+      "size_bytes": 3151
+    },
+    {
       "path": "tests/test_bake_output_verification.py",
       "sha256": "1f57a04a12a6239a955ea71c1dfe308e811dcbdd62badcd6265182c09e96c077",
       "size_bytes": 3837
@@ -763,8 +773,8 @@
     },
     {
       "path": "tests/test_body_morphs.py",
-      "sha256": "894db80e785d8a8e30a27435b4f62c81386ebd16605632acc9e5d2e6ab43b718",
-      "size_bytes": 4365
+      "sha256": "019a6532d19d3050e44c0c0a63528cfb8687c6b51189b89b77c6420db7a845f1",
+      "size_bytes": 7253
     },
     {
       "path": "tests/test_candidate_selection.py",
@@ -958,8 +968,8 @@
     },
     {
       "path": "tests/test_v13_api.py",
-      "sha256": "3a7ff58a068980d447025a5ec1aeece67ea88ed93c9330ca19f07cbdb965e387",
-      "size_bytes": 10997
+      "sha256": "6f27d0d23993c7b26dbec85133848cf88421adc133c06ebd75f64fb0b831449b",
+      "size_bytes": 12774
     },
     {
       "path": "tests/test_world_grid.py",
@@ -974,7 +984,7 @@
   ],
   "project": "character3d-masterbuild",
   "schema_version": "character3d-source-release-v1",
-  "source_digest_sha256": "9421c4e4aa8856eda53e58a8f851f463807009dc995e0d9b901163a71e634bf1",
-  "total_bytes": 678181,
+  "source_digest_sha256": "07dd9b990b749a123e25e78604b482ad500ce018b0094b06d16f6c00418dd38e",
+  "total_bytes": 693876,
   "version": "1.3.0"
 }

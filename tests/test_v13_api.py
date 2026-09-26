@@ -287,3 +287,51 @@ def test_hi3d_generate_full_success_with_stubbed_client(monkeypatch, tmp_path):
     body = r.json()
     assert body["status"] == "succeeded"
     assert body["task_id"] == "hi3d-task-1"
+
+
+def test_body_morphs_apply_with_percentages_and_auto_weights_needs_no_region_weights(tmp_path):
+    import trimesh
+    in_path = tmp_path / "box.obj"
+    trimesh.creation.box(extents=(1, 1, 1)).export(in_path)
+    out_path = tmp_path / "morphed.obj"
+
+    r = client.post("/v1/body-morphs/apply", json={
+        "input_path": str(in_path), "output_path": str(out_path),
+        "percentages": {"height": 40},
+        # region_weights omitted entirely, auto_weights defaults to True
+    })
+    assert r.status_code == 200
+    assert out_path.is_file()
+
+
+def test_body_morphs_apply_rejects_both_morphs_and_percentages(tmp_path):
+    import trimesh
+    in_path = tmp_path / "box.obj"
+    trimesh.creation.box(extents=(1, 1, 1)).export(in_path)
+    r = client.post("/v1/body-morphs/apply", json={
+        "input_path": str(in_path), "output_path": str(tmp_path / "out.obj"),
+        "morphs": {"sliders": {"height": 0.4}},
+        "percentages": {"height": 40},
+    })
+    assert r.status_code == 422
+
+
+def test_body_morphs_apply_rejects_neither_morphs_nor_percentages(tmp_path):
+    import trimesh
+    in_path = tmp_path / "box.obj"
+    trimesh.creation.box(extents=(1, 1, 1)).export(in_path)
+    r = client.post("/v1/body-morphs/apply", json={
+        "input_path": str(in_path), "output_path": str(tmp_path / "out.obj"),
+    })
+    assert r.status_code == 422
+
+
+def test_body_morphs_apply_unsupported_region_without_auto_or_override_is_422(tmp_path):
+    import trimesh
+    in_path = tmp_path / "box.obj"
+    trimesh.creation.box(extents=(1, 1, 1)).export(in_path)
+    r = client.post("/v1/body-morphs/apply", json={
+        "input_path": str(in_path), "output_path": str(tmp_path / "out.obj"),
+        "percentages": {"arm_length": 50},
+    })
+    assert r.status_code == 422

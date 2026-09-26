@@ -54,6 +54,22 @@ class BodyMorphSpec(BaseModel):
     def extreme_slider_count(self) -> int:
         return sum(1 for v in self.sliders.values() if abs(v) >= 0.85)
 
+    @classmethod
+    def from_percentages(cls, percentages: dict[BodyProportionSlider | str, float]) -> "BodyMorphSpec":
+        """Convenience constructor: percentages in [-100, 100] (0 = neutral,
+        +100 = the region's maximum supported multiplier, -100 = its
+        minimum) instead of raw [-1, 1] sliders. -100..100 is a more
+        immediately intuitive scale for a caller building a UI or a quick
+        script than "what does 0.4 even mean" -- it's exactly the same
+        underlying value, just presented the way most mainstream character
+        creators present their own sliders.
+        """
+        sliders: dict[BodyProportionSlider, float] = {}
+        for key, pct in percentages.items():
+            slider = key if isinstance(key, BodyProportionSlider) else BodyProportionSlider(key)
+            sliders[slider] = pct / 100.0
+        return cls(sliders=sliders)
+
 
 class RegionAxisScale(BaseModel):
     """One named vertex-group region, scaled along one local axis about a

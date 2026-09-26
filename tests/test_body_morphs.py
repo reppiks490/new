@@ -104,3 +104,68 @@ def test_glute_size_scales_glutes_region_on_y():
     assert out.bounds[1][1] - out.bounds[0][1] > mesh.bounds[1][1] - mesh.bounds[0][1]
     assert np.allclose(out.vertices[:, 0], mesh.vertices[:, 0])
     assert np.allclose(out.vertices[:, 2], mesh.vertices[:, 2])
+
+
+def test_from_percentages_converts_to_normalized_sliders():
+    spec = BodyMorphSpec.from_percentages({"height": 40, "waist": -30, "bust_size": 100})
+    assert spec.sliders[BodyProportionSlider.HEIGHT] == pytest.approx(0.4)
+    assert spec.sliders[BodyProportionSlider.WAIST] == pytest.approx(-0.3)
+    assert spec.sliders[BodyProportionSlider.BUST_SIZE] == pytest.approx(1.0)
+
+
+def test_from_percentages_accepts_string_keys():
+    spec = BodyMorphSpec.from_percentages({"glute_size": 50})
+    assert spec.sliders[BodyProportionSlider.GLUTE_SIZE] == pytest.approx(0.5)
+
+
+def test_from_percentages_out_of_range_still_rejected():
+    with pytest.raises(ValueError):
+        BodyMorphSpec.from_percentages({"height": 150})
+
+
+def test_apply_body_morphs_auto_needs_zero_manual_region_weights():
+    from app.rigging.body_morph_apply import apply_body_morphs_auto
+
+    mesh = _tall_box()
+    spec = BodyMorphSpec(sliders={BodyProportionSlider.HEIGHT: 1.0})
+    # No region_weights supplied at all -- "whole_body" is auto-estimated
+    # from the mesh's own bounding box.
+    out = apply_body_morphs_auto(mesh, spec)
+    assert out.bounds[1][2] - out.bounds[0][2] > mesh.bounds[1][2] - mesh.bounds[0][2]
+
+
+def test_apply_body_morphs_auto_caller_override_takes_precedence():
+    from app.rigging.body_morph_apply import apply_body_morphs_auto
+
+    mesh = _tall_box()
+    spec = BodyMorphSpec(sliders={BodyProportionSlider.HEIGHT: 1.0})
+    zero_weights = np.zeros(len(mesh.vertices))
+    # Explicitly override "whole_body" with all-zero weights -- must be a
+    # true no-op, proving the caller's own weights win over auto-estimation
+    # rather than being silently replaced.
+    out = apply_body_morphs_auto(mesh, spec, {"whole_body": zero_weights})
+    assert np.allclose(out.vertices, mesh.vertices)
+
+
+def test_apply_body_morphs_auto_raises_for_unsupported_region_with_no_override():
+    from app.rigging.body_morph_apply import apply_body_morphs_auto
+
+    mesh = _tall_box()
+    # ARM_LENGTH drives the "arms" region, which is explicitly NOT
+    # auto-estimated (see app/rigging/auto_region_weights.py) -- must fail
+    # clearly rather than silently no-op or guess.
+    spec = BodyMorphSpec(sliders={BodyProportionSlider.ARM_LENGTH: 1.0})
+    with pytest.raises(ValueError, match="arms"):
+        apply_body_morphs_auto(mesh, spec)
+
+
+def test_apply_body_morphs_auto_zero_value_sliders_need_no_weights_at_all():
+    from app.rigging.body_morph_apply import apply_body_morphs_auto
+
+    mesh = _tall_box()
+    # A zero-value slider for an unsupported region must not raise --
+    # apply_body_morphs already skips value==0 sliders entirely, so
+    # apply_body_morphs_auto shouldn't even try to resolve weights for it.
+    spec = BodyMorphSpec(sliders={BodyProportionSlider.ARM_LENGTH: 0.0})
+    out = apply_body_morphs_auto(mesh, spec)
+    assert np.allclose(out.vertices, mesh.vertices)
