@@ -1163,3 +1163,65 @@ would reject on sight. Built `app/world/terrain_selection.py`:
 Full suite: **334/334 passed** (317 prior + 15 + 2).
 
 Next: feature 3 (real procedural biome texture synthesis to PNG maps).
+
+## Feature 3/3: real procedural biome texture synthesis to PNG maps
+
+Built `app/world/biome_texture_synthesis.py` to bake heightmap + biome
+classification into real exportable basecolor + roughness PNG maps.
+
+**Caught and fixed a genuine quality bug before this was done, not after
+shipping:** the first version nearest-neighbor-upsampled the coarse biome
+label grid directly into texture pixels with uniform per-pixel white noise
+for color jitter. Generated a real 2048x2048 PNG from it and looked at the
+actual image (not just shape/dtype assertions) -- it was visibly blocky,
+grid-aligned square regions with flat color, because more output pixels just
+meant bigger flat blocks, not more detail. The user caught this same problem
+independently on a smaller preview before I'd re-verified at full size,
+correctly rejecting it as not meeting real 2K quality.
+
+Root-caused and fixed properly rather than patching around it: rewrote the
+module around real coherent fractal value noise (bilinear-interpolated
+lattice noise, summed across octaves at doubling frequency/halving
+amplitude -- a from-scratch fBm implementation, no external noise-library
+dependency). Two uses of it:
+- Domain-warping the biome-label sampling coordinates before nearest lookup,
+  so boundaries are organic and wavy instead of following the heightmap
+  grid's own cell edges.
+- Per-pixel-coherent (not uniform-white-noise) color/roughness variation
+  within each biome, at a base frequency that scales with texture_size, so
+  detail density actually increases with resolution instead of just
+  stretching the same coarse blocks.
+
+Re-verified visually against a real 2048x2048 render after the fix: organic
+lake/beach boundaries, mottled coherent color detail within forest/plains/
+rock/snow regions, no flat blocks.
+
+- 14 tests in `tests/test_biome_texture_synthesis.py`: noise boundedness and
+  determinism, "coherent not white noise" (adjacent-pixel difference small
+  relative to full range), fractal-noise bounds, domain-warped-labels shape/
+  content, basecolor/roughness shape+dtype+bounds, non-square/invalid-size
+  rejection, real coherent variation within a biome, detail-increases-with-
+  texture_size (unique-color-count comparison), determinism across repeated
+  calls, seed-sensitivity, per-biome roughness reaching the output (water
+  measurably smoother than rock), and real-PNG-file export round-trip.
+- Wired as `POST /v1/world/terrain/biome-texture` (terrain spec + texture_size
+  + basecolor_path + roughness_path -> two real PNG files). 1 new API test.
+
+Full suite: **349/349 passed, `-W error`** (334 prior + 14 + 1).
+
+## All 3 "highly unique" features complete
+
+1. Live interactive Three.js 3D preview (real mesh data, live-verified in the
+   actual viewer) -- `POST /v1/viz/threejs-scene`.
+2. Automatic best-of-N terrain variant selection (Shannon-entropy biome
+   diversity + slope-consistent walkable ratio + height-range utilization) --
+   `POST /v1/world/terrain/generate-best-of-n`.
+3. Real procedural biome texture synthesis to PNG maps (coherent fractal
+   noise, domain-warped organic boundaries) -- `POST /v1/world/terrain/biome-texture`.
+
+Full suite: 305 -> 349 (+44 new tests across all 3 features), all passing
+with `-W error`. Live-verified: Three.js scene rendered in the real viewer,
+best-of-N scoring discriminates real varied terrain from a degenerate flat
+control, biome texture visually re-verified at full 2048x2048 after fixing
+a real blockiness bug caught by generating and actually looking at the
+output rather than trusting shape/dtype assertions alone.

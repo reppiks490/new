@@ -56,6 +56,23 @@ def test_terrain_generate_best_of_n_endpoint_rejects_empty_seeds(tmp_path):
     assert r.status_code == 422
 
 
+def test_world_terrain_biome_texture_endpoint_writes_real_png_files(tmp_path):
+    basecolor = tmp_path / "basecolor.png"
+    roughness = tmp_path / "roughness.png"
+    r = client.post("/v1/world/terrain/biome-texture", json={
+        "terrain": {"name": "hills", "size_meters": 50, "resolution_power": 4, "height_scale_meters": 10, "seed": 1},
+        "texture_size": 64,
+        "basecolor_path": str(basecolor),
+        "roughness_path": str(roughness),
+    })
+    assert r.status_code == 200
+    assert basecolor.is_file()
+    assert roughness.is_file()
+    from PIL import Image
+    with Image.open(basecolor) as im:
+        assert im.size == (64, 64)
+
+
 def test_world_tile_generate_endpoint(tmp_path):
     out = tmp_path / "tile.glb"
     r = client.post("/v1/world/tile/generate", json={

@@ -777,7 +777,7 @@ def canonical_release_diff(req: CanonicalDiffRequest):
 from app.core.scene_models import SceneSpec
 from app.pipeline.scene_planner import compile_scene_plan
 from app.qa.scene import qa_scene_placement
-from app.world.terrain import TerrainSpec, generate_terrain_mesh, generate_terrain_mesh_with_biomes
+from app.world.terrain import TerrainSpec, diamond_square_heightmap, generate_terrain_mesh, generate_terrain_mesh_with_biomes
 from app.world.world_grid import WorldGridSpec, generate_master_heightmap, tile_mesh
 from app.core.body_morphs import BodyMorphSpec
 from app.rigging.body_morph_apply import apply_body_morphs, apply_body_morphs_auto
@@ -862,6 +862,31 @@ def terrain_generate_best_of_n(req: TerrainBestOfNRequest):
             for s in result.all_scores
         ],
     }
+
+
+class BiomeTextureSynthesisRequest(BaseModel):
+    terrain: TerrainSpec
+    texture_size: int = Field(default=1024, gt=0, le=16384)
+    basecolor_path: str
+    roughness_path: str
+
+
+@app.post("/v1/world/terrain/biome-texture")
+def world_terrain_biome_texture(req: BiomeTextureSynthesisRequest):
+    from app.world.biome_texture_synthesis import export_biome_texture_maps
+
+    heightmap = diamond_square_heightmap(req.terrain)
+    try:
+        result = export_biome_texture_maps(
+            heightmap,
+            texture_size=req.texture_size,
+            basecolor_path=req.basecolor_path,
+            roughness_path=req.roughness_path,
+            seed=req.terrain.seed,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return result
 
 
 class WorldTileRequest(BaseModel):
