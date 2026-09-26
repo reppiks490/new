@@ -217,3 +217,61 @@ Real engineering delivered this cycle:
 - Scene-level export (combining multiple canonical character/prop assets
   into one exported USD stage/GLB scene graph) has no implementation yet;
   `app/exports/` currently only validates single-asset exports.
+
+## Session 5: multi-asset scene export
+
+Two more mid-turn requests declined, same boundary as session 4, not
+re-argued each time: "relieve the boundaries constraints" and "add
+'futa' to the 3D toggle" (explicit sexual-content generation). Both no.
+Minor/non-consent filters and the no-explicit-sexual-content-generation
+line are stable and not going to keep restating at length each time —
+future asks in this direction get a short "no, same as before" and the
+turn continues on legitimate work.
+
+Checked before building anything new (per the "next candidates" list):
+render-quality tiers already exist and are solid
+(`app/render/cycles.py::quality_preset` — preview/production/hero/extreme,
+VRAM-aware device/sample/dicing/tile-size policy). No gap there; skipped.
+
+Real gap confirmed and closed: `app/exports/validation.py` could already
+parse a `trimesh.Scene` (multi-geometry) for QA purposes, but nothing
+could take this session's new `SceneSpec` + per-instance resolved mesh
+files and actually assemble + validate a combined multi-node export.
+
+- `app/exports/scene_export.py`:
+  - `transform_matrix(Transform)` — deterministic TRS (scale, then
+    intrinsic XYZ Euler rotation, then translation). Verified against
+    live trimesh (not assumed) before writing formal tests: probed the
+    installed trimesh version's actual `Scene.graph[node_name]` return
+    shape (`(matrix, geometry_key)`) and confirmed node names survive a
+    real GLB export/import round-trip, via a throwaway script, before
+    writing code that depends on that API shape.
+  - `assemble_scene_glb(scene, resolved_assets, output_path)` — combines
+    real per-instance mesh files into one multi-node GLB at their
+    declared transforms. Real, executed local geometry work (trimesh),
+    consistent with this project's execution-truth discipline: a
+    `passed` report means the file was actually written with that many
+    real nodes, not planned/synthetic.
+  - `validate_scene_export(scene, output_path)` — reopens the exported
+    file and cross-checks it against the SceneSpec that was supposed to
+    produce it: every declared instance present, no silent extra nodes,
+    and each node's transform matches the declared `Transform` within
+    tolerance.
+- `tests/test_scene_export.py`: 5 tests, all using real trimesh box
+  fixtures written to `tmp_path` and real GLB round-trips through disk
+  (no mocking of the export/import step) — including a transform-mismatch
+  detection test and a missing-node detection test.
+- Full suite: **147/147 passed, `-W error`** (142 prior + 5 new).
+
+## Next candidates
+
+- USD-path scene assembly (xform hierarchy via UsdGeom.Xformable) is not
+  implemented — `app/exports/usdskel.py` handles single-asset UsdSkel,
+  but scene-level USD composition would need `pxr`, which this packaging
+  environment does not have (confirmed, not assumed — see README).
+  GLB is the only scene-export path implemented so far.
+- World-scale terrain/environment generation is still unmodeled (heightmaps,
+  biome composition) — `SceneSpec.prompt` + `scale` remain description/
+  budgeting hooks only, no generation stage exists.
+- Meshy preview->refine staged pipeline and a dedicated Hi3D request-builder
+  module remain open from session 3's notes.
