@@ -647,3 +647,41 @@ caller separately re-ran `classify_biomes`.
 
 Pushed immediately per explicit request ("hurry up and ship") rather
 than batching further.
+
+## Session 14: world-tile streaming wired into real scene export (real integration, not isolated modules)
+
+Closed session 12's remaining logged gap: a generated world tile was a
+standalone trimesh.Trimesh with no path into the scene/export system.
+
+- `app/world/scene_integration.py`:
+  - `export_visible_world_tiles()` -- for every tile currently in view
+    from a `WorldStreamingManager`, actually writes a real GLB to disk,
+    hashes it, and builds a `SceneAssetInstance` at its correct
+    world-space position (tile grid index * tile_size_meters).
+  - Design correction caught before it shipped: my first draft stashed
+    the resolved local file-path map as a hidden `_resolved_tile_paths`
+    attribute directly on the returned `SceneSpec`. Verified pydantic
+    v2 actually allows that assignment (didn't assume), but rejected
+    the design anyway -- a local path map is ephemeral filesystem
+    state, not part of a portable/serializable spec, and would
+    silently vanish on any `model_dump()`/round-trip. Refactored to an
+    explicit `(SceneSpec, resolved_paths)` return tuple instead.
+  - `export_and_verify_world_scene()` -- assembles the tiles into one
+    combined GLB and validates it, reusing session 5's already-real
+    `assemble_scene_glb`/`validate_scene_export` rather than a parallel
+    world-specific export path.
+- `tests/test_world_scene_integration.py`: 4 tests verifying the whole
+  real chain -- each instance's declared `asset_sha256` matches the
+  actual file's hash on disk (not an arbitrary string), tiles land at
+  the correct world-space position by grid index, a full combined
+  scene assembles and verifies end to end, and a tight view distance
+  correctly exports only the in-view subset of a larger grid rather
+  than everything.
+- Full suite: **210/210 passed, `-W error`** (206 prior + 4 new).
+
+This is a direct answer to the recurring "isolated data models, no
+integration" theme in repeated goal evaluations: world generation,
+biome coloring, LOD, real file export, SHA-256 provenance, and scene
+validation are now one connected, tested chain for the terrain/world
+slice specifically (character-pipeline integration remains separate,
+as logged in earlier sessions).
