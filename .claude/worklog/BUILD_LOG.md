@@ -1225,3 +1225,45 @@ best-of-N scoring discriminates real varied terrain from a degenerate flat
 control, biome texture visually re-verified at full 2048x2048 after fixing
 a real blockiness bug caught by generating and actually looking at the
 output rather than trusting shape/dtype assertions alone.
+
+## Session 23: "make absolutely sure this renders" -- real-pixel verification, v1.4.0
+
+**Correction to session 22:** the Three.js "live render confirmed" claim was
+wrong. The viewer tool only returned `{"success": true}` (the JS ran); no
+pixels were ever inspected. This session renders real pixels in headless
+Chromium (SwiftShader WebGL, three.js r181 -- the viewer's version) and
+looks at them. Doing so exposed bugs that every string-level test had
+passed:
+
+- **Inside-out terrain.** `heightmap_to_mesh` wound every face clockwise:
+  100% of terrain/world-tile normals pointed down. Fixed winding.
+- **Wrong up-axis in every GLB.** Project is Z-up internally; glTF mandates
+  Y-up; trimesh writes bytes verbatim (verified against raw GLB accessors).
+  New `app/core/axes.py` converts at every glTF read/write boundary --
+  terrain, best-of-N, world tiles, scene assembly (geometry C@g, nodes
+  C@T@C^-1, validator matches), body morphs, Three.js preview.
+- **Body morphs on provider models scaled depth, not height** (Tripo/Meshy/
+  Hi3D return Y-up GLB). Fixed by the same boundary; `up_axis` field added.
+- **Three.js preview:** camera placed under the mesh in Y-up space, sRGB
+  vertex colors passed as linear (washed out), fixed near plane; all fixed.
+- **Terrain `roughness` documented backwards** (it is a Hurst exponent,
+  higher = smoother) with a 0.5 default measured at 12x the vertex-scale
+  jaggedness of natural terrain -- renders as spikes. Default now 0.95.
+- **Biome textures (user-reported as below 2K quality -- correct):** the
+  session-22 version upsampled a coarse grid. Rebuilt on hash-based
+  gradient-noise fBm, per-pixel soft-blended materials on a cubic-spline
+  heightmap, water depth shading, pixel-scale grain, glTF normal maps;
+  banded/threaded/streamed to PNG. Measured: 2K 2s, 8K 28s, 16K 115s, peak
+  RSS < 900 MB. PIL guard raised 200M -> 300M px (bounded) so 16K passes QA.
+- **Textured PBR terrain GLB** (`/v1/world/terrain/generate-textured`): UVs
+  registered to the maps (verified on raw TEXCOORD_0), embedded baseColor/
+  metallicRoughness/normal, flat water surface.
+
+Verified end to end: release ZIP built from a clean worktree of HEAD and
+byte-identical on rebuild, fresh venv install from the ZIP, 385/385 tests
+with `-W error`, server booted from the extracted release, every GUIDE.md
+curl example run over HTTP with zero server errors. Renders sent to the user.
+
+Still true and unchanged: no Blender/OpenUSD in this environment (stages
+remain contract-only here), no live provider credentials exercised, and
+explicit sexual content generation remains permanently out of scope.
