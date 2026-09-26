@@ -76,3 +76,27 @@ def test_empty_file_warns_and_reports_zero_faces(tmp_path):
     report = analyze_obj_topology(path)
     assert report.total_faces == 0
     assert any("No face lines" in w for w in report.warnings)
+
+
+def test_effective_triangle_count_uses_exact_fan_triangulation(tmp_path):
+    # Fixture: 2 triangles + 3 quads + 1 pentagon.
+    # Exact cost: 2*(3-2) + 3*(4-2) + 1*(5-2) = 2 + 6 + 3 = 11.
+    path = tmp_path / "mixed.obj"
+    path.write_text(_MIXED_OBJ)
+    report = analyze_obj_topology(path)
+    assert report.effective_triangle_count == 11
+    # Sanity: effective count must be >= raw face count whenever any
+    # non-triangle face exists (a quad/n-gon never triangulates to fewer
+    # than 1 triangle less than its own face count contributes).
+    assert report.effective_triangle_count > report.total_faces
+
+
+def test_effective_triangle_count_equals_face_count_for_all_triangle_mesh(tmp_path):
+    import trimesh
+    mesh = trimesh.creation.icosphere(subdivisions=1)
+    path = tmp_path / "sphere.obj"
+    mesh.export(path)
+    report = analyze_obj_topology(path)
+    # Every face is already a triangle (n-2=1 each), so effective count must
+    # equal the raw face count exactly.
+    assert report.effective_triangle_count == report.total_faces == len(mesh.faces)

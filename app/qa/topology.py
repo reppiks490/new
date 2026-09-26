@@ -26,6 +26,13 @@ class TopologyReport(BaseModel):
     quad_count: int
     ngon_count: int  # faces with 5+ vertices
     total_faces: int
+    # Exact fan-triangulation cost (sum of vertex_count-2 over every face):
+    # this is what the mesh actually costs to render/rasterize, not the raw
+    # source face count. A single 8-vertex n-gon is 1 "face" but 6 triangles
+    # -- reporting only total_faces would silently understate real cost, the
+    # exact thing the goal spec's polygon/triangle system section warns
+    # against ("Do NOT advertise only raw vertex count").
+    effective_triangle_count: int
     quad_ratio: float = Field(ge=0, le=1)
     triangle_ratio: float = Field(ge=0, le=1)
     ngon_ratio: float = Field(ge=0, le=1)
@@ -46,6 +53,7 @@ def analyze_obj_topology(path: str | Path) -> TopologyReport:
         raise FileNotFoundError(path)
 
     tri = quad = ngon = 0
+    effective_tris = 0
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -61,9 +69,15 @@ def analyze_obj_topology(path: str | Path) -> TopologyReport:
                 quad += 1
             elif n >= 5:
                 ngon += 1
-            # n < 3 is a malformed face line; silently skip rather than crash,
-            # consistent with this module being a QA/reporting tool, not a
-            # strict validator that should abort on one bad line.
+            else:
+                # n < 3 is a malformed face line; silently skip rather than
+                # crash, consistent with this module being a QA/reporting
+                # tool, not a strict validator that should abort on one
+                # bad line. It contributes nothing to effective_tris either.
+                continue
+            # Exact fan-triangulation formula for a convex/simple polygon
+            # with n vertices: n-2 triangles. n=3 -> 1, n=4 -> 2, n=5 -> 3, ...
+            effective_tris += n - 2
 
     total = tri + quad + ngon
     warnings: list[str] = []
@@ -76,6 +90,7 @@ def analyze_obj_topology(path: str | Path) -> TopologyReport:
         quad_count=quad,
         ngon_count=ngon,
         total_faces=total,
+        effective_triangle_count=effective_tris,
         quad_ratio=round(quad / total, 6) if total else 0.0,
         triangle_ratio=round(tri / total, 6) if total else 0.0,
         ngon_ratio=round(ngon / total, 6) if total else 0.0,
