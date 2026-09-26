@@ -88,17 +88,33 @@ def heightmap_to_mesh(heightmap: np.ndarray, *, size_meters: float, height_scale
     gz = heightmap * height_scale_meters
     vertices = np.stack([gx.ravel(), gy.ravel(), gz.ravel()], axis=1)
 
-    faces = []
-    for row in range(n - 1):
-        for col in range(n - 1):
-            i0 = row * n + col
-            i1 = i0 + 1
-            i2 = i0 + n
-            i3 = i2 + 1
-            faces.append((i0, i2, i1))
-            faces.append((i1, i2, i3))
+    # Counter-clockwise seen from +Z, so face normals point up (+Z, this
+    # project's vertical axis). The previous (i0, i2, i1) order wound every
+    # face clockwise, leaving 100% of terrain normals pointing down: inside-
+    # out geometry that backface-culling renderers show from underneath.
+    row = np.arange(n - 1)[:, None]
+    col = np.arange(n - 1)[None, :]
+    i0 = (row * n + col).ravel()
+    i1 = i0 + 1
+    i2 = i0 + n
+    i3 = i2 + 1
+    faces = np.empty((len(i0) * 2, 3), dtype=np.int64)
+    faces[0::2] = np.stack([i0, i1, i2], axis=1)
+    faces[1::2] = np.stack([i1, i3, i2], axis=1)
 
-    return trimesh.Trimesh(vertices=vertices, faces=np.asarray(faces, dtype=np.int64), process=False)
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
+def terrain_uvs(n: int) -> np.ndarray:
+    """(n*n, 2) UVs for heightmap_to_mesh's vertex order, in trimesh's
+    OpenGL convention (origin bottom-left; trimesh flips v on glTF export).
+    Vertex (row r, col c) maps to image pixel row r, column c of a texture
+    synthesized from the same heightmap."""
+    if n < 2:
+        raise ValueError("n must be >= 2")
+    t = np.linspace(0.0, 1.0, n)
+    u, v_down = np.meshgrid(t, t, indexing="xy")
+    return np.stack([u.ravel(), 1.0 - v_down.ravel()], axis=1)
 
 
 def generate_terrain_mesh(spec: TerrainSpec) -> trimesh.Trimesh:

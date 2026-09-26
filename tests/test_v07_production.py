@@ -105,7 +105,7 @@ def test_blender_production_manifest_extreme():
 
 def test_api_v07_health_and_identity():
     client=TestClient(app)
-    assert client.get('/health').json()['version']=='1.3.0'
+    assert client.get('/health').json()['version']=='1.4.0'
     payload={'reference':[[0,0],[1,0],[0,1]],'candidate':[[5,5],[7,5],[5,7]]}
     r=client.post('/v1/qa/identity',json=payload)
     assert r.status_code==200 and r.json()['similarity']>0.999

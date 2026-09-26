@@ -252,3 +252,39 @@ def validate_gltf_structure(path: str | Path) -> GltfStructuralReport:
         skin_count=len(skins), animation_count=len(animations), external_resource_count=external_resources,
         blockers=blockers, warnings=warnings,
     )
+
+
+_COMPONENT_DTYPES = {5120: "i1", 5121: "u1", 5122: "<i2", 5123: "<u2", 5125: "<u4", 5126: "<f4"}
+_TYPE_WIDTHS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT2": 4, "MAT3": 9, "MAT4": 16}
+
+
+def read_glb_accessor(path: str | Path, accessor_index: int):
+    """Decode one accessor's raw values straight from a GLB's BIN chunk --
+    the bytes any external glTF viewer reads, independent of how trimesh
+    (or any other loader) interprets them on import. Supports tightly packed
+    and byteStride-interleaved buffer views."""
+    import numpy as np
+
+    gltf, binary = _load_glb(Path(path))
+    accessor = gltf["accessors"][accessor_index]
+    view = gltf["bufferViews"][accessor["bufferView"]]
+    if binary is None:
+        raise ValueError("GLB has no BIN chunk.")
+    dtype = np.dtype(_COMPONENT_DTYPES[accessor["componentType"]])
+    width = _TYPE_WIDTHS[accessor["type"]]
+    count = accessor["count"]
+    start = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
+    element_bytes = dtype.itemsize * width
+    stride = view.get("byteStride") or element_bytes
+    if stride == element_bytes:
+        values = np.frombuffer(binary, dtype=dtype, count=count * width, offset=start).reshape(count, width)
+    else:
+        values = np.stack([
+            np.frombuffer(binary, dtype=dtype, count=width, offset=start + i * stride) for i in range(count)
+        ])
+    return values[:, 0] if width == 1 else values
+
+
+def glb_primitive_attributes(path: str | Path, mesh_index: int = 0, primitive_index: int = 0) -> dict[str, int]:
+    gltf, _ = _load_glb(Path(path))
+    return dict(gltf["meshes"][mesh_index]["primitives"][primitive_index]["attributes"])

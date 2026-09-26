@@ -7,6 +7,7 @@ import numpy as np
 import trimesh
 from pydantic import BaseModel, Field
 
+from app.core.axes import ZUP_TO_YUP, is_gltf_path, load_mesh_zup, scene_node_matrix_for_file
 from app.core.scene_models import SceneAssetInstance, SceneSpec, Transform
 
 # Confirmed against the installed trimesh version (not assumed): a GLB export/
@@ -95,14 +96,23 @@ def assemble_scene_glb(
         if not mesh_path.is_file():
             blockers.append(f"{resolved.instance.instance_id}: resolved mesh path does not exist: {mesh_path}")
             continue
-        loaded = trimesh.load(mesh_path, force="mesh", process=False)
+        loaded = load_mesh_zup(mesh_path)
         if not isinstance(loaded, trimesh.Trimesh) or len(loaded.faces) == 0:
             blockers.append(f"{resolved.instance.instance_id}: resolved mesh has no triangle geometry.")
             continue
+        # Scene transforms are Z-up (this project's convention). For a glTF
+        # output, geometry goes in as C @ g and each node as C @ T @ C^-1, so
+        # the file's world-space result is C @ T @ g: the spec-correct Y-up
+        # image of the Z-up scene. Asset files are read through the same
+        # boundary, so provider GLBs (Y-up) stand upright next to terrain.
+        geometry = loaded
+        if is_gltf_path(out):
+            geometry = loaded.copy()
+            geometry.apply_transform(ZUP_TO_YUP)
         combined.add_geometry(
-            loaded,
+            geometry,
             node_name=resolved.instance.instance_id,
-            transform=transform_matrix(resolved.instance.transform),
+            transform=scene_node_matrix_for_file(transform_matrix(resolved.instance.transform), out),
         )
 
     if blockers:
@@ -160,7 +170,7 @@ def validate_scene_export(
             warnings.append(f"Scene file contains node {node_name!r} not declared in the SceneSpec.")
             continue
         matrix, _geometry_key = loaded.graph[node_name]
-        expected = transform_matrix(declared[node_name].transform)
+        expected = scene_node_matrix_for_file(transform_matrix(declared[node_name].transform), out)
         if not np.allclose(matrix, expected, atol=transform_atol):
             blockers.append(f"Node {node_name!r} transform does not match its declared SceneSpec transform.")
 

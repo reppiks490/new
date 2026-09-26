@@ -5,7 +5,7 @@ from app.main import app
 def test_health_is_v12():
     r = TestClient(app).get('/health')
     assert r.status_code == 200
-    assert r.json()['version'] == '1.3.0'
+    assert r.json()['version'] == '1.4.0'
 
 
 def test_build_fingerprint_endpoint():

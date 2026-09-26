@@ -32,29 +32,84 @@ def test_positions_and_indices_are_valid_json_arrays_embedded_in_js():
     assert len(indices) == len(mesh.faces) * 3
 
 
-def test_camera_framing_uses_real_bounding_box_center():
+def _positions(code: str) -> np.ndarray:
+    start = code.index("Float32BufferAttribute([") + len("Float32BufferAttribute([") - 1
+    end = code.index("], 3));", start) + 1
+    return np.asarray(json.loads(code[start:end])).reshape(-1, 3)
+
+
+def _clip_planes(code: str) -> tuple[float, float]:
+    start = code.index("PerspectiveCamera(50, width / height, ") + len("PerspectiveCamera(50, width / height, ")
+    end = code.index(")", start)
+    near, far = (float(x) for x in code[start:end].split(","))
+    return near, far
+
+
+def _camera_position(code: str) -> np.ndarray:
+    start = code.index("camera.position.set(") + len("camera.position.set(")
+    end = code.index(");", start)
+    # each component is "center + distance * factor"
+    values = []
+    for part in code[start:end].split(","):
+        base, scaled = part.split("+")
+        distance, factor = scaled.split("*")
+        values.append(float(base) + float(distance) * float(factor))
+    return np.array(values)
+
+
+def test_camera_target_is_the_y_up_bounding_box_center():
+    mesh = trimesh.Trimesh(vertices=[[0, 0, 0], [10, 0, 0], [0, 20, 30]], faces=[[0, 1, 2]], process=False)
+    code = mesh_to_threejs_code(mesh)  # default: input is Z-up
+    # Z-up (x, y, z) -> Y-up (x, z, -y): bounds x[0,10], y[0,30], z[-20,0]
+    assert "controls.target.set(5.0000, 15.0000, -10.0000)" in code
+
+
+def test_z_up_input_is_rotated_so_height_becomes_three_js_y():
+    apex_up = trimesh.Trimesh(vertices=[[0, 0, 0], [1, 0, 0], [0, 0, 5]], faces=[[0, 1, 2]], process=False)
+    positions = _positions(mesh_to_threejs_code(apex_up))
+    assert np.allclose(positions[2], [0, 5, 0])
+
+
+def test_y_up_input_is_passed_through_unrotated():
+    apex_up = trimesh.Trimesh(vertices=[[0, 0, 0], [1, 0, 0], [0, 5, 0]], faces=[[0, 1, 2]], process=False)
+    positions = _positions(mesh_to_threejs_code(apex_up, up_axis="y"))
+    assert np.allclose(positions[2], [0, 5, 0])
+
+
+def test_camera_is_above_the_mesh_in_y_up_space():
+    from app.world.terrain import TerrainSpec, generate_terrain_mesh
+
+    terrain = generate_terrain_mesh(TerrainSpec(name="t", size_meters=100, resolution_power=3, height_scale_meters=20))
+    code = mesh_to_threejs_code(terrain)
+    top_of_terrain = _positions(code)[:, 1].max()
+    assert _camera_position(code)[1] > top_of_terrain
+
+
+def test_rejects_unknown_up_axis():
+    with pytest.raises(ValueError):
+        mesh_to_threejs_code(_cube(), up_axis="x")
+
+
+def test_clip_planes_scale_with_mesh_size():
+    small_near, small_far = _clip_planes(mesh_to_threejs_code(trimesh.creation.box(extents=(1.0, 1.0, 1.0))))
+    large_near, large_far = _clip_planes(mesh_to_threejs_code(trimesh.creation.box(extents=(1000.0, 1000.0, 1000.0))))
+    assert large_far > small_far
+    assert large_near > small_near
+    # depth-buffer ratio stays bounded instead of growing with mesh size
+    assert large_far / large_near == pytest.approx(small_far / small_near, rel=1e-3)
+
+
+def test_vertex_colors_are_converted_from_srgb_to_linear():
     mesh = _cube()
-    center = (mesh.bounds[0] + mesh.bounds[1]) / 2.0
+    mesh.visual.vertex_colors = np.tile([128, 128, 128, 255], (len(mesh.vertices), 1)).astype(np.uint8)
     code = mesh_to_threejs_code(mesh)
-    assert f"{center[0]:.4f}" in code
-    assert f"{center[1]:.4f}" in code
-    assert f"{center[2]:.4f}" in code
-
-
-def test_camera_far_plane_scales_with_mesh_size():
-    small = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
-    large = trimesh.creation.box(extents=(100.0, 100.0, 100.0))
-    small_code = mesh_to_threejs_code(small)
-    large_code = mesh_to_threejs_code(large)
-
-    def _far_plane(code: str) -> float:
-        start = code.index("PerspectiveCamera(60, width / height, 0.1, ") + len(
-            "PerspectiveCamera(60, width / height, 0.1, "
-        )
-        end = code.index(")", start)
-        return float(code[start:end])
-
-    assert _far_plane(large_code) > _far_plane(small_code)
+    start = code.index("setAttribute('color', new THREE.Float32BufferAttribute(") + len(
+        "setAttribute('color', new THREE.Float32BufferAttribute("
+    )
+    end = code.index("], 3));", start) + 1
+    colors = json.loads(code[start:end])
+    # sRGB 128/255 is ~0.2158 linear, not 0.502
+    assert colors[0] == pytest.approx(0.21586, abs=1e-4)
 
 
 def test_rejects_non_finite_vertices():

@@ -11,8 +11,9 @@ from app.packs.manager import PackRegistry
 from app.providers.catalog import gap_fill_capabilities, provider_profiles
 from app.providers.router import RouteContext, compile_provider_routing
 from app.render.output_resolution import RenderResolutionTier
+from app.core.axes import UpAxis, export_mesh_from_zup, load_mesh_zup
 
-app = FastAPI(title="Character3D Masterbuild", version="1.3.0")
+app = FastAPI(title="Character3D Masterbuild", version="1.4.0")
 PACK_REGISTRY_PATH = Path(__file__).parents[1] / "config" / "packs" / "registry.yaml"
 
 
@@ -34,7 +35,7 @@ class PackRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.3.0"}
+    return {"ok": True, "version": "1.4.0"}
 
 
 @app.get("/v1/hardware")
@@ -668,7 +669,7 @@ def build_fingerprint():
     root = _source_root()
     return {
         'root': str(root),
-        'fingerprint': compile_build_fingerprint(root, metadata={'project': 'character3d-masterbuild', 'version': '1.3.0'}),
+        'fingerprint': compile_build_fingerprint(root, metadata={'project': 'character3d-masterbuild', 'version': '1.4.0'}),
         'environment': capture_runtime_environment(),
     }
 
@@ -815,7 +816,7 @@ def terrain_generate(req: TerrainGenerateRequest):
     mesh = generate_terrain_mesh_with_biomes(req.terrain) if req.with_biomes else generate_terrain_mesh(req.terrain)
     out = Path(req.output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    mesh.export(out)
+    export_mesh_from_zup(mesh, out)
     return {"output_path": str(out), "vertex_count": len(mesh.vertices), "face_count": len(mesh.faces), "with_biomes": req.with_biomes}
 
 
@@ -839,7 +840,7 @@ def terrain_generate_best_of_n(req: TerrainBestOfNRequest):
     mesh = generate_terrain_mesh_with_biomes(winning_spec) if req.with_biomes else generate_terrain_mesh(winning_spec)
     out = Path(req.output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    mesh.export(out)
+    export_mesh_from_zup(mesh, out)
     return {
         "output_path": str(out),
         "vertex_count": len(mesh.vertices),
@@ -907,7 +908,7 @@ def world_tile_generate(req: WorldTileRequest):
         raise HTTPException(status_code=422, detail=str(e)) from e
     out = Path(req.output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    mesh.export(out)
+    export_mesh_from_zup(mesh, out)
     return {"output_path": str(out), "vertex_count": len(mesh.vertices), "face_count": len(mesh.faces)}
 
 
@@ -925,6 +926,11 @@ class BodyMorphApplyRequest(BaseModel):
     # see app/rigging/auto_region_weights.py::UNSUPPORTED_REGIONS).
     region_weights: dict[str, list[float]] = {}
     auto_weights: bool = True
+    # Vertical axis of the input/output files. "auto": Y for .glb/.gltf
+    # (mandated by the glTF spec, and what Tripo/Meshy/Hi3D return), Z for
+    # everything else. OBJs exported from Blender with default settings are
+    # Y-up -- pass "y" for those, or the height slider scales depth.
+    up_axis: UpAxis = "auto"
 
     @model_validator(mode="after")
     def validate_exactly_one_morph_input(self):
@@ -941,7 +947,7 @@ def body_morphs_apply(req: BodyMorphApplyRequest):
     in_path = Path(req.input_path)
     if not in_path.is_file():
         raise HTTPException(status_code=404, detail=f"{in_path} does not exist")
-    mesh = trimesh.load(in_path, force="mesh", process=False)
+    mesh = load_mesh_zup(in_path, req.up_axis)
     weights = {name: np.asarray(values, dtype=np.float64) for name, values in req.region_weights.items()}
     morphs = req.morphs if req.morphs is not None else BodyMorphSpec.from_percentages(req.percentages)
     try:
@@ -953,7 +959,7 @@ def body_morphs_apply(req: BodyMorphApplyRequest):
         raise HTTPException(status_code=422, detail=str(e)) from e
     out = Path(req.output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out_mesh.export(out)
+    export_mesh_from_zup(out_mesh, out, req.up_axis)
     return {"output_path": str(out), "vertex_count": len(out_mesh.vertices)}
 
 
@@ -962,18 +968,17 @@ class ThreeJSPreviewRequest(BaseModel):
     background_hex: int = 0x1a1a2e
     material_color_hex: int = 0x8899aa
     wireframe: bool = False
+    up_axis: UpAxis = "auto"
 
 
 @app.post("/v1/viz/threejs-scene")
 def viz_threejs_scene(req: ThreeJSPreviewRequest):
-    import trimesh
-
     from app.viz.threejs_export import mesh_to_threejs_code
 
     in_path = Path(req.input_path)
     if not in_path.is_file():
         raise HTTPException(status_code=404, detail=f"{in_path} does not exist")
-    mesh = trimesh.load(in_path, force="mesh", process=False)
+    mesh = load_mesh_zup(in_path, req.up_axis)
     try:
         code = mesh_to_threejs_code(
             mesh,

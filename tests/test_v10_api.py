@@ -11,7 +11,7 @@ def _evidence(mode='live'):
 
 def test_v10_health_and_readiness():
     c=TestClient(app)
-    assert c.get('/health').json()['version']=='1.3.0'
+    assert c.get('/health').json()['version']=='1.4.0'
     r=c.get('/v1/runtime/readiness')
     assert r.status_code==200 and 'blender' in r.json() and 'providers' in r.json()
 

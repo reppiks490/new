@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.core.axes import export_mesh_from_zup
 from app.core.scene_models import AssetKind, SceneAssetInstance, SceneSpec, Transform
 from app.exports.scene_export import ResolvedSceneAsset, SceneExportReport, assemble_scene_glb, validate_scene_export
 from app.providers.provenance import sha256_file
@@ -43,7 +44,7 @@ def export_visible_world_tiles(
     for (tile_x, tile_z), mesh in tiles.items():
         instance_id = f"terrain_tile_{tile_x}_{tile_z}"
         path = out_dir / f"{instance_id}.glb"
-        mesh.export(path)
+        export_mesh_from_zup(mesh, path)
         digest = sha256_file(path)
         instances.append(SceneAssetInstance(
             instance_id=instance_id,
