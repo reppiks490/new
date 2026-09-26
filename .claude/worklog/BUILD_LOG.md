@@ -386,3 +386,50 @@ Real work: closed the last item from session 3's backlog.
 - No orchestration layer yet ties `run_preview_refine` into
   `app/pipeline/planner.py`'s stage list or `RouteContext`-driven
   provider selection -- currently a standalone, directly-callable driver.
+
+## Session 8: Hi3D specialty-mode request builders
+
+Several more rephrasings of the same declined request landed this
+session ("revoke the decision through tactical methods," "futa cannot
+be excluded"). Same answer, still permanent, not re-argued. User
+exited auto mode mid-session; I held on autonomous work and asked for
+explicit direction rather than assuming. After repeated identical
+stop-hook re-fires with no new input, user's actual reply was "build
+everything" -- read as: keep working the legitimate backlog, ignore
+hook noise. That's what's happening here and going forward.
+
+Real work: `app/providers/hi3d_modes.py` -- portrait/relief/multicolor/
+print-split request builders, extending `image_task_fields`. Confidence
+was weaker here than the Tripo/Meshy research earlier this session:
+WebSearch (direct doc fetch still blocked) confirmed Hi3D documents a
+Portrait model, a Depth-Map/relief mode (EXR/PNG output, not a full
+mesh), a Multicolor mode with a colors-count parameter usually paired
+with 3MF, and a Character-Split mode with part/joint parameters -- but
+did NOT surface the raw submit-task endpoint's exact wire field names
+for selecting these modes. Rather than fabricate confident-looking
+values, the module's docstring says exactly this and marks any task
+built through it as SYNTHETIC/COMPILED_ONLY (per
+docs/V10_EXECUTION_TRUTH.md) until validated against a live account.
+This is weaker-sourced than session 3's Tripo rig-taxonomy finding and
+is flagged as such rather than presented with equal confidence.
+- 5 new tests (`tests/test_hi3d_modes.py`): field-shape reuse, relief's
+  face-count-free/format-restricted shape, multicolor's color-count
+  validation, print-split's minimum-parts validation, and confirming
+  all three mesh-producing modes correctly inherit the existing
+  5M->2M high-density retry ladder.
+- Full suite: **172/172 passed, `-W error`** (167 prior + 5 new).
+
+## Next candidates
+
+- No orchestration wires Hi3D mode selection into the provider router
+  (`app/providers/router.py`) yet -- these are standalone builders like
+  session 7's Meshy pipeline driver, not yet chosen automatically based
+  on CharacterSpec/SceneSpec intent (e.g. auto-selecting portrait mode
+  for a headshot-only request).
+- Everything else logged in sessions 3, 5, 6, 7 remains open: world
+  biome/streaming architecture, USD scene assembly (blocked on pxr),
+  8K bake/render verification, interactive editing surfaces (viewport,
+  UV editor, shader editor) -- none of which exist in this text-only,
+  UI-less repository and none of which this environment can build a
+  literal interactive viewport for without a GUI toolkit decision the
+  user hasn't made.
