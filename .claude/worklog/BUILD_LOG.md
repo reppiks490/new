@@ -1122,3 +1122,44 @@ Next: features 2 (best-of-N terrain variant selection, scored by real geometry
 metrics) and 3 (procedural biome texture synthesis to real PNG maps) are still
 to be built before the "before deploying" full-verification and redelivery
 step the user's phrasing implies.
+
+## Feature 2/3: automatic best-of-N terrain variant selection
+
+Generating a single seeded terrain is a coin flip -- some seeds land on
+degenerate results (near-flat, all-water, single-biome monotony) a human
+would reject on sight. Built `app/world/terrain_selection.py`:
+
+- `biome_diversity_score`: Shannon entropy of the biome label distribution
+  over the real classified heightmap, normalized by log2(len(Biome)) so 0 =
+  single biome everywhere, 1 = maximally even spread across all 7 biomes.
+- `walkable_area_ratio`: fraction of the grid that is both dry (not
+  classified WATER) and below the same local-slope threshold
+  `classify_biomes`'s own ROCK override uses, so "walkable" stays consistent
+  with the terrain's own biome classification rather than a separate ad hoc
+  rule.
+- `height_range_utilization`: heightmap std deviation relative to a uniform
+  [0,1] reference distribution's std (1/sqrt(12)), clamped to 1.0 -- distinct
+  from raw min/max span, which diamond-square's renormalization always
+  stretches to exactly [0,1] regardless of how much real variety exists;
+  std is what actually separates "mostly flat with two extreme spikes" from
+  genuinely varied terrain.
+- `score_heightmap` combines the three as a weighted composite (default
+  0.4/0.35/0.25); `select_best_terrain_seed` generates one real heightmap per
+  candidate seed (not a cheap proxy) and returns the max-composite winner
+  plus every candidate's full score breakdown.
+- Verified for real: an explicit flat-heightmap composite (0.35, all from the
+  walkable-ratio term) scores below every one of 8 real diamond-square
+  candidates generated at seeds 1-8 (composites 0.74-0.80), confirmed before
+  writing tests.
+- 15 new tests in `tests/test_terrain_selection.py`: each metric's edge cases
+  (flat/uniform -> 0, varied -> >0, bimodal-extreme clamped to exactly 1.0),
+  composite-is-the-weighted-sum, best-of-N picks the true max, determinism,
+  duplicate/empty-seed rejection, and the flat-vs-real regression case.
+- Wired as `POST /v1/world/terrain/generate-best-of-n` (terrain spec +
+  candidate_seeds list + output_path -> generates and exports the winning
+  mesh, returns best_seed, best_score, and every candidate's score for
+  transparency). 2 new API tests.
+
+Full suite: **334/334 passed** (317 prior + 15 + 2).
+
+Next: feature 3 (real procedural biome texture synthesis to PNG maps).

@@ -819,6 +819,51 @@ def terrain_generate(req: TerrainGenerateRequest):
     return {"output_path": str(out), "vertex_count": len(mesh.vertices), "face_count": len(mesh.faces), "with_biomes": req.with_biomes}
 
 
+class TerrainBestOfNRequest(BaseModel):
+    terrain: TerrainSpec
+    candidate_seeds: list[int]
+    output_path: str
+    with_biomes: bool = True
+
+
+@app.post("/v1/world/terrain/generate-best-of-n")
+def terrain_generate_best_of_n(req: TerrainBestOfNRequest):
+    from app.world.terrain_selection import select_best_terrain_seed
+
+    try:
+        result = select_best_terrain_seed(req.terrain, candidate_seeds=req.candidate_seeds)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    winning_spec = req.terrain.model_copy(update={"seed": result.best_seed})
+    mesh = generate_terrain_mesh_with_biomes(winning_spec) if req.with_biomes else generate_terrain_mesh(winning_spec)
+    out = Path(req.output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    mesh.export(out)
+    return {
+        "output_path": str(out),
+        "vertex_count": len(mesh.vertices),
+        "face_count": len(mesh.faces),
+        "best_seed": result.best_seed,
+        "best_score": {
+            "biome_diversity": result.best_score.biome_diversity,
+            "walkable_ratio": result.best_score.walkable_ratio,
+            "height_utilization": result.best_score.height_utilization,
+            "composite": result.best_score.composite,
+        },
+        "all_candidate_scores": [
+            {
+                "seed": s.seed,
+                "biome_diversity": s.biome_diversity,
+                "walkable_ratio": s.walkable_ratio,
+                "height_utilization": s.height_utilization,
+                "composite": s.composite,
+            }
+            for s in result.all_scores
+        ],
+    }
+
+
 class WorldTileRequest(BaseModel):
     world: WorldGridSpec
     tile_x: int

@@ -32,6 +32,30 @@ def test_terrain_generate_endpoint_writes_a_real_file(tmp_path):
     assert r.json()["vertex_count"] > 0
 
 
+def test_terrain_generate_best_of_n_endpoint_picks_a_winner_and_writes_a_file(tmp_path):
+    out = tmp_path / "best.glb"
+    r = client.post("/v1/world/terrain/generate-best-of-n", json={
+        "terrain": {"name": "hills", "size_meters": 50, "resolution_power": 4, "height_scale_meters": 10, "seed": 0},
+        "candidate_seeds": [1, 2, 3, 4],
+        "output_path": str(out),
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert out.is_file()
+    assert body["best_seed"] in [1, 2, 3, 4]
+    assert len(body["all_candidate_scores"]) == 4
+    assert body["best_score"]["composite"] == max(s["composite"] for s in body["all_candidate_scores"])
+
+
+def test_terrain_generate_best_of_n_endpoint_rejects_empty_seeds(tmp_path):
+    r = client.post("/v1/world/terrain/generate-best-of-n", json={
+        "terrain": {"name": "hills", "size_meters": 50, "resolution_power": 4, "height_scale_meters": 10},
+        "candidate_seeds": [],
+        "output_path": str(tmp_path / "x.glb"),
+    })
+    assert r.status_code == 422
+
+
 def test_world_tile_generate_endpoint(tmp_path):
     out = tmp_path / "tile.glb"
     r = client.post("/v1/world/tile/generate", json={
