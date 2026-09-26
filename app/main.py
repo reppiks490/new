@@ -11,7 +11,7 @@ from app.packs.manager import PackRegistry
 from app.providers.catalog import gap_fill_capabilities, provider_profiles
 from app.providers.router import RouteContext, compile_provider_routing
 
-app = FastAPI(title="Character3D Masterbuild", version="1.2.0")
+app = FastAPI(title="Character3D Masterbuild", version="1.3.0")
 PACK_REGISTRY_PATH = Path(__file__).parents[1] / "config" / "packs" / "registry.yaml"
 
 
@@ -30,7 +30,7 @@ class PackRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.2.0"}
+    return {"ok": True, "version": "1.3.0"}
 
 
 @app.get("/v1/hardware")
@@ -656,7 +656,7 @@ def build_fingerprint():
     root = _source_root()
     return {
         'root': str(root),
-        'fingerprint': compile_build_fingerprint(root, metadata={'project': 'character3d-masterbuild', 'version': '1.2.0'}),
+        'fingerprint': compile_build_fingerprint(root, metadata={'project': 'character3d-masterbuild', 'version': '1.3.0'}),
         'environment': capture_runtime_environment(),
     }
 
@@ -755,3 +755,191 @@ class CanonicalDiffRequest(BaseModel):
 @app.post('/v1/release/diff')
 def canonical_release_diff(req: CanonicalDiffRequest):
     return compare_canonical_releases(req.before, req.after)
+
+
+# --- v1.3: scenes, worlds, rendering, topology --------------------------
+# Session capability that previously had no HTTP surface at all -- see
+# docs/V13_WORLDS_AND_RENDERING.md. Follows the same file-path request
+# convention already used above (e.g. ExportValidationRequest).
+
+from app.core.scene_models import SceneSpec
+from app.pipeline.scene_planner import compile_scene_plan
+from app.qa.scene import qa_scene_placement
+from app.world.terrain import TerrainSpec, generate_terrain_mesh, generate_terrain_mesh_with_biomes
+from app.world.world_grid import WorldGridSpec, generate_master_heightmap, tile_mesh
+from app.core.body_morphs import BodyMorphSpec
+from app.rigging.body_morph_apply import apply_body_morphs
+from app.render.job import compile_render_job
+from app.render.output_resolution import RenderOutputSpec, RenderResolutionTier, render_output_spec_for_tier
+from app.render.output_verification import verify_render_output
+from app.qa.topology import analyze_obj_topology
+from app.pipeline.image_analysis import analyze_image_for_prompt
+from app.providers.hi3d_modes import multicolor_task_fields, portrait_task_fields, print_split_task_fields, relief_task_fields
+
+
+class ScenePlanRequest(BaseModel):
+    scene: SceneSpec
+    hardware: HardwareProfile = Field(default_factory=HardwareProfile)
+
+
+@app.post("/v1/scenes/plan")
+def scene_plan(req: ScenePlanRequest):
+    return compile_scene_plan(req.scene, req.hardware)
+
+
+@app.post("/v1/scenes/placement-qa")
+def scene_placement_qa(scene: SceneSpec):
+    return qa_scene_placement(scene)
+
+
+class TerrainGenerateRequest(BaseModel):
+    terrain: TerrainSpec
+    output_path: str
+    with_biomes: bool = False
+
+
+@app.post("/v1/world/terrain/generate")
+def terrain_generate(req: TerrainGenerateRequest):
+    mesh = generate_terrain_mesh_with_biomes(req.terrain) if req.with_biomes else generate_terrain_mesh(req.terrain)
+    out = Path(req.output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    mesh.export(out)
+    return {"output_path": str(out), "vertex_count": len(mesh.vertices), "face_count": len(mesh.faces), "with_biomes": req.with_biomes}
+
+
+class WorldTileRequest(BaseModel):
+    world: WorldGridSpec
+    tile_x: int
+    tile_z: int
+    lod: int = 0
+    with_biomes: bool = True
+    output_path: str
+
+
+@app.post("/v1/world/tile/generate")
+def world_tile_generate(req: WorldTileRequest):
+    try:
+        master = generate_master_heightmap(req.world)
+        mesh = tile_mesh(master, req.world, req.tile_x, req.tile_z, lod=req.lod, with_biomes=req.with_biomes)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    out = Path(req.output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    mesh.export(out)
+    return {"output_path": str(out), "vertex_count": len(mesh.vertices), "face_count": len(mesh.faces)}
+
+
+class BodyMorphApplyRequest(BaseModel):
+    input_path: str
+    output_path: str
+    morphs: BodyMorphSpec
+    region_weights: dict[str, list[float]]
+
+
+@app.post("/v1/body-morphs/apply")
+def body_morphs_apply(req: BodyMorphApplyRequest):
+    import numpy as np
+    import trimesh
+
+    in_path = Path(req.input_path)
+    if not in_path.is_file():
+        raise HTTPException(status_code=404, detail=f"{in_path} does not exist")
+    mesh = trimesh.load(in_path, force="mesh", process=False)
+    weights = {name: np.asarray(values, dtype=np.float64) for name, values in req.region_weights.items()}
+    try:
+        out_mesh = apply_body_morphs(mesh, req.morphs, weights)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    out = Path(req.output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out_mesh.export(out)
+    return {"output_path": str(out), "vertex_count": len(out_mesh.vertices)}
+
+
+class RenderJobRequest(BaseModel):
+    vram_gb: float
+    ram_gb: float
+    gpu_vendor: str = "nvidia"
+    quality_mode: str = "hero"
+    resolution_tier: RenderResolutionTier = RenderResolutionTier.UHD_8K
+    overscan_px: int = 0
+    bit_depth: int = 16
+    passes: list[str] | None = None
+
+
+@app.post("/v1/render/job/compile")
+def render_job_compile(req: RenderJobRequest):
+    try:
+        return compile_render_job(
+            vram_gb=req.vram_gb, ram_gb=req.ram_gb, gpu_vendor=req.gpu_vendor,
+            quality_mode=req.quality_mode, resolution_tier=req.resolution_tier,
+            overscan_px=req.overscan_px, bit_depth=req.bit_depth, passes=req.passes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+class RenderOutputVerifyRequest(BaseModel):
+    resolution_tier: RenderResolutionTier
+    output_path: str
+    overscan_px: int = 0
+    bit_depth: int = 16
+
+
+@app.post("/v1/render/output/verify")
+def render_output_verify(req: RenderOutputVerifyRequest):
+    spec = render_output_spec_for_tier(req.resolution_tier, overscan_px=req.overscan_px, bit_depth=req.bit_depth)
+    return verify_render_output(spec, req.output_path)
+
+
+class TopologyRequest(BaseModel):
+    path: str
+
+
+@app.post("/v1/qa/topology")
+def qa_topology(req: TopologyRequest):
+    try:
+        return analyze_obj_topology(req.path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+class ImageAnalysisRequest(BaseModel):
+    path: str
+    palette_size: int = 5
+
+
+@app.post("/v1/pipeline/image-analysis")
+def pipeline_image_analysis(req: ImageAnalysisRequest):
+    try:
+        return analyze_image_for_prompt(req.path, palette_size=req.palette_size)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+class Hi3DModeRequest(BaseModel):
+    mode: str
+    face_count: int = 2_000_000
+    output_format: str = "glb"
+    number_colors: int = 4
+    part_count: int = 2
+    joint_style: str = "dovetail"
+    callback_url: str | None = None
+
+
+@app.post("/v1/providers/hi3d/mode-fields")
+def hi3d_mode_fields(req: Hi3DModeRequest):
+    try:
+        if req.mode == "portrait":
+            return portrait_task_fields(face_count=req.face_count, output_format=req.output_format, callback_url=req.callback_url)
+        if req.mode == "relief":
+            return relief_task_fields(output_format=req.output_format if req.output_format in {"exr", "png"} else "exr", callback_url=req.callback_url)
+        if req.mode == "multicolor":
+            return multicolor_task_fields(number_colors=req.number_colors, face_count=req.face_count, callback_url=req.callback_url)
+        if req.mode == "print_split":
+            return print_split_task_fields(part_count=req.part_count, joint_style=req.joint_style, face_count=req.face_count, callback_url=req.callback_url)
+        raise HTTPException(status_code=422, detail=f"Unknown Hi3D mode: {req.mode!r}")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e

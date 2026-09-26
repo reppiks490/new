@@ -1,0 +1,15 @@
+.venv/
+.venv_ship_check/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.git/
+.claude/
+workspace/
+tests/
+docs/
+*.md
+.env

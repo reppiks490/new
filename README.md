@@ -2,6 +2,42 @@
 
 Local-first, prompt-driven high-fidelity 3D character, scene, and world production framework with provider routing across Tripo3D, Meshy, and Hi3D/Hitem3D plus a canonical Blender/USD finishing pipeline.
 
+## Running it
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env   # fill in provider API keys if/when you have them; everything is optional
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+curl http://localhost:8000/health
+curl http://localhost:8000/v1/runtime/readiness   # honest report of what's actually configured
+```
+
+Every route is listed by hitting `/docs` (FastAPI's auto-generated Swagger
+UI) once the server is running. `GET /v1/runtime/readiness` tells you —
+without ever echoing credential values — whether Blender, OpenUSD `pxr`,
+and each provider's API key are actually available in your environment,
+rather than silently assuming they are.
+
+### Docker
+
+```bash
+docker build -t character3d-masterbuild .
+docker run -p 8000:8000 --env-file .env -v $(pwd)/workspace:/app/workspace character3d-masterbuild
+```
+
+The `Dockerfile` installs only the app's production dependencies (no dev/
+test extras) and runs `uvicorn` directly. **Verification note:** this
+container was not build-and-run inside this repository's own working
+environment — that sandbox has no privileged access to a Docker daemon
+(confirmed by trying, not assumed: `docker build` fails with no daemon
+socket, and neither `podman` nor `buildah` are available as alternatives).
+What *was* verified here, as the closest real proxy: a fresh virtualenv
+using only the exact same production-only install the Dockerfile performs
+(`pip install -e .`, no `[dev]` extras) boots the real server and serves
+real requests correctly. Build and run the image yourself to get the last
+mile of confidence a real Docker environment would give.
+
 ## v1.0 milestone
 
 v1.0 closes the largest trust gap from the earlier builds: **the system now distinguishes what is implemented/tested from what actually executed live**.

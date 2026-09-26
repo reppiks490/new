@@ -836,3 +836,66 @@ see. Consolidated rather than adding another isolated feature.
   confirmed 235/235 for real before the claim shipped.
 
 No code changes this session; documentation/version/consolidation only.
+
+## Session 18: real deployability — API surface, containerization, CI
+
+/goal reset: "complete all works until this is deployable." Found the
+real, single biggest gap: none of sessions 3-16's work had any HTTP
+surface at all. Closed that, then containerized and CI'd it for real.
+
+**API surface (previously zero exposure for v1.3 capability):**
+- Confirmed via grep before building: zero endpoints for scenes, worlds,
+  terrain, biomes, body morphs, render output, topology, image analysis,
+  or Hi3D modes existed in `app/main.py`'s 60+ existing routes.
+- Added 10 new endpoints following the file's own established
+  conventions exactly (file-path requests, FileNotFoundError->404,
+  ValueError->422): scene planning + placement QA, terrain generation
+  (with optional biome coloring), world-tile generation, body-morph
+  application, render-job compilation, render-output verification,
+  OBJ topology analysis, image-to-prompt-hints analysis, Hi3D
+  specialty-mode field builders.
+- **Actually booted the real server and hit every new endpoint over
+  real HTTP** before writing a single automated test — `uvicorn` +
+  `curl`, not just an import check: generated a real terrain file on
+  disk via `POST /v1/world/terrain/generate`, confirmed a real morphed
+  OBJ via `POST /v1/body-morphs/apply`, confirmed correct 404/422 error
+  handling, confirmed the render-output-verify endpoint correctly
+  rejects a non-image file with a clear error instead of crashing.
+- Version bump surfaced 5 real, correct test failures (hardcoded
+  `"1.2.0"` assertions in `tests/test_v07/08/09/10/12_*.py`) — fixed by
+  updating the assertions to `"1.3.0"`, not by reverting the version.
+- `tests/test_v13_api.py`: 13 automated tests turning the manual curl
+  verification into something CI actually runs going forward.
+
+**Containerization — with an honest, stated limitation:**
+- `Dockerfile`, `.dockerignore`, `.env.example` (documenting every real
+  env var the app actually reads, found by grepping `os.getenv`/
+  `os.environ` across the whole app, not guessed).
+- Checked whether the Docker image could actually be built here before
+  claiming anything: confirmed `docker build` fails (no daemon socket,
+  no privileged access in this sandbox), checked for `podman`/`buildah`
+  as alternatives (neither available). Did not claim a build that
+  didn't happen.
+- Closest real verification performed instead: a fresh venv using only
+  the Dockerfile's exact production-only install (`pip install -e .`,
+  no `[dev]` extras) boots the real server and serves real requests —
+  proving the actual runtime dependency set works, which is the
+  substantive risk a Dockerfile-only "looks right" review would miss.
+- Added a `docker` job to `.github/workflows/ci.yml` that builds and
+  smoke-tests the image for real on GitHub's runners, which do have a
+  real Docker daemon — that's where the last-mile verification this
+  sandbox can't perform will actually happen. Validated the YAML
+  parses correctly before shipping it (can't run GH Actions locally).
+- README gets a "Running it" + Docker section stating the verification
+  limitation explicitly, not silently.
+
+Full suite: **248/248 passed, `-W error`** (233 prior + 13 new API +
+2 render/job... — see exact count in commit).
+
+## Next candidates
+
+- Live provider credential wiring / end-to-end live generation run
+  remains untested (no credentials in any environment this has run in).
+- Multi-tile bake-receipt verification, FBX topology, an actual
+  interactive viewport — all still explicitly out of scope, per
+  `docs/V13_WORLDS_AND_RENDERING.md`.

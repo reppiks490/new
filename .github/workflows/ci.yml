@@ -29,3 +29,26 @@ jobs:
 
       - name: Run tests (warnings as errors)
         run: python -m pytest -q -W error
+
+  docker:
+    runs-on: ubuntu-latest
+    # GitHub Actions runners have a real Docker daemon, unlike the sandbox
+    # this Dockerfile was authored in (no privileged daemon access there --
+    # see README's Docker section). This job is where the image actually
+    # gets built and smoke-tested for real.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t character3d-masterbuild:ci .
+
+      - name: Boot container and smoke-test /health
+        run: |
+          docker run -d --name c3d -p 8000:8000 character3d-masterbuild:ci
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health; then break; fi
+            sleep 1
+          done
+          curl -sf http://localhost:8000/health
+          docker logs c3d
+          docker stop c3d
