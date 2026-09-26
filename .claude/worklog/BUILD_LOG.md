@@ -59,3 +59,12 @@ install closed:
 5. anyio dev pin (avoid BlockingPortal deprecation under -W error)
 
 Spec target (README): 114 tests passing, warnings as errors. Met exactly.
+
+Committed as `37c155b`, pushed to `origin/claude/effort-status-tjzcfd`.
+
+## PR: not applicable
+
+`reppiks490/new` had zero commits before this session. This branch is now
+the repo's only branch (and its default) — there is no other branch to
+diff against, so `create_pull_request` correctly rejects the base. This
+push *is* the repo's initial history, not a change proposed against one.
