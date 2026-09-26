@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "character3d-masterbuild"
+version = "1.2.0"
+description = "Local-first high-fidelity prompt-driven 3D character pipeline"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "starlette>=0.40,<1.0",
+  "uvicorn>=0.30",
+  "pydantic>=2.8",
+  "PyYAML>=6.0",
+  "httpx>=0.27",
+  "numpy>=2.0",
+  "trimesh>=4.5",
+  "scipy>=1.13",
+  "networkx>=3.3",
+  "Pillow>=10.4",
+  "cryptography>=43.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "httpx>=0.27", "anyio>=4.0,<4.4"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["app", "app.*"]

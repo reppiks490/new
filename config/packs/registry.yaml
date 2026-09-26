@@ -1,0 +1,79 @@
+packs:
+  - id: core_runtime
+    name: Core runtime
+    category: core
+    version: "0.2"
+    expected_size_gb: 0.25
+    description: API, orchestration, schemas, workers, job history and validation.
+
+  - id: geometry_base
+    name: Parametric human base geometry
+    category: geometry
+    version: "1"
+    expected_size_gb: 4.0
+    description: Base meshes, morph bases and topology templates for body/face generation.
+    dependencies: [core_runtime]
+
+  - id: reconstruction_hq
+    name: HQ multiview reconstruction models
+    category: reconstruction
+    version: "1"
+    expected_size_gb: 18.0
+    description: Optional multiview/image-to-geometry checkpoints and caches.
+    dependencies: [geometry_base]
+
+  - id: surface_8k
+    name: 8K UDIM surface generation
+    category: materials
+    version: "1"
+    expected_size_gb: 24.0
+    description: PBR texture generation, skin detail priors and 8K-ready material assets.
+    dependencies: [core_runtime]
+
+  - id: upscale_detail
+    name: Texture detail and upscaling
+    category: upscaling
+    version: "1"
+    expected_size_gb: 10.0
+    description: Optional high-frequency texture/detail enhancement checkpoints.
+    dependencies: [surface_8k]
+
+  - id: groom_pro
+    name: Strand groom library
+    category: hair_groom
+    version: "1"
+    expected_size_gb: 8.0
+    description: Groom presets, strand guides, brows, lashes and facial-hair assets.
+    dependencies: [core_runtime]
+
+  - id: rig_pro
+    name: Rig, morph and corrective library
+    category: rigging
+    version: "1"
+    expected_size_gb: 6.0
+    description: Humanoid rig templates, facial shapes and pose-space corrective data.
+    dependencies: [geometry_base]
+
+  - id: motion_studio
+    name: Motion studio
+    category: animation
+    version: "1"
+    expected_size_gb: 12.0
+    description: Motion clips and retargeting data.
+    dependencies: [rig_pro]
+
+  - id: render_studio
+    name: Rendering/lookdev studio
+    category: render
+    version: "1"
+    expected_size_gb: 6.0
+    description: Shader presets, OCIO/lookdev presets, render templates and denoising resources.
+    dependencies: [surface_8k]
+
+  - id: environments_hq
+    name: HDR environment library
+    category: environment
+    version: "1"
+    expected_size_gb: 20.0
+    description: High-resolution HDR environments and studio-lighting rigs.
+    dependencies: [render_studio]

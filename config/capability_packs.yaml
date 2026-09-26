@@ -1,0 +1,40 @@
+core:
+  required: true
+  purpose: orchestration, policy, schemas, job graph
+geometry:
+  base_human_generator:
+    required: false
+    expected_size_gb: "model-dependent"
+  reconstruction_multiview:
+    required: false
+    expected_size_gb: "model-dependent"
+  hero_sculpt_detail:
+    required: false
+    expected_size_gb: "model-dependent"
+materials:
+  pbr_generator:
+    required: false
+    texture_targets: [2048, 4096, 8192]
+  upscaler:
+    required: false
+  material_library:
+    required: false
+hair_groom:
+  strand_generator:
+    required: false
+rig_animation:
+  autorig:
+    required: false
+  motion_library:
+    required: false
+render:
+  blender_cycles_worker:
+    required: false
+  unreal_preview_worker:
+    required: false
+interop:
+  usd_usdskel:
+    required: true
+  fbx: {required: false}
+  gltf_glb: {required: false}
+  obj: {required: false}
