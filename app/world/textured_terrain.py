@@ -26,11 +26,17 @@ def build_textured_terrain(
     *,
     texture_size: int,
     thresholds: BiomeThresholds | None = None,
+    flatten_water: bool = True,
 ) -> trimesh.Trimesh:
     if not 8 <= texture_size <= MAX_EMBEDDED_TEXTURE_SIZE:
         raise ValueError(f"texture_size must be between 8 and {MAX_EMBEDDED_TEXTURE_SIZE} for an embedded-texture GLB")
     heightmap = diamond_square_heightmap(spec)
-    mesh = heightmap_to_mesh(heightmap, size_meters=spec.size_meters, height_scale_meters=spec.height_scale_meters)
+    # Terrain below the water level becomes a flat water surface (what the
+    # texture paints there); the texture's depth shading still comes from
+    # the true lakebed heights.
+    water_level = (thresholds or BiomeThresholds()).water_level
+    surface = np.maximum(heightmap, water_level) if flatten_water else heightmap
+    mesh = heightmap_to_mesh(surface, size_meters=spec.size_meters, height_scale_meters=spec.height_scale_meters)
     maps = synthesize_biome_texture_maps(heightmap, texture_size=texture_size, seed=spec.seed, thresholds=thresholds)
 
     # glTF metallicRoughness: G = roughness, B = metallic (terrain is fully

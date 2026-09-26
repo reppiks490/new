@@ -16,10 +16,12 @@ class TerrainSpec(BaseModel):
     resolution_power: int = Field(default=6, ge=1, le=10)
     height_scale_meters: float = Field(gt=0, le=10_000)
     seed: int = 0
-    # Diamond-square's own roughness/persistence parameter: higher values keep
-    # more amplitude at finer iterations (jagged terrain), lower values decay
-    # faster (smoother, rolling terrain).
-    roughness: float = Field(default=0.5, gt=0, le=1.5)
+    # Hurst-style exponent: each finer diamond-square level's random amplitude
+    # is multiplied by 2**-roughness. HIGHER = SMOOTHER. ~0.9-1.1 gives
+    # natural fractal terrain; ~0.5 is near white noise at vertex scale
+    # (measured: 12x the vertex-to-vertex jaggedness of 1.1), which renders
+    # as spikes. The old 0.5 default (documented backwards) did exactly that.
+    roughness: float = Field(default=0.95, gt=0, le=1.5)
 
 
 def diamond_square_heightmap(spec: TerrainSpec) -> np.ndarray:

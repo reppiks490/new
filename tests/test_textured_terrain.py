@@ -68,3 +68,25 @@ def test_endpoint_rejects_non_gltf_output_with_422(tmp_path):
         "terrain": SPEC.model_dump(), "output_path": str(tmp_path / "t.obj"), "texture_size": 64,
     })
     assert r.status_code == 422
+
+
+def test_water_is_a_flat_surface_at_the_water_level():
+    from app.world.biomes import BiomeThresholds
+    from app.world.terrain import diamond_square_heightmap
+
+    spec = TerrainSpec(name="lake", size_meters=100, resolution_power=5, height_scale_meters=20, seed=1)
+    mesh = build_textured_terrain(spec, texture_size=32)
+    level = BiomeThresholds().water_level * spec.height_scale_meters
+    heights = mesh.vertices[:, 2]
+    assert (diamond_square_heightmap(spec) < BiomeThresholds().water_level).any()
+    assert heights.min() == pytest.approx(level)
+    raw = build_textured_terrain(spec, texture_size=32, flatten_water=False)
+    assert raw.vertices[:, 2].min() < level
+
+
+def test_default_terrain_is_not_vertex_scale_noise():
+    from app.world.terrain import diamond_square_heightmap
+
+    h = diamond_square_heightmap(TerrainSpec(name="t", size_meters=1000, resolution_power=8, height_scale_meters=200, seed=11))
+    lap = np.abs(4 * h[1:-1, 1:-1] - h[:-2, 1:-1] - h[2:, 1:-1] - h[1:-1, :-2] - h[1:-1, 2:]).mean()
+    assert lap < 0.03

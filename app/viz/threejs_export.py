@@ -58,7 +58,7 @@ def mesh_to_threejs_code(
     lo, hi = vertices.min(axis=0), vertices.max(axis=0)
     center = (lo + hi) / 2.0
     diagonal = float(np.linalg.norm(hi - lo)) or 1.0
-    camera_distance = diagonal * 1.6
+    camera_distance = diagonal * 0.85
 
     # JSON is valid JS array-literal syntax for numeric arrays, so no custom
     # serialization is needed -- and json.dumps rejects NaN/Infinity by

@@ -22,7 +22,7 @@ class WorldGridSpec(BaseModel):
     tile_size_meters: float = Field(gt=0, le=10_000)
     height_scale_meters: float = Field(gt=0, le=10_000)
     seed: int = 0
-    roughness: float = Field(default=0.5, gt=0, le=1.5)
+    roughness: float = Field(default=0.95, gt=0, le=1.5)  # higher = smoother; see TerrainSpec
 
     @model_validator(mode="after")
     def validate_tiling(self):
