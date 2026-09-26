@@ -25,6 +25,7 @@ class BodyProportionSlider(str, Enum):
     TORSO_LENGTH = "torso_length"
     WAIST = "waist"
     HIP_WIDTH = "hip_width"
+    GLUTE_SIZE = "glute_size"
     ARM_LENGTH = "arm_length"
     ARM_THICKNESS = "arm_thickness"
     LEG_LENGTH = "leg_length"
@@ -82,6 +83,10 @@ DEFAULT_SLIDER_REGIONS: dict[BodyProportionSlider, list[RegionAxisScale]] = {
     BodyProportionSlider.TORSO_LENGTH: [RegionAxisScale(region="torso", axis=BodyMorphAxis.Z, max_scale_multiplier=1.15)],
     BodyProportionSlider.WAIST: [RegionAxisScale(region="waist", axis=BodyMorphAxis.X, max_scale_multiplier=1.3)],
     BodyProportionSlider.HIP_WIDTH: [RegionAxisScale(region="hips", axis=BodyMorphAxis.X, max_scale_multiplier=1.25)],
+    # General glute/buttock proportion control (same category as HIP_WIDTH and
+    # BUST_SIZE: a standard body-shape slider in mainstream character
+    # creators), scaled outward on Y about the hip/pelvis pivot.
+    BodyProportionSlider.GLUTE_SIZE: [RegionAxisScale(region="glutes", axis=BodyMorphAxis.Y, max_scale_multiplier=1.35)],
     BodyProportionSlider.ARM_LENGTH: [RegionAxisScale(region="arms", axis=BodyMorphAxis.Z, max_scale_multiplier=1.2)],
     BodyProportionSlider.ARM_THICKNESS: [RegionAxisScale(region="arms", axis=BodyMorphAxis.X, max_scale_multiplier=1.3)],
     BodyProportionSlider.LEG_LENGTH: [RegionAxisScale(region="legs", axis=BodyMorphAxis.Z, max_scale_multiplier=1.2)],

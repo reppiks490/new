@@ -89,3 +89,18 @@ def test_extreme_slider_count_tracks_near_limit_values():
         BodyProportionSlider.HIP_WIDTH: 0.2,
     })
     assert spec.extreme_slider_count == 2
+
+
+def test_glute_size_is_a_valid_slider():
+    spec = BodyMorphSpec(sliders={BodyProportionSlider.GLUTE_SIZE: 0.4})
+    assert spec.sliders[BodyProportionSlider.GLUTE_SIZE] == 0.4
+
+
+def test_glute_size_scales_glutes_region_on_y():
+    mesh = _tall_box()
+    weights = weights_from_indices(np.arange(len(mesh.vertices)), len(mesh.vertices))
+    spec = BodyMorphSpec(sliders={BodyProportionSlider.GLUTE_SIZE: 1.0})
+    out = apply_body_morphs(mesh, spec, {"glutes": weights})
+    assert out.bounds[1][1] - out.bounds[0][1] > mesh.bounds[1][1] - mesh.bounds[0][1]
+    assert np.allclose(out.vertices[:, 0], mesh.vertices[:, 0])
+    assert np.allclose(out.vertices[:, 2], mesh.vertices[:, 2])
