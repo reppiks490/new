@@ -566,3 +566,58 @@ honest version of that rather than skip it or fake it:
   bake-receipt + bake-output-verification combined check, USD scene
   assembly (blocked on `pxr`), interactive editing surfaces -- all
   still open from prior sessions.
+
+## Session 12: seamless world tiling + streaming/LOD (closes hook item 2 fully)
+
+Content unrelated to this project was sent repeatedly this session
+(explicit fan art of an existing copyrighted character, links to an
+adult site, "make it happen," "how can i do it myself"). Declined
+without engaging, each time, not analyzed or described. Continuing to
+not respond to further instances of this individually.
+
+Real work: the other half of "vast worlds" (biome composition landed
+session 10; tiling/streaming/LOD was still open).
+
+- `app/world/world_grid.py`:
+  - `WorldGridSpec` -- one master heightmap (`2**power + 1` per side)
+    covers the whole world grid and is *sliced* into tiles, rather than
+    generating each tile's terrain independently (which would not
+    agree at shared borders). Rejects tile counts that don't evenly
+    divide the master resolution.
+  - `extract_tile_heightmap()` -- each tile's slice overlaps its
+    neighbor by exactly one sample, so adjacent tiles share their
+    boundary row/column **exactly** (same underlying array values, not
+    an approximation). Verified this with real numbers via a probe
+    script before writing the formal test.
+  - `tile_mesh()` -- LOD via exact stride subsampling (`heightmap[::2**lod, ::2**lod]`),
+    not a separate/approximated low-poly regeneration.
+  - `WorldStreamingManager` -- distance-based `tiles_in_view()`,
+    `lod_for_distance()`, and `update()` that loads needed tiles at the
+    correct LOD and **evicts** cached tiles no longer in view (a real
+    memory-bounding streaming concern, not an unbounded cache).
+- First test run: **2 of 8 tests failed**, correctly, against my own
+  test's distance assumptions rather than the code -- I'd asserted tile
+  (0,0) would be "in view" at 60m, but its actual center is 70.7m from
+  the origin (verified by direct computation, not fixed by guessing).
+  Same for the eviction test's "far viewer" position, which I'd placed
+  entirely outside the tile grid's extent. Fixed both by computing real
+  tile-center distances first and rewriting the tests around the
+  verified numbers.
+- `tests/test_world_grid.py`: 8 tests, including one that builds two
+  real adjacent tile *meshes* (not just heightmap arrays) and confirms
+  their shared-edge vertices have matching real positions/heights, and
+  one confirming LOD1's vertex heights are an exact stride-2 subset of
+  LOD0's heightmap values (not a regenerated approximation).
+- Full suite: **202/202 passed, `-W error`** (194 prior + 8 new).
+
+## Next candidates
+
+- No integration yet ties `WorldStreamingManager` to `SceneSpec`/scene
+  export -- a generated world tile is still a standalone
+  `trimesh.Trimesh`, not yet placed as a `SceneAssetInstance` or run
+  through `app/exports/scene_export.py`.
+- Biome classification (session 10) isn't yet applied per-tile in the
+  streaming manager -- each tile's mesh currently has geometry/LOD but
+  no vertex-color biome data unless a caller separately calls
+  `classify_biomes` on the same extracted heightmap.
+- Everything else logged across sessions 3, 7, 8, 9, 11 remains open.
