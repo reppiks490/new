@@ -4,6 +4,18 @@ from pathlib import Path
 from PIL import Image
 from pydantic import BaseModel, Field
 
+# PIL's default decompression-bomb guard (Image.MAX_IMAGE_PIXELS, ~89.5M
+# pixels) exists to protect against maliciously crafted images from
+# untrusted sources. Files this function inspects come from this project's
+# own bake/render pipeline (app/qa/bake_output_verification.py,
+# app/render/output_verification.py), not arbitrary uploads, and this
+# project's own defined ceiling is the 16K render/texture tier
+# (15360x8640 = 132,710,400 pixels -- see app/render/output_resolution.py).
+# Rather than disable the guard entirely, raise it to a fixed, still-bounded
+# cap comfortably above that known ceiling, so a genuinely oversized/hostile
+# file is still rejected.
+Image.MAX_IMAGE_PIXELS = 200_000_000
+
 
 class TextureQAReport(BaseModel):
     path: str

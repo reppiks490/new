@@ -736,3 +736,73 @@ closing the gap session 9 flagged but left open.
 - Hi3D mode routing integration, Meshy pipeline orchestration into
   planner.py, image_analysis hints integrated into spec construction --
   all still open from earlier sessions.
+
+## Session 16: exceeding-8K render output + polygon/quad topology tracking
+
+Directed by explicit request: "work primarily around exceeding 8k
+render, increased polycount topography mesh triangles quads and more,
+then continue building until able to ship."
+
+Verified a design-relevant fact before scoping (WebSearch against the
+Khronos glTF 2.0 spec, not memory): glTF/GLB has **no native quad
+primitive mode** -- only points/lines/triangle variants. This settled
+where quad/n-gon tracking is even meaningful.
+
+**Polygon topology (triangles/quads/n-gons):**
+- `app/qa/topology.py::analyze_obj_topology()` -- reads raw OBJ `f`
+  face lines directly rather than going through trimesh at all, since
+  trimesh triangulates on load regardless of source format and has
+  already lost original polygon structure by the time you have a
+  Trimesh object. Scoped honestly to OBJ (the format that actually
+  preserves polygon structure); GLB is correctly triangles-only by
+  spec, not a gap.
+- `tests/test_topology.py`: 6 tests, including a hand-written OBJ
+  fixture with an exact known composition (2 triangles/3 quads/1
+  pentagon, verified count-for-count) and a real trimesh-exported OBJ
+  cross-check (guaranteed 100% triangles via a genuinely different code
+  path). One self-contradiction caught before it shipped: I wrote a
+  test asserting `not quad_dominant` on a mesh whose quad_ratio is
+  exactly 0.5, when the `quad_dominant` property's own threshold is
+  `>=0.5` -- fixed to assert the correct boundary behavior instead of
+  silently getting it wrong.
+
+**Exceeding-8K render output (previously a real, stated gap -- session
+11 had 8K TEXTURE verification but no render OUTPUT resolution system
+at all):**
+- `app/render/output_resolution.py`: `RenderResolutionTier` (HD/2K/4K/
+  8K/**16K**, doubling the same way this project's existing texture
+  tiers already do), `estimate_render_buffer_gib()`, and
+  `render_fits_hardware()` (mirrors the hardware-aware capping already
+  used for geometry and world tiling, applied to render buffers).
+- `app/render/output_verification.py::verify_render_output()` -- opens
+  a real rendered file and checks its actual dimensions/hash, same
+  discipline as session 9's bake verification.
+- Real bug hit and fixed properly, not worked around: a genuine
+  15360x8640 (16K-class) test fixture failed with PIL's own
+  decompression-bomb guard (`Image.MAX_IMAGE_PIXELS`, default ~89.5M
+  pixels, this file is 132.7M). Rather than disable the guard, raised
+  it to a fixed, still-bounded 200M-pixel cap in `app/qa/textures.py`
+  (comfortably above this project's own defined 16K ceiling, nowhere
+  near unlimited), with a test confirming the cap is raised but not
+  disabled (`MAX_IMAGE_PIXELS is not None`, still a fixed number).
+- `app/render/job.py::compile_render_job()` -- ties the existing
+  sampling/quality system (`CyclesPreset`, "how good") together with
+  the new resolution system (`RenderOutputSpec`, "how big"), which
+  previously existed as two disconnected modules.
+- `tests/test_render_output.py` (10 tests) + `tests/test_render_job.py`
+  (3 tests), including a **real 15360x8640 file actually written to
+  disk and verified** (timing/size probed first: 1.9s, ~2MB for a
+  solid-color JPEG, before committing to it in the suite).
+- Full suite: **233/233 passed, `-W error`** (214 prior + 6 topology +
+  10 render-output + 3 render-job = 19 new).
+
+## Next candidates
+
+- FBX quad/n-gon preservation is a documented, deliberately out-of-
+  scope item (FBX SDK-level parsing is significantly more complex than
+  OBJ's plain-text format; not attempted this session).
+- `compile_render_job` isn't yet wired into `app/pipeline/planner.py`'s
+  stage list.
+- Hi3D mode routing integration, Meshy pipeline orchestration into the
+  planner, image_analysis hints feeding spec construction -- all still
+  open from earlier sessions.
