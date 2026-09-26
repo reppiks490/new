@@ -68,3 +68,22 @@ Committed as `37c155b`, pushed to `origin/claude/effort-status-tjzcfd`.
 the repo's only branch (and its default) — there is no other branch to
 diff against, so `create_pull_request` correctly rejects the base. This
 push *is* the repo's initial history, not a change proposed against one.
+
+## Session 2: dogfood release verification + CI
+
+- Ran the project's own `scripts/verify_release.py` against the artifact
+  it was delivered in (the original signed zip + its signature manifest).
+  First attempt returned INVALID.
+- Root-caused rather than assumed-broken: the uploader had renamed the
+  file with a `99ffe1d3-` staging prefix. `artifact_name` is part of the
+  Ed25519-signed payload (by design — prevents a renamed/substituted file
+  from passing), so the verifier correctly rejected the renamed path.
+  Not a bug. Confirmed by copying to the original filename and
+  re-verifying: **VALID**, exit 0. Full end-to-end proof the release
+  signing/verification pipeline works, not just a manual sha256 check.
+- Smoke-tested `app.main` imports cleanly and exposes a FastAPI `app`
+  object (both Python 3.11 and 3.12).
+- Added `.github/workflows/ci.yml`: matrix on Python 3.11/3.12, installs
+  `.[dev]`, smoke-tests the app import, runs `pytest -q -W error`.
+- Verified the 3.12 leg locally before shipping it (not just assumed) —
+  fresh `.venv312`, clean install, 114/114 passed on 3.12 too.
