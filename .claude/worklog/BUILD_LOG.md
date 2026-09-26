@@ -806,3 +806,33 @@ at all):**
 - Hi3D mode routing integration, Meshy pipeline orchestration into the
   planner, image_analysis hints feeding spec construction -- all still
   open from earlier sessions.
+
+## Session 17: v1.3 ship consolidation (README, version, docs)
+
+"Continue building until able to ship" -- for a library like this,
+shipping means the README/docs/version actually reflect the real
+capability, not 16 sessions' worth of build-log entries only I could
+see. Consolidated rather than adding another isolated feature.
+
+- `pyproject.toml`: version 1.2.0 -> 1.3.0, description updated to
+  reflect scenes/worlds, not just characters.
+- `README.md`: new "v1.3 net-new" section summarizing sessions 3-16
+  honestly -- every bullet names what's real and tested, several
+  explicitly flag their own limitations (multi-tile bake-receipt
+  verification not yet extended, FBX topology not attempted).
+- `docs/V13_WORLDS_AND_RENDERING.md`: new, matching the existing
+  V11/V12 doc pattern. Includes an explicit "Explicitly out of scope"
+  section -- FBX quad preservation, multi-tile bake-receipt output
+  verification, any interactive viewport/UI (this remains a headless
+  Python library with no GUI toolkit, and this environment has no way
+  to build or test one), natural-language image captioning, and
+  explicit sexual/anatomical content generation (not a gap -- a
+  permanent, deliberate exclusion, referenced to
+  docs/SECURITY_AND_TRUST.md rather than re-argued here).
+- Before writing "235/235 passing, verified from a clean install" in
+  the doc, actually ran that clean-room check again rather than
+  asserting it from memory of the last time it was true (a fresh
+  `.venv_ship_check`, `pip install -e ".[dev]"`, full suite) --
+  confirmed 235/235 for real before the claim shipped.
+
+No code changes this session; documentation/version/consolidation only.
