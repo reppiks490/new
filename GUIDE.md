@@ -65,7 +65,7 @@ Check it's alive:
 
 ```bash
 curl http://localhost:8000/health
-# {"ok":true,"version":"1.3.0"}
+# {"ok":true,"version":"1.4.0"}
 
 curl http://localhost:8000/v1/runtime/readiness
 ```
@@ -132,6 +132,74 @@ Writes a real, deterministic, biome-colored terrain mesh to
 grid dimensions, tile size, world seed) plus `tile_x`/`tile_z`/`lod` and
 writes that one tile's mesh to `output_path`.
 
+**Fully textured terrain in one file** — geometry, UVs, and embedded
+baseColor / metallicRoughness / normal maps, ready for any glTF viewer or
+engine (texture up to 8192):
+
+```bash
+curl -X POST http://localhost:8000/v1/world/terrain/generate-textured \
+  -H "Content-Type: application/json" \
+  -d '{
+    "terrain": {"name": "highlands", "size_meters": 1000, "resolution_power": 8, "height_scale_meters": 260, "seed": 11},
+    "output_path": "./workspace/highlands.glb",
+    "texture_size": 4096
+  }'
+```
+
+**Standalone texture maps up to 16384×16384** (streamed to disk; ~28 s at
+8K, ~2 min at 16K, under 1 GB RAM):
+
+```bash
+curl -X POST http://localhost:8000/v1/world/terrain/biome-texture \
+  -H "Content-Type: application/json" \
+  -d '{
+    "terrain": {"name": "highlands", "size_meters": 1000, "resolution_power": 8, "height_scale_meters": 260, "seed": 11},
+    "texture_size": 8192,
+    "basecolor_path": "./workspace/basecolor.png",
+    "roughness_path": "./workspace/roughness.png",
+    "normal_path": "./workspace/normal.png"
+  }'
+```
+
+**Let it pick the best of several seeds** — each candidate is scored on
+biome diversity, walkable area and height variety; the winner is exported
+and every candidate's score is returned:
+
+```bash
+curl -X POST http://localhost:8000/v1/world/terrain/generate-best-of-n \
+  -H "Content-Type: application/json" \
+  -d '{
+    "terrain": {"name": "hills", "size_meters": 500, "resolution_power": 7, "height_scale_meters": 80},
+    "candidate_seeds": [1, 2, 3, 4, 5, 6, 7, 8],
+    "output_path": "./workspace/best.glb"
+  }'
+```
+
+`roughness` in a terrain spec is a smoothness exponent: **higher =
+smoother**. The default 0.95 gives natural fractal terrain; values near 0.5
+are close to noise at vertex scale.
+
+### Live 3D preview
+
+```bash
+curl -X POST http://localhost:8000/v1/viz/threejs-scene \
+  -H "Content-Type: application/json" \
+  -d '{"input_path": "./workspace/best.glb"}'
+```
+
+Returns self-contained Three.js scene code (geometry, vertex colors, lights,
+orbit camera framed to the mesh) you can drop into any page that provides
+`THREE`, `OrbitControls`, `canvas`, `width` and `height`.
+
+### Axis convention
+
+Internally everything is Z-up (like Blender). Every `.glb`/`.gltf` written
+is converted to glTF's mandatory Y-up, and every `.glb`/`.gltf` read —
+including Tripo/Meshy/Hi3D output — is converted back, so provider
+characters stand upright on generated terrain. OBJ/STL/PLY carry no
+standard up axis and are treated as Z-up; pass `"up_axis": "y"` for OBJs
+exported from Blender with default settings.
+
 ### Compose a scene
 
 ```bash
@@ -150,19 +218,17 @@ files by their SHA-256 hash — see `app/core/scene_models.py` and
 curl -X POST http://localhost:8000/v1/body-morphs/apply \
   -H "Content-Type: application/json" \
   -d '{
-    "input_path": "./base_mesh.obj",
-    "output_path": "./workspace/morphed.obj",
-    "morphs": {"sliders": {"height": 0.4, "shoulder_width": 0.2, "waist": -0.3}},
-    "region_weights": {"whole_body": [1.0, 1.0, ...]}
+    "input_path": "./workspace/character.glb",
+    "output_path": "./workspace/character_morphed.glb",
+    "percentages": {"height": 10, "shoulder_width": 20, "waist": -15, "glute_size": 25}
   }'
 ```
 
-`region_weights` needs one float (0–1) per vertex in the input mesh, for
-each named region a slider touches — see
-`app/core/body_morphs.py::DEFAULT_SLIDER_REGIONS` for which region name
-each of the 17 sliders drives, and `weights_from_indices()` for a quick
-way to build a binary (all-or-nothing) weight map before hand-tuning a
-smoother falloff.
+Percentages run -100..100. Region weights are estimated automatically from
+the mesh for every region except arms/hands (those depend on pose; supply
+them in `region_weights`, one 0-1 value per vertex, if you use
+`arm_length`). Provider GLBs work directly: height is read from the file's
+real vertical axis.
 
 ### Mesh/render QA
 
