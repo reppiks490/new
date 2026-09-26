@@ -887,6 +887,35 @@ def body_morphs_apply(req: BodyMorphApplyRequest):
     return {"output_path": str(out), "vertex_count": len(out_mesh.vertices)}
 
 
+class ThreeJSPreviewRequest(BaseModel):
+    input_path: str
+    background_hex: int = 0x1a1a2e
+    material_color_hex: int = 0x8899aa
+    wireframe: bool = False
+
+
+@app.post("/v1/viz/threejs-scene")
+def viz_threejs_scene(req: ThreeJSPreviewRequest):
+    import trimesh
+
+    from app.viz.threejs_export import mesh_to_threejs_code
+
+    in_path = Path(req.input_path)
+    if not in_path.is_file():
+        raise HTTPException(status_code=404, detail=f"{in_path} does not exist")
+    mesh = trimesh.load(in_path, force="mesh", process=False)
+    try:
+        code = mesh_to_threejs_code(
+            mesh,
+            background_hex=req.background_hex,
+            material_color_hex=req.material_color_hex,
+            wireframe=req.wireframe,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"threejs_code": code, "vertex_count": len(mesh.vertices), "face_count": len(mesh.faces)}
+
+
 class RenderJobRequest(BaseModel):
     vram_gb: float
     ram_gb: float

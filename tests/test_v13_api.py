@@ -66,6 +66,21 @@ def test_body_morphs_apply_endpoint(tmp_path):
     assert out_path.is_file()
 
 
+def test_viz_threejs_scene_endpoint(tmp_path):
+    in_path = tmp_path / "box.obj"
+    trimesh.creation.box(extents=(1, 1, 1)).export(in_path)
+    r = client.post("/v1/viz/threejs-scene", json={"input_path": str(in_path)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["vertex_count"] == 8
+    assert "THREE.BufferGeometry" in body["threejs_code"]
+
+
+def test_viz_threejs_scene_endpoint_404_for_missing_input(tmp_path):
+    r = client.post("/v1/viz/threejs-scene", json={"input_path": str(tmp_path / "missing.obj")})
+    assert r.status_code == 404
+
+
 def test_render_job_compile_endpoint():
     r = client.post("/v1/render/job/compile", json={
         "vram_gb": 24, "ram_gb": 64, "quality_mode": "hero", "resolution_tier": "8k",

@@ -1074,3 +1074,51 @@ files here), live credential exercise (endpoints now correctly built
 and tested end-to-end, but no real Tripo/Meshy/Hi3D account has ever
 called through them), and any interactive viewport/editor (no GUI
 toolkit, no way to build or test one in this environment).
+
+## Session 22: Feature 1 of 3 "highly unique" maximization features -- live interactive 3D preview
+
+User asked for 3 highly unique features to maximize creation potential before
+deployment. Starting with the one that closes the long-standing "no interactive
+viewport" gap logged as out of scope since v1.3: a real live 3D preview, made
+possible by a newly-available Three.js MCP viewer tool in this environment.
+
+- Confirmed via the tool's own `learn_threejs` docs that no GLTFLoader/OBJLoader
+  is available in its JS sandbox -- geometry has to be serialized directly as a
+  `THREE.BufferGeometry` from raw vertex/face arrays, not loaded from a file.
+- Built `app/viz/threejs_export.py::mesh_to_threejs_code(mesh, ...)`: takes a
+  real `trimesh.Trimesh`, serializes its actual vertex positions, face indices,
+  and (when present) per-vertex colors as JSON-valid JS array literals, and
+  emits a complete scene-setup script with a camera automatically framed to the
+  mesh's real bounding box (not a fixed distance that would put an arbitrarily
+  large/small generated mesh off-screen). `json.dumps(..., allow_nan=False)`
+  gives a clean failure instead of invalid JS if a non-finite vertex ever slips
+  through an explicit finite-check.
+- Verified for real, not just via string assertions: generated a real
+  biome-colored terrain mesh via the existing `app.world.terrain` pipeline,
+  ran it through `mesh_to_threejs_code`, and actually called the
+  `show_threejs_scene` MCP tool with the exact generated code -- confirmed
+  `{"success": true}`, i.e. the code this function produces really renders in
+  a live WebGL viewer with correct geometry and vertex-color biome shading, not
+  just a plausible-looking string.
+- Added `tests/test_threejs_export.py` (10 tests): geometry/index JSON
+  round-trip validity, camera framing against a mesh's real bounding-box
+  center, far-plane scaling with mesh size, non-finite-vertex rejection,
+  empty-mesh rejection, vertex-color-present vs. absent code paths (using
+  `trimesh.visual.TextureVisuals()` to get a genuinely colorless mesh, since
+  trimesh's default `ColorVisuals` always synthesizes a default gray -- caught
+  by two tests initially failing against that wrong assumption, fixed by
+  testing against the real trimesh behavior instead of the assumed one),
+  wireframe flag, and background/material hex embedding.
+- Wired into the API as `POST /v1/viz/threejs-scene` (`ThreeJSPreviewRequest`:
+  `input_path`, `background_hex`, `material_color_hex`, `wireframe`), following
+  the exact file-path-in/404-missing/422-invalid convention every other
+  file-based endpoint in `app/main.py` already uses. 2 new API tests in
+  `tests/test_v13_api.py`.
+
+Full suite: **317/317 passed, `-W error`** (305 prior + 10 export unit tests +
+2 API tests).
+
+Next: features 2 (best-of-N terrain variant selection, scored by real geometry
+metrics) and 3 (procedural biome texture synthesis to real PNG maps) are still
+to be built before the "before deploying" full-verification and redelivery
+step the user's phrasing implies.
