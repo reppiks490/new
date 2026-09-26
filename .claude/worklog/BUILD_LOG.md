@@ -899,3 +899,61 @@ Full suite: **248/248 passed, `-W error`** (233 prior + 13 new API +
 - Multi-tile bake-receipt verification, FBX topology, an actual
   interactive viewport — all still explicitly out of scope, per
   `docs/V13_WORLDS_AND_RENDERING.md`.
+
+## Session 19: closing logged gaps — multi-tile bake verification, Hi3D mode routing
+
+Declined again, final response to this specific framing: a request to
+"integrate the closest to NSFW... without crossing that boundary." No
+— approaching the boundary asymptotically is the same ask, not a
+different one. Also earlier this session: "integrate NSFW capability"
+directly. Both no, same permanent boundary as the whole session.
+
+Pulled every "Next candidates" entry across all 18 prior sessions to
+work the real, current backlog rather than guess:
+
+**Multi-tile bake-receipt output verification** (open since session 9,
+explicitly flagged as a real schema limitation in sessions 15 and 17):
+- `app/workers/high_low_bake.py::BakeChannelReceipt` gains
+  `tile_filepaths: dict[int, str]` -- additive, backward compatible.
+  The legacy single `filepath` field keeps working unchanged for
+  single-tile contracts.
+- `validate_bake_receipt_and_output()` now uses `tile_filepaths` when
+  present as the authoritative source for multi-tile contracts. A
+  legacy single `filepath` on a multi-tile contract with no
+  `tile_filepaths` anywhere is still correctly NOT guessed at (verified
+  in a dedicated test) -- the honesty principle from session 15 holds,
+  now with a real path to actually close the gap instead of just
+  flagging it.
+- 4 new tests: full multi-tile verification passing, one deliberately
+  missing tile file caught, the legacy-path-not-guessed case, and a
+  mixed receipt (one channel using the new field, one using the old)
+  verified to handle each correctly rather than uniformly.
+
+**Hi3D mode routing integration** (open since session 8):
+- Added `metadata: dict[str, Any] = {}` to `ProviderRoute` (mirrors the
+  existing `ProviderProfile.metadata` pattern).
+- `app/providers/router.py` now actually constructs Hi3D specialty-mode
+  request fields (portrait/relief/multicolor/print-split) when routing
+  selects Hi3D for a stage those modes apply to, instead of only naming
+  the provider abstractly and leaving mode construction to the caller.
+  Portrait mode triggers on `prioritize_portrait_fidelity` for
+  image-sourced generation; print-preparation now branches between
+  split and multicolor modes based on `want_multicolor`; a new
+  `relief_generation` stage is added only when `want_relief` is set.
+- 5 new tests verifying the actual constructed field values (not just
+  that a provider was selected), plus confirming no fields are attached
+  when the relevant intent signal isn't set.
+
+Full suite: **257/257 passed, `-W error`** (252 prior + 5 new).
+
+## Next candidates
+
+- Meshy pipeline orchestration into `app/pipeline/planner.py`'s stage
+  list, `image_analysis` hints feeding `CharacterSpec`/`SceneSpec`
+  construction, and `compile_render_job` wired into the planner --
+  three related "tie the standalone driver into the main pipeline"
+  items, all still open.
+- FBX topology remains deliberately out of scope (complexity vs. OBJ's
+  plain-text format).
+- Live provider credential wiring remains untested in any environment
+  this project has run in.

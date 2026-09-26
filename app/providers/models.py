@@ -61,6 +61,12 @@ class ProviderRoute(BaseModel):
     reasons: list[str] = []
     required_capabilities: set[Capability] = set()
     warnings: list[str] = []
+    # Concrete, provider-specific request payload for this route, when the
+    # router was able to determine one (e.g. Hi3D specialty-mode fields).
+    # Optional: most routes select a provider abstractly and leave request
+    # construction to the caller; this is populated only when the router has
+    # enough intent signal to build the actual request itself.
+    metadata: dict[str, Any] = {}
 
 
 class ProviderRoutingPlan(BaseModel):

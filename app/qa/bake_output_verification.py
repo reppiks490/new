@@ -131,28 +131,33 @@ def validate_bake_receipt_and_output(
     where a receipt could claim success while its files are missing,
     truncated, or undersized.
 
-    Real limitation, stated rather than papered over: HighLowBakeReceipt /
-    BakeChannelReceipt records exactly one filepath per channel, with no
-    per-UDIM-tile breakdown. That correctly represents a single-tile
-    contract (the common single-region-bake case) but cannot correctly
-    represent a multi-tile contract's per-tile output paths -- one filepath
-    cannot stand in for N tiles' worth of files. Extending the receipt
-    schema itself to carry per-tile paths is a larger, separate change (see
-    BUILD_LOG). For a multi-tile contract this function therefore returns
-    only the receipt-claim blockers and skips file verification (returning
-    None for the output report) rather than silently attributing a single
-    channel filepath to every declared tile, which would be actively wrong.
+    Multi-tile contracts: `BakeChannelReceipt.tile_filepaths` (UDIM tile ->
+    filepath, per channel) is the authoritative source when a channel
+    populates it. The legacy single `filepath` field is used only as a
+    fallback for single-tile contracts, exactly as before -- it is never
+    used to guess which tile a file belongs to on a multi-tile contract,
+    since one path cannot correctly stand in for N tiles' worth of files.
+    If a multi-tile contract's receipt never populates `tile_filepaths` at
+    all, this function still can't verify anything and returns None for the
+    output report, same as before this schema was extended.
     """
     blockers = validate_bake_receipt(contract, receipt, require_channels=require_channels)
-    if len(contract.udim_tiles) != 1:
+
+    single_tile = len(contract.udim_tiles) == 1
+    any_tile_filepaths = any(ch.tile_filepaths for ch in receipt.channels)
+    if not single_tile and not any_tile_filepaths:
         return blockers, None
 
-    tile = contract.udim_tiles[0]
-    resolved_paths = {
-        (ch.channel, tile): ch.filepath
-        for ch in receipt.channels
-        if ch.executed and ch.filepath
-    }
+    resolved_paths: dict[tuple[str, int], str] = {}
+    for ch in receipt.channels:
+        if not ch.executed:
+            continue
+        if ch.tile_filepaths:
+            for tile, path in ch.tile_filepaths.items():
+                resolved_paths[(ch.channel, tile)] = path
+        elif ch.filepath and single_tile:
+            resolved_paths[(ch.channel, contract.udim_tiles[0])] = ch.filepath
+
     output_report = verify_bake_output_set(contract, resolved_paths)
     if not output_report.passed:
         blockers = list(blockers)

@@ -105,3 +105,52 @@ def test_gap_fill_matrix_identifies_added_capabilities():
     assert "high_density_5m" in gaps["hi3d"]
     assert "print_split" in gaps["hi3d"]
     assert "multicolor_3d" in gaps["hi3d"]
+
+
+def test_portrait_image_route_attaches_real_hi3d_request_fields():
+    spec = CharacterSpec(prompt="a portrait bust", requested_triangles=1_800_000)
+    plan = compile_provider_routing(spec, RouteContext(source_kind="image", prioritize_portrait_fidelity=True, require_segmentation=False, require_rigging=False))
+    base = next(r for r in plan.routes if r.stage == "base_generation")
+    assert base.selected == ProviderId.HI3D
+    fields = base.metadata["hi3d_request_fields"]
+    assert fields["mode"] == "portrait"
+    assert fields["face"] == "1800000"
+
+
+def test_non_portrait_image_route_does_not_attach_hi3d_fields():
+    spec = CharacterSpec(prompt="a generic figure")
+    plan = compile_provider_routing(spec, RouteContext(source_kind="image", prioritize_portrait_fidelity=False, require_segmentation=False, require_rigging=False))
+    base = next(r for r in plan.routes if r.stage == "base_generation")
+    assert "hi3d_request_fields" not in base.metadata
+
+
+def test_print_preparation_defaults_to_split_mode_fields():
+    spec = CharacterSpec(prompt="a printable figurine")
+    plan = compile_provider_routing(spec, RouteContext(source_kind="image", prioritize_printability=True, require_segmentation=False, require_rigging=False))
+    pr = next(r for r in plan.routes if r.stage == "print_preparation")
+    fields = pr.metadata["hi3d_request_fields"]
+    assert fields["mode"] == "print_split"
+    assert fields["part"] == "2"
+
+
+def test_print_preparation_switches_to_multicolor_mode_fields():
+    spec = CharacterSpec(prompt="a multicolor printable figurine")
+    plan = compile_provider_routing(spec, RouteContext(
+        source_kind="image", prioritize_printability=True, want_multicolor=True, multicolor_count=6,
+        require_segmentation=False, require_rigging=False,
+    ))
+    pr = next(r for r in plan.routes if r.stage == "print_preparation")
+    fields = pr.metadata["hi3d_request_fields"]
+    assert fields["mode"] == "multicolor"
+    assert fields["number_color"] == "6"
+
+
+def test_relief_route_added_only_when_requested():
+    spec = CharacterSpec(prompt="a relief carving reference")
+    plan_without = compile_provider_routing(spec, RouteContext(source_kind="image", require_segmentation=False, require_rigging=False))
+    assert not any(r.stage == "relief_generation" for r in plan_without.routes)
+
+    plan_with = compile_provider_routing(spec, RouteContext(source_kind="image", want_relief=True, require_segmentation=False, require_rigging=False))
+    relief = next(r for r in plan_with.routes if r.stage == "relief_generation")
+    assert relief.selected == ProviderId.HI3D
+    assert relief.metadata["hi3d_request_fields"]["mode"] == "relief"

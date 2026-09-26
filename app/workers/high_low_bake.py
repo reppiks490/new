@@ -11,7 +11,16 @@ from app.workers.bake_contract import HighLowBakeContract
 class BakeChannelReceipt(BaseModel):
     channel: str
     executed: bool
+    # Legacy single-file shape: correct for a single-tile bake contract, one
+    # file per channel. Left as-is for backward compatibility -- existing
+    # receipts and callers keep working unchanged.
     filepath: str | None = None
+    # UDIM tile -> filepath for this channel, for a multi-tile contract where
+    # one channel produced a separate file per tile. Optional and additive:
+    # when empty, callers fall back to `filepath` (single-tile case). When
+    # populated, this is authoritative for multi-tile output verification
+    # (see app/qa/bake_output_verification.py::validate_bake_receipt_and_output).
+    tile_filepaths: dict[int, str] = Field(default_factory=dict)
     reason: str | None = None
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from app.core.models import CharacterSpec, QualityTier, TextureTier
 from app.providers.catalog import PROVIDERS, providers_supporting_creature_rig
+from app.providers.hi3d_modes import multicolor_task_fields, portrait_task_fields, print_split_task_fields, relief_task_fields
 from app.providers.models import Capability, ProviderId, ProviderRoute, ProviderRoutingPlan
 
 
@@ -13,6 +14,16 @@ class RouteContext:
     prioritize_printability: bool = False
     require_rigging: bool = True
     require_segmentation: bool = True
+    # Hi3D specialty-mode intent signals. When the router selects Hi3D for a
+    # stage these modes apply to, it now also constructs the concrete
+    # request fields (app/providers/hi3d_modes.py) and attaches them to that
+    # route's metadata, instead of only naming the provider abstractly and
+    # leaving mode selection to the caller.
+    want_relief: bool = False
+    want_multicolor: bool = False
+    multicolor_count: int = 4
+    print_part_count: int = 2
+    print_joint_style: str = "dovetail"
 
 
 def _supports(provider: ProviderId, caps: set[Capability]) -> bool:
@@ -47,12 +58,17 @@ def compile_provider_routing(spec: CharacterSpec, ctx: RouteContext | None = Non
         ))
     elif ctx.source_kind == "image":
         order = [ProviderId.HI3D, ProviderId.TRIPO, ProviderId.MESHY] if ctx.prioritize_portrait_fidelity else [ProviderId.TRIPO, ProviderId.MESHY, ProviderId.HI3D]
-        routes.append(_route(
+        base_route = _route(
             "base_generation",
             order,
             {Capability.IMAGE_TO_3D},
             ["Image-native generation; Hi3D is favored when portrait/detail specialization is requested."],
-        ))
+        )
+        if base_route.selected == ProviderId.HI3D and ctx.prioritize_portrait_fidelity:
+            face_count = spec.requested_triangles or 2_000_000
+            base_route.metadata["hi3d_request_fields"] = portrait_task_fields(face_count=face_count)
+            base_route.reasons.append("Portrait fidelity requested and Hi3D selected: constructed portrait-mode request fields.")
+        routes.append(base_route)
     elif ctx.source_kind == "multiview":
         routes.append(_route(
             "base_generation",
@@ -127,12 +143,34 @@ def compile_provider_routing(spec: CharacterSpec, ctx: RouteContext | None = Non
         ))
 
     if ctx.prioritize_printability:
-        routes.append(_route(
+        print_route = _route(
             "print_preparation",
             [ProviderId.HI3D],
             {Capability.PRINT_SPLIT, Capability.MULTICOLOR_3D, Capability.PRINT_3MF},
             ["Hi3D adds dedicated split, multicolor and 3MF print-production stages absent from the core Tripo path."],
-        ))
+        )
+        face_count = spec.requested_triangles or 2_000_000
+        if ctx.want_multicolor:
+            print_route.metadata["hi3d_request_fields"] = multicolor_task_fields(
+                number_colors=ctx.multicolor_count, face_count=face_count,
+            )
+            print_route.reasons.append(f"Multicolor requested ({ctx.multicolor_count} colors): constructed multicolor-mode request fields.")
+        else:
+            print_route.metadata["hi3d_request_fields"] = print_split_task_fields(
+                part_count=ctx.print_part_count, joint_style=ctx.print_joint_style, face_count=face_count,
+            )
+            print_route.reasons.append(f"Print-split requested ({ctx.print_part_count} parts): constructed print-split-mode request fields.")
+        routes.append(print_route)
+
+    if ctx.want_relief:
+        relief_route = _route(
+            "relief_generation",
+            [ProviderId.HI3D],
+            {Capability.RELIEF},
+            ["Hi3D exposes dedicated depth-map/relief generation as a distinct mode from full-mesh reconstruction."],
+        )
+        relief_route.metadata["hi3d_request_fields"] = relief_task_fields()
+        routes.append(relief_route)
 
     return ProviderRoutingPlan(
         routes=routes,
