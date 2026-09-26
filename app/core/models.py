@@ -35,6 +35,9 @@ class CharacterSpec(BaseModel):
     udim_tiles: int = Field(default=4, ge=1, le=100)
     requested_triangles: int | None = Field(default=None, ge=1)
     render_engine: Literal["cycles", "unreal", "hybrid"] = "hybrid"
+    creature_type: Literal[
+        "biped", "quadruped", "hexapod", "octopod", "avian", "serpentine", "aquatic"
+    ] = "biped"
     export_formats: list[Literal["usd", "fbx", "gltf", "glb", "obj"]] = ["usd", "glb"]
 
     @model_validator(mode="after")

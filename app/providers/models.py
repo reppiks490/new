@@ -45,6 +45,13 @@ class ProviderProfile(BaseModel):
     geometry_resolution_label: str | None = None
     notes: list[str] = []
     metadata: dict[str, Any] = {}
+    # Structured rig support, queryable by the routing engine rather than left as prose.
+    # Empty list means: rigging (if supported at all) is not documented as creature-type-aware
+    # (i.e. humanoid/biped only, or not offered).
+    rig_creature_types: list[str] = []
+    rig_precheck_endpoint: bool = False
+    # ISO date this profile's documented limits were last checked against live vendor docs.
+    last_reviewed: str | None = None
 
 
 class ProviderRoute(BaseModel):

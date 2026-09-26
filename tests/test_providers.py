@@ -56,6 +56,47 @@ def test_hi3d_request_supports_3mf():
     assert req["format"] == "6"
 
 
+def test_provider_profiles_record_review_date():
+    for provider_id in (ProviderId.TRIPO, ProviderId.MESHY, ProviderId.HI3D):
+        assert PROVIDERS[provider_id].last_reviewed == "2026-09-26"
+
+
+def test_tripo_rig_creature_types_are_queryable_not_buried_in_notes():
+    from app.providers.catalog import providers_supporting_creature_rig
+
+    tripo = PROVIDERS[ProviderId.TRIPO]
+    assert tripo.rig_creature_types == [
+        "biped", "quadruped", "hexapod", "octopod", "avian", "serpentine", "aquatic",
+    ]
+    assert tripo.rig_precheck_endpoint is True
+    # Meshy's documented rigging path is humanoid/biped-only; must not be assumed
+    # to cover creature types it never documents.
+    assert PROVIDERS[ProviderId.MESHY].rig_creature_types == []
+
+    for creature in tripo.rig_creature_types:
+        assert ProviderId.TRIPO in providers_supporting_creature_rig(creature)
+    assert ProviderId.MESHY not in providers_supporting_creature_rig("quadruped")
+    assert ProviderId.MESHY in providers_supporting_creature_rig("biped")
+
+
+def test_router_excludes_meshy_from_non_biped_rigging():
+    spec = CharacterSpec(prompt="a fictional quadruped companion creature", creature_type="quadruped")
+    plan = compile_provider_routing(spec, RouteContext(source_kind="image", require_segmentation=False))
+    rig = next(r for r in plan.routes if r.stage == "rigging")
+    assert rig.selected == ProviderId.TRIPO
+    assert ProviderId.MESHY not in rig.alternatives
+    assert any("Meshy excluded" in w for w in rig.warnings)
+
+
+def test_router_keeps_both_providers_for_default_biped_rigging():
+    spec = CharacterSpec(prompt="a fictional adult hero character")
+    plan = compile_provider_routing(spec, RouteContext(source_kind="image", require_segmentation=False))
+    rig = next(r for r in plan.routes if r.stage == "rigging")
+    assert rig.selected == ProviderId.TRIPO
+    assert ProviderId.MESHY in rig.alternatives
+    assert not rig.warnings
+
+
 def test_gap_fill_matrix_identifies_added_capabilities():
     from app.providers.catalog import gap_fill_capabilities
     gaps = gap_fill_capabilities()

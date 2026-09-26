@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from app.core.models import CharacterSpec, QualityTier, TextureTier
-from app.providers.catalog import PROVIDERS
+from app.providers.catalog import PROVIDERS, providers_supporting_creature_rig
 from app.providers.models import Capability, ProviderId, ProviderRoute, ProviderRoutingPlan
 
 
@@ -103,11 +103,27 @@ def compile_provider_routing(spec: CharacterSpec, ctx: RouteContext | None = Non
         ))
 
     if ctx.require_rigging:
+        creature_capable = providers_supporting_creature_rig(spec.creature_type)
+        preferred_order = [p for p in (ProviderId.TRIPO, ProviderId.MESHY) if p in creature_capable]
+        rig_reasons = ["Tripo and Meshy both expose humanoid rigging; Meshy task-id rigging requires <=300k faces."]
+        rig_warnings: list[str] = []
+        if spec.creature_type != "biped":
+            rig_reasons.append(
+                f"creature_type={spec.creature_type!r} requires a provider with a documented "
+                "creature-specific rig taxonomy (Tripo's auto-rig endpoint covers 7 creature "
+                "types); Meshy's rigging path is not documented beyond humanoid/biped."
+            )
+            if ProviderId.MESHY not in preferred_order:
+                rig_warnings.append(
+                    "Meshy excluded from rigging route: no documented "
+                    f"{spec.creature_type!r} rig support."
+                )
         routes.append(_route(
             "rigging",
-            [ProviderId.TRIPO, ProviderId.MESHY],
+            preferred_order,
             {Capability.RIGGING},
-            ["Tripo and Meshy both expose humanoid rigging; Meshy task-id rigging requires <=300k faces."],
+            rig_reasons,
+            rig_warnings,
         ))
 
     if ctx.prioritize_printability:

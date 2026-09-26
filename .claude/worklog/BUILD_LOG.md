@@ -87,3 +87,64 @@ push *is* the repo's initial history, not a change proposed against one.
   `.[dev]`, smoke-tests the app import, runs `pytest -q -W error`.
 - Verified the 3.12 leg locally before shipping it (not just assumed) —
   fresh `.venv312`, clean install, 114/114 passed on 3.12 too.
+
+## Session 3: creature-type rig capability (Tripo research finding)
+
+Scope note: the incoming instruction for this session asked for much more
+(8K render pipelines, skin/eye/hair shading depth, GPU scheduling detail,
+explicit adult anatomy generation, etc.) than one engineering cycle can
+honestly implement and verify. I did one real, sourced, tested cycle
+end-to-end rather than a large batch of unverified scaffolding. I also did
+not implement explicit sexual/anatomical content generation — the repo's
+own existing policy gate (`app/core/policy.py`) and architecture doc
+already scope an adult-fictional mode with hard exclusions, and I left
+that boundary as-is rather than building out anatomical detail systems.
+
+- Live web search (WebFetch to the vendor doc domains themselves was
+  blocked by this environment's network egress policy — confirmed via
+  `read_documentation`, not assumed) confirmed:
+  - Tripo H3.1: face count up to 2,000,000, quad topology, text/image/
+    multiview input, GLB/FBX export — matches existing catalog.
+  - Tripo auto-rig endpoint: **7 documented creature types** (biped,
+    quadruped, hexapod, octopod, avian, serpentine, aquatic) + a free
+    "Rig Check" pre-flight endpoint. This was NOT in the existing
+    capability matrix — RIGGING was a bare boolean.
+  - Meshy remesh: 100-300,000 polygons (matches). Smart Topology:
+    100-15,000, default 4,000 (default wasn't previously recorded).
+    Meshy's rigging docs are humanoid/biped-only — no creature taxonomy.
+  - Hi3D: 2,000,000 (2048quality) / 5,000,000 (2048master) — matches
+    existing 5M->2M retry ladder exactly.
+- Added structured, queryable fields to `ProviderProfile`:
+  `rig_creature_types: list[str]`, `rig_precheck_endpoint: bool`,
+  `last_reviewed: str` — per the spec's "don't bury capabilities in
+  comments, make them queryable" requirement.
+- Added `providers_supporting_creature_rig(creature_type)` in
+  `app/providers/catalog.py`.
+- Added `creature_type` field to `CharacterSpec` (biped default, plus
+  the 6 other Tripo-documented types).
+- Updated `app/providers/router.py`'s rigging route: non-biped
+  `creature_type` now excludes Meshy from the candidate list (not just
+  deprioritizes it) with an explicit warning, since Meshy has no
+  documented support for those rig types.
+- Updated `docs/VENDOR_CAPABILITY_MATRIX.md` with a dated review header,
+  the new Tripo rig-taxonomy finding, Meshy's default Smart Topology
+  polycount, and the new routing rule, with source URLs.
+- Added 4 new tests (`tests/test_providers.py`): review-date presence,
+  Tripo's 7 creature types are queryable (not notes-only), router
+  excludes Meshy for non-biped rigging, router keeps both providers for
+  the biped/default case (no regression).
+- Full suite: **118/118 passed, `-W error`** (114 prior + 4 new).
+
+## Next candidates (not yet done, for whoever continues this)
+
+- Meshy's documented preview→refine task staging isn't yet modeled as a
+  two-phase pipeline stage in `app/pipeline/` — currently only
+  `text_preview_request`/`refine_request` request builders exist in
+  `app/providers/meshy.py` without a stage that sequences them.
+- Hi3D's portrait-specialist and relief/depth workflows are capability
+  flags in the catalog but have no dedicated request-builder module the
+  way `app/providers/hi3d.py::image_task_fields` covers geometry/3MF.
+- The geometry-tier module (`app/runtime/geometry_tiers.py`) still only
+  has 3 tiers (preview/interchange_2m/hero_multires); the incoming spec's
+  4-tier breakdown (preview/production/compat_2m/hero) partially exists
+  in `QualityTier` enum but isn't reconciled with this module.
