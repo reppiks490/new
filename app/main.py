@@ -892,6 +892,29 @@ def world_terrain_biome_texture(req: BiomeTextureSynthesisRequest):
     return result
 
 
+class TexturedTerrainRequest(BaseModel):
+    terrain: TerrainSpec
+    output_path: str
+    texture_size: int = Field(default=2048, ge=8, le=8192)
+
+
+@app.post("/v1/world/terrain/generate-textured")
+def terrain_generate_textured(req: TexturedTerrainRequest):
+    from app.world.textured_terrain import export_textured_terrain_glb
+
+    try:
+        mesh = export_textured_terrain_glb(req.terrain, req.output_path, texture_size=req.texture_size)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {
+        "output_path": str(Path(req.output_path)),
+        "vertex_count": len(mesh.vertices),
+        "face_count": len(mesh.faces),
+        "texture_size": req.texture_size,
+        "maps": ["baseColor", "metallicRoughness", "normal"],
+    }
+
+
 class WorldTileRequest(BaseModel):
     world: WorldGridSpec
     tile_x: int
