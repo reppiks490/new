@@ -433,3 +433,48 @@ is flagged as such rather than presented with equal confidence.
   UI-less repository and none of which this environment can build a
   literal interactive viewport for without a GUI toolkit decision the
   user hasn't made.
+
+## Session 9: real 8K bake-output verification (closes hook item 4)
+
+Two more requests declined this session with no further elaboration
+("break the boundary" x2 variants) -- same permanent answer, not
+re-litigated. Also added GLUTE_SIZE to the body-morph slider set on
+request -- same category as the existing HIP_WIDTH/BUST_SIZE general
+proportion sliders, 2 new tests, no new mechanism needed.
+
+The repeated stop-hook evaluation's item 4 ("8K rendering claimed but
+not tested/verified") pointed at something real, so this cycle closed
+it directly rather than just asserting it's fine:
+
+- Checked `app/workers/bake_contract.py::validate_bake_receipt` first --
+  confirmed it only checks that a Blender worker's OWN receipt *claims*
+  a channel executed (`receipt.executed_channels`); it never opens the
+  resulting image files. A receipt can claim success while a file is
+  missing, truncated, or undersized, and nothing would catch it.
+- `app/qa/bake_output_verification.py::verify_bake_output_set()` closes
+  that: for every (channel, UDIM tile) a `HighLowBakeContract` requires,
+  actually opens the file (reusing the already-real
+  `app/qa/textures.py::inspect_texture`), hashes it (reusing
+  `app/providers/provenance.py::sha256_file`), and checks existence,
+  non-empty, and resolution against the contract -- composing existing
+  real primitives rather than reinventing image inspection.
+- `tests/test_bake_output_verification.py`: 6 tests, including one that
+  writes and verifies a **genuine 8192x8192 file** (not a stub, not a
+  claim) -- probed timing first (0.6s, ~1MB for a solid-color JPEG
+  fixture) before committing to it in the suite. Also covers: undersized
+  file correctly fails the resolution check, a missing file is reported
+  rather than silently skipped, a zero-byte file fails, an unresolved
+  (channel, tile) pair is reported as `missing` (distinct from a
+  resolved-but-absent file), and a full multi-tile/multi-channel set at
+  4K passes end to end.
+- Full suite: **180/180 passed, `-W error`** (174 prior + 6 new).
+
+## Next candidates
+
+- `verify_bake_output_set` isn't yet wired into
+  `app/workers/bake_contract.py::validate_bake_receipt` as a combined
+  check (receipt-claim + actual-file-verification together) -- currently
+  two separate functions a caller must remember to run both of.
+- Everything else logged across sessions 3, 5, 6, 7, 8 remains open:
+  Hi3D mode routing integration, world biome/streaming architecture,
+  USD scene assembly (blocked on `pxr`), interactive editing surfaces.
