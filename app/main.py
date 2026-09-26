@@ -10,6 +10,7 @@ from app.runtime.hardware import detect_runtime_hardware
 from app.packs.manager import PackRegistry
 from app.providers.catalog import gap_fill_capabilities, provider_profiles
 from app.providers.router import RouteContext, compile_provider_routing
+from app.render.output_resolution import RenderResolutionTier
 
 app = FastAPI(title="Character3D Masterbuild", version="1.3.0")
 PACK_REGISTRY_PATH = Path(__file__).parents[1] / "config" / "packs" / "registry.yaml"
@@ -18,6 +19,9 @@ PACK_REGISTRY_PATH = Path(__file__).parents[1] / "config" / "packs" / "registry.
 class PlanRequest(BaseModel):
     character: CharacterSpec
     hardware: HardwareProfile = Field(default_factory=HardwareProfile)
+    reference_image_path: str | None = None
+    render_quality_mode: str = "hero"
+    render_resolution_tier: RenderResolutionTier = RenderResolutionTier.UHD_8K
 
 
 class JobRequest(PlanRequest):
@@ -45,7 +49,15 @@ def validate(spec: CharacterSpec):
 
 @app.post("/v1/plan")
 def plan(req: PlanRequest):
-    return compile_plan(req.character, req.hardware)
+    try:
+        return compile_plan(
+            req.character, req.hardware,
+            reference_image_path=req.reference_image_path,
+            render_quality_mode=req.render_quality_mode,
+            render_resolution_tier=req.render_resolution_tier,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.post("/v1/jobs/compile")
@@ -770,7 +782,7 @@ from app.world.world_grid import WorldGridSpec, generate_master_heightmap, tile_
 from app.core.body_morphs import BodyMorphSpec
 from app.rigging.body_morph_apply import apply_body_morphs
 from app.render.job import compile_render_job
-from app.render.output_resolution import RenderOutputSpec, RenderResolutionTier, render_output_spec_for_tier
+from app.render.output_resolution import RenderOutputSpec, render_output_spec_for_tier
 from app.render.output_verification import verify_render_output
 from app.qa.topology import analyze_obj_topology
 from app.pipeline.image_analysis import analyze_image_for_prompt
@@ -943,3 +955,42 @@ def hi3d_mode_fields(req: Hi3DModeRequest):
         raise HTTPException(status_code=422, detail=f"Unknown Hi3D mode: {req.mode!r}")
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+# --- Meshy live preview->refine execution -------------------------------
+# Unlike everything else in this file, this performs real outbound HTTP
+# calls with a real wall-clock polling loop -- it needs live MESHY_API_KEY
+# credentials to do anything, so it doesn't fit compile_plan's synchronous,
+# credential-free planning model (see app/pipeline/planner.py). Exposed as
+# its own endpoint instead, reading the credential from the environment via
+# the same pattern app/providers/auth.py already establishes.
+
+from app.providers.execution import api_key_from_env
+from app.providers.meshy import MeshyClient
+from app.providers.meshy_pipeline import run_preview_refine
+
+
+class MeshyPreviewRefineRequest(BaseModel):
+    prompt: str
+    geometry_resolution: str = "4k"
+    texture_resolution: str = "8k"
+    enable_pbr: bool = True
+    poll_interval_seconds: float = 2.0
+    max_polls: int = 150
+
+
+@app.post("/v1/providers/meshy/preview-refine")
+def meshy_preview_refine(req: MeshyPreviewRefineRequest):
+    try:
+        api_key = api_key_from_env("MESHY_API_KEY")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    client = MeshyClient(api_key)
+    return run_preview_refine(
+        client, req.prompt,
+        geometry_resolution=req.geometry_resolution,
+        texture_resolution=req.texture_resolution,
+        enable_pbr=req.enable_pbr,
+        poll_interval_seconds=req.poll_interval_seconds,
+        max_polls=req.max_polls,
+    )

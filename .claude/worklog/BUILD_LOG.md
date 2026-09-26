@@ -957,3 +957,65 @@ Full suite: **257/257 passed, `-W error`** (252 prior + 5 new).
   plain-text format).
 - Live provider credential wiring remains untested in any environment
   this project has run in.
+
+## Session 20: pipeline integration (render, image hints, Meshy live endpoint) + a real bug caught mid-stream
+
+More rephrasings declined without further engagement, as stated:
+"integrate the closest to NSFW that you can then without crossing that
+boundary," and "then approach the boundary, take 10 steps back." Same
+permanent boundary; asymptotic framing changes nothing.
+
+Closed the three remaining "standalone driver, not integrated" gaps:
+
+- `app/pipeline/planner.py::compile_plan()` now optionally accepts
+  `reference_image_path` (switches provider routing to image-sourced
+  generation and attaches real `image_hints` via session 11's
+  `analyze_image_for_prompt`, previously called by nothing in the
+  pipeline) and `render_quality_mode`/`render_resolution_tier`
+  (attaches a real compiled render job via session 16's
+  `compile_render_job`, previously also called by nothing in the
+  pipeline). `PipelinePlan` gains `render`/`image_hints` fields. Fully
+  backward compatible -- both new params are keyword-only with
+  defaults; existing `compile_plan(spec, hw)` calls and both pre-
+  existing tests pass unchanged.
+- `POST /v1/providers/meshy/preview-refine`: unlike the planner
+  additions, session 7's Meshy pipeline driver needs live credentials
+  and does a real wall-clock polling loop, so it doesn't fit
+  `compile_plan`'s synchronous, credential-free model -- exposed as its
+  own endpoint instead, reading `MESHY_API_KEY` from the environment
+  via the same pattern `app/providers/auth.py` already establishes.
+  Tested both the real missing-credential path (503, via `monkeypatch.delenv`
+  actually unsetting the var) and a full success path against a stubbed
+  client (no real network).
+- `/v1/plan`'s `PlanRequest` extended to accept all three new options,
+  wired through with the established 404-on-missing-file convention.
+
+**A real bug, caught by actually running the test suite rather than
+trusting an earlier standalone check:** my first attempt used a
+quoted forward-reference type hint (`render_resolution_tier:
+"RenderResolutionTier"`) because the import lived later in the file.
+A quick standalone construction check passed, so I initially trusted
+it. Running the ACTUAL new `/v1/plan` tests under FastAPI's real
+request-handling path with `-W error` surfaced a genuine pydantic
+`UnsupportedFieldAttributeWarning` from lazy schema-rebuild triggered
+by the deferred forward reference -- invisible to a standalone
+construction check, only visible under real request handling. Fixed
+properly: moved the `RenderResolutionTier` import to the top of
+`app/main.py` (removing the now-redundant duplicate import further
+down) so the annotation is a real, immediately-resolvable name at
+class-definition time, not a forward reference at all. Confirmed fixed
+by rerunning the exact previously-failing tests, not by reasoning
+about it.
+
+Full suite: **269/269 passed, `-W error`** (257 prior + 7 planner + 2
+Meshy-endpoint + 5 /v1/plan = 12 net after the fix; two intermediate
+failed runs along the way, both resolved for real).
+
+## Next candidates
+
+- FBX topology remains deliberately out of scope.
+- Live provider credential wiring remains untested in any environment
+  this project has run in -- the endpoints now exist and are correctly
+  wired, but no real Tripo/Meshy/Hi3D account has ever exercised them.
+- Interactive viewport / UV editor / shader editor: still explicitly
+  out of scope (no GUI toolkit, no way to build/test one here).

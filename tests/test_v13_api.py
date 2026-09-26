@@ -118,3 +118,87 @@ def test_hi3d_mode_fields_endpoint_portrait():
 def test_hi3d_mode_fields_endpoint_unknown_mode_returns_422():
     r = client.post("/v1/providers/hi3d/mode-fields", json={"mode": "not_a_real_mode"})
     assert r.status_code == 422
+
+
+def test_meshy_preview_refine_endpoint_503_without_api_key(monkeypatch):
+    monkeypatch.delenv("MESHY_API_KEY", raising=False)
+    r = client.post("/v1/providers/meshy/preview-refine", json={"prompt": "a fictional adventurer"})
+    assert r.status_code == 503
+
+
+def test_meshy_preview_refine_endpoint_full_success_with_stubbed_client(monkeypatch):
+    import app.main as main_module
+
+    class _StubClient:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_text_preview(self, prompt, **kwargs):
+            return "preview-1"
+
+        def create_text_refine(self, preview_task_id, **kwargs):
+            return "refine-1"
+
+        def query_text(self, task_id):
+            from app.providers.execution import CanonicalTaskStatus, ProviderTaskSnapshot
+            from app.providers.models import ProviderId
+            return ProviderTaskSnapshot(provider=ProviderId.MESHY, task_id=task_id, status=CanonicalTaskStatus.SUCCEEDED)
+
+    monkeypatch.setenv("MESHY_API_KEY", "test-key-not-real")
+    monkeypatch.setattr(main_module, "MeshyClient", _StubClient)
+
+    r = client.post("/v1/providers/meshy/preview-refine", json={"prompt": "a fictional adventurer", "poll_interval_seconds": 0})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "succeeded"
+    assert body["preview_task_id"] == "preview-1"
+    assert body["refine_task_id"] == "refine-1"
+
+
+def test_plan_endpoint_attaches_render_job_by_default():
+    r = client.post("/v1/plan", json={"character": {"prompt": "fictional adventurer"}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["render"]["output"]["tier"] == "8k"
+
+
+def test_plan_endpoint_accepts_custom_render_options():
+    r = client.post("/v1/plan", json={
+        "character": {"prompt": "fictional adventurer"},
+        "hardware": {"vram_gb": 48, "ram_gb": 128},
+        "render_quality_mode": "extreme",
+        "render_resolution_tier": "16k",
+    })
+    assert r.status_code == 200
+    assert r.json()["render"]["output"]["tier"] == "16k"
+
+
+def test_plan_endpoint_with_reference_image_attaches_real_hints(tmp_path):
+    from PIL import Image
+    path = tmp_path / "ref.png"
+    Image.new("RGB", (2048, 2048), color=(10, 20, 30)).save(path)
+    r = client.post("/v1/plan", json={
+        "character": {"prompt": "fictional adventurer"},
+        "reference_image_path": str(path),
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["image_hints"]["width"] == 2048
+    base = next(route for route in body["provider_routes"] if route["stage"] == "base_generation")
+    assert base["required_capabilities"] == ["image_to_3d"]
+
+
+def test_plan_endpoint_missing_reference_image_returns_404():
+    r = client.post("/v1/plan", json={
+        "character": {"prompt": "fictional adventurer"},
+        "reference_image_path": "/nonexistent/ref.png",
+    })
+    assert r.status_code == 404
+
+
+def test_plan_endpoint_rejects_invalid_resolution_tier():
+    r = client.post("/v1/plan", json={
+        "character": {"prompt": "fictional adventurer"},
+        "render_resolution_tier": "not_a_real_tier",
+    })
+    assert r.status_code == 422

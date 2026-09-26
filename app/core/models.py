@@ -85,3 +85,11 @@ class PipelinePlan(BaseModel):
     materials: MaterialPlan | None = None
     stages: list[str] = []
     provider_routes: list[dict] = []
+    # Compiled render job (sampling/quality + output resolution), when the
+    # caller wants one attached to the plan rather than compiled separately.
+    render: dict | None = None
+    # Real local pixel analysis of a supplied reference image (dominant
+    # palette, contrast, edge density, suggested texture tier) -- see
+    # app/pipeline/image_analysis.py. Only present when a reference image
+    # was actually supplied to compile_plan.
+    image_hints: dict | None = None

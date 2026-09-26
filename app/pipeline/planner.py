@@ -11,7 +11,10 @@ from app.core.models import (
     PipelinePlan,
 )
 from app.core.policy import evaluate_policy
+from app.pipeline.image_analysis import analyze_image_for_prompt
 from app.providers.router import RouteContext, compile_provider_routing
+from app.render.job import compile_render_job
+from app.render.output_resolution import RenderResolutionTier
 
 
 TIER_DEFAULTS = {
@@ -91,10 +94,28 @@ def material_plan(spec: CharacterSpec) -> MaterialPlan:
     )
 
 
-def compile_plan(spec: CharacterSpec, hw: HardwareProfile) -> PipelinePlan:
+def compile_plan(
+    spec: CharacterSpec,
+    hw: HardwareProfile,
+    *,
+    reference_image_path: str | None = None,
+    render_quality_mode: str = "hero",
+    render_resolution_tier: RenderResolutionTier = RenderResolutionTier.UHD_8K,
+) -> PipelinePlan:
     policy = evaluate_policy(spec)
     if not policy.allowed:
         return PipelinePlan(policy=policy)
+
+    # A supplied reference image changes provider routing (image-native
+    # generation, previously only reachable by constructing a RouteContext
+    # by hand outside this function) and produces real image_hints via
+    # app/pipeline/image_analysis.py -- previously a standalone function
+    # nothing in the pipeline actually called.
+    image_hints = None
+    source_kind = "prompt"
+    if reference_image_path:
+        image_hints = analyze_image_for_prompt(reference_image_path)
+        source_kind = "image"
 
     stages = [
         "prompt_spec",
@@ -109,11 +130,22 @@ def compile_plan(spec: CharacterSpec, hw: HardwareProfile) -> PipelinePlan:
         "render_offline",
         "export_validation",
     ]
-    provider_plan = compile_provider_routing(spec, RouteContext(source_kind="prompt"))
+    provider_plan = compile_provider_routing(spec, RouteContext(source_kind=source_kind))
+
+    # Ties the previously-standalone render sampling/resolution compiler
+    # (app/render/job.py, session 16) into the main character pipeline plan
+    # rather than leaving it a driver nothing in app/pipeline/ ever called.
+    render_job = compile_render_job(
+        vram_gb=hw.vram_gb, ram_gb=hw.ram_gb, gpu_vendor=hw.gpu_vendor,
+        quality_mode=render_quality_mode, resolution_tier=render_resolution_tier,
+    )
+
     return PipelinePlan(
         policy=policy,
         geometry=geometry_plan(spec, hw),
         materials=material_plan(spec),
         stages=stages,
         provider_routes=[r.model_dump(mode="json") for r in provider_plan.routes],
+        render=render_job.model_dump(mode="json"),
+        image_hints=image_hints.model_dump(mode="json") if image_hints else None,
     )
