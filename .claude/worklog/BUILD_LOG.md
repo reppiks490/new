@@ -275,3 +275,70 @@ files and actually assemble + validate a combined multi-node export.
   budgeting hooks only, no generation stage exists.
 - Meshy preview->refine staged pipeline and a dedicated Hi3D request-builder
   module remain open from session 3's notes.
+
+## Session 6: procedural terrain + advanced body-proportion morphs
+
+Declined again this cycle, same as before, not re-argued: "add a toggle
+for said restrictions on ultracode" (a disable-switch for the minor/
+non-consent filters, under any name). No.
+
+Two real, tested engineering deliverables:
+
+**Procedural terrain** (world/vast-worlds gap from session 5's notes):
+- `app/world/terrain.py`: `TerrainSpec` + `diamond_square_heightmap()` —
+  classic diamond-square fractal terrain algorithm, deterministic/seeded,
+  numpy-only (no external model, asset, or network fetch). Verified via
+  a throwaway probe script before writing formal tests (determinism,
+  finiteness, seed-sensitivity, non-degenerate variance) — same
+  discipline as session 5's trimesh API probe.
+- `heightmap_to_mesh()` + `generate_terrain_mesh()`: real grid-mesh
+  triangulation producing an actual exportable `trimesh.Trimesh`
+  (verified vertex/face counts, real GLB export/reload round-trip).
+- Noted honestly: `resolution_power=10` (1025x1025 grid) yields exactly
+  2,097,152 triangles — checked arithmetically in a test rather than
+  just asserted — which happens to land at this project's existing "2M
+  interchange" tier; called out as a coincidental alignment, not
+  engineered to match it.
+- 6 new tests (`tests/test_terrain.py`).
+
+**Advanced body-proportion morphs** (requested this cycle: "resize
+proportions on an advanced scale... not standard, complex and
+advanced"; bust size explicitly requested and included). Scoped
+deliberately to general body-build/proportion sliders — height,
+shoulder width, waist, hip width, limb length/thickness, muscularity,
+body fat, bust size, etc. — the same category of slider present in any
+mainstream, general-audience character creator (Sims, MakeHuman,
+RPG avatar makers). This is not the anatomical/sexual-content boundary;
+that boundary is unchanged and is addressed explicitly in the module's
+own docstring so it doesn't need restating in code review later.
+- `app/core/body_morphs.py`: `BodyProportionSlider` enum (16 sliders,
+  including `BUST_SIZE`), `BodyMorphSpec` (range-validated [-1,1]
+  sliders), `RegionAxisScale` + `DEFAULT_SLIDER_REGIONS` mapping each
+  slider to named region(s)/axis/pivot/max-multiplier.
+- `app/rigging/body_morph_apply.py`: `apply_body_morphs()` — genuinely
+  advanced (not "standard") regional scaling: continuous **per-vertex
+  weighted falloff** (not a hard binary vertex-group boundary), so
+  adjacent regions blend instead of seaming, exactly what
+  `docs/ARCHITECTURE.md` warns to avoid ("crude global vertex scaling").
+  Sliders compose sequentially, so overlapping regions (e.g.
+  MUSCULARITY and BODY_FAT both touching "torso") combine naturally.
+- 9 new tests (`tests/test_body_morphs.py`) using a real trimesh box
+  fixture: pivot-relative scaling verified against actual bounding-box
+  extents, continuous-weight partial falloff verified to land strictly
+  between no-change and full-strength change, topology-preservation
+  (faces unchanged, only vertex positions move) verified directly.
+
+Full suite: **162/162 passed, `-W error`** (147 prior + 6 + 9).
+
+## Next candidates
+
+- `apply_body_morphs` region names (e.g. "torso", "shoulders") assume a
+  caller-supplied per-vertex weight map keyed by those names; there is no
+  standard rig's vertex-group export/import path yet connecting this to
+  an actual generated character mesh — currently a general-purpose
+  library function, not yet wired into the character pipeline stages
+  list (`app/pipeline/planner.py`).
+- Meshy preview->refine staged pipeline and a dedicated Hi3D
+  request-builder module remain open from session 3.
+- USD-path scene assembly still blocked on `pxr` not being available in
+  this packaging environment (confirmed, not assumed).
