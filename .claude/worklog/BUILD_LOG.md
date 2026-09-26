@@ -1019,3 +1019,58 @@ failed runs along the way, both resolved for real).
   wired, but no real Tripo/Meshy/Hi3D account has ever exercised them.
 - Interactive viewport / UV editor / shader editor: still explicitly
   out of scope (no GUI toolkit, no way to build/test one here).
+
+## Session 21: Tripo/Hi3D live-execution parity with Meshy, another real bug caught before shipping
+
+Closed the last parity gap: Meshy had a live-execution driver + HTTP
+endpoint (session 20), Tripo and Hi3D didn't.
+
+- `app/providers/single_task_pipeline.py`: `poll_to_terminal()` +
+  `run_single_task()` -- a shared single-phase (one submit, one poll)
+  driver for Tripo and Hi3D, which don't have Meshy's two-phase
+  preview->refine dependency. Refactored `meshy_pipeline.py` to import
+  the shared `poll_to_terminal` instead of keeping its own duplicate
+  copy -- real deduplication, confirmed non-breaking by rerunning its
+  existing 5 tests unchanged (all pass).
+- `POST /v1/providers/tripo/generate` (text or image mode) and
+  `POST /v1/providers/hi3d/generate` (image-to-3D), both reading their
+  provider's API key from the environment, matching the Meshy endpoint's
+  pattern exactly.
+
+**Another real bug caught before shipping, this time by deliberately
+testing the actual code path rather than trusting the obvious-looking
+design:** the Hi3D endpoint wrapped `run_single_task(...)` in a
+`try/except FileNotFoundError` to convert a missing local image path
+into a 404, matching every other file-path endpoint's convention.
+Before trusting that, ran a 3-line direct check of
+`run_single_task`'s real behavior when `submit()` raises
+`FileNotFoundError` -- confirmed it gets swallowed internally into a
+normal `status="failed"` receipt (HTTP 200), meaning the wrapping
+`except FileNotFoundError` was dead code that would never fire. Fixed
+by validating the file's existence explicitly *before* calling
+`run_single_task`, so a missing local input correctly 404s as a caller
+error, while a genuine post-submission provider failure still comes
+back as a soft-fail receipt. Added a test specifically for this case
+(`test_hi3d_generate_404_for_missing_local_image_even_with_api_key`)
+so this exact class of bug can't silently regress.
+- 7 new tests total: 503-without-credentials and 422-invalid-mode for
+  Tripo, the 404-missing-file case and full-success-via-stubbed-client
+  for both Tripo and Hi3D.
+- Final live sanity pass: booted the real server, hit both new
+  endpoints over real HTTP, confirmed correct 503s with no credentials
+  configured in this shell.
+
+Full suite: **276/276 passed, `-W error`** (269 prior + 7 new).
+
+## Status
+
+Every "Next candidates" item logged across sessions 3-20 that was
+buildable without live provider credentials, a GUI toolkit, or the
+explicit-content boundary has now been closed. What remains open,
+unchanged from session 20's assessment: FBX topology (deliberately
+scoped out -- reconsidered this session and still not worth the
+uncertain real-world value without a way to verify against real FBX
+files here), live credential exercise (endpoints now correctly built
+and tested end-to-end, but no real Tripo/Meshy/Hi3D account has ever
+called through them), and any interactive viewport/editor (no GUI
+toolkit, no way to build or test one in this environment).

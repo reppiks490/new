@@ -202,3 +202,88 @@ def test_plan_endpoint_rejects_invalid_resolution_tier():
         "render_resolution_tier": "not_a_real_tier",
     })
     assert r.status_code == 422
+
+
+def test_tripo_generate_503_without_api_key(monkeypatch):
+    monkeypatch.delenv("TRIPO_API_KEY", raising=False)
+    r = client.post("/v1/providers/tripo/generate", json={"mode": "text", "prompt": "a fictional hero"})
+    assert r.status_code == 503
+
+
+def test_tripo_generate_422_for_unknown_mode(monkeypatch):
+    monkeypatch.setenv("TRIPO_API_KEY", "test-key")
+    r = client.post("/v1/providers/tripo/generate", json={"mode": "not_a_mode"})
+    assert r.status_code == 422
+
+
+def test_tripo_generate_422_for_text_mode_missing_prompt(monkeypatch):
+    monkeypatch.setenv("TRIPO_API_KEY", "test-key")
+    r = client.post("/v1/providers/tripo/generate", json={"mode": "text"})
+    assert r.status_code == 422
+
+
+def test_tripo_generate_full_success_with_stubbed_client(monkeypatch):
+    import app.main as main_module
+    from app.providers.execution import CanonicalTaskStatus, ProviderTaskSnapshot
+    from app.providers.models import ProviderId
+
+    class _StubClient:
+        def __init__(self, api_key):
+            pass
+
+        def create_text(self, prompt, **kwargs):
+            return "tripo-task-1"
+
+        def query(self, task_id):
+            return ProviderTaskSnapshot(provider=ProviderId.TRIPO, task_id=task_id, status=CanonicalTaskStatus.SUCCEEDED)
+
+    monkeypatch.setenv("TRIPO_API_KEY", "test-key")
+    monkeypatch.setattr(main_module, "TripoClient", _StubClient)
+    r = client.post("/v1/providers/tripo/generate", json={"mode": "text", "prompt": "a fictional hero", "poll_interval_seconds": 0})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "succeeded"
+    assert body["task_id"] == "tripo-task-1"
+
+
+def test_hi3d_generate_503_without_api_key(monkeypatch):
+    monkeypatch.delenv("HI3D_API_KEY", raising=False)
+    r = client.post("/v1/providers/hi3d/generate", json={"image_path": "/tmp/whatever.png"})
+    assert r.status_code == 503
+
+
+def test_hi3d_generate_404_for_missing_local_image_even_with_api_key(monkeypatch):
+    # The exact bug caught before shipping: verifies the 404 actually fires
+    # for a missing local file, distinct from a soft-fail receipt.
+    monkeypatch.setenv("HI3D_API_KEY", "test-key")
+    r = client.post("/v1/providers/hi3d/generate", json={"image_path": "/definitely/not/a/real/path.png"})
+    assert r.status_code == 404
+
+
+def test_hi3d_generate_full_success_with_stubbed_client(monkeypatch, tmp_path):
+    import app.main as main_module
+    from app.providers.execution import CanonicalTaskStatus, ProviderTaskSnapshot
+    from app.providers.hi3d import Hi3DSubmissionPlan
+    from app.providers.models import ProviderId
+
+    image_path = tmp_path / "ref.png"
+    from PIL import Image
+    Image.new("RGB", (64, 64), color=(1, 2, 3)).save(image_path)
+
+    class _StubClient:
+        def __init__(self, api_key):
+            pass
+
+        def create_image_file(self, image_path, *, face_count, output_format, callback_url=None):
+            return "hi3d-task-1", Hi3DSubmissionPlan(requested_faces=face_count, retry_faces=(face_count,), resolution="2048quality")
+
+        def query(self, task_id):
+            return ProviderTaskSnapshot(provider=ProviderId.HI3D, task_id=task_id, status=CanonicalTaskStatus.SUCCEEDED)
+
+    monkeypatch.setenv("HI3D_API_KEY", "test-key")
+    monkeypatch.setattr(main_module, "Hi3DClient", _StubClient)
+    r = client.post("/v1/providers/hi3d/generate", json={"image_path": str(image_path), "poll_interval_seconds": 0})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "succeeded"
+    assert body["task_id"] == "hi3d-task-1"

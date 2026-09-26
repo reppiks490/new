@@ -994,3 +994,77 @@ def meshy_preview_refine(req: MeshyPreviewRefineRequest):
         poll_interval_seconds=req.poll_interval_seconds,
         max_polls=req.max_polls,
     )
+
+
+# --- Tripo / Hi3D live single-task execution -----------------------------
+# Parity with the Meshy endpoint above: Tripo and Hi3D are single-phase
+# (one submit, one poll to terminal) rather than Meshy's two-phase preview
+# -> refine chain, so they share app/providers/single_task_pipeline.py
+# instead of needing their own driver module.
+
+from app.providers.hi3d import Hi3DClient
+from app.providers.single_task_pipeline import run_single_task
+from app.providers.tripo import TripoClient
+
+
+class TripoGenerateRequest(BaseModel):
+    mode: str  # "text" or "image"
+    prompt: str | None = None
+    input_ref: str | None = None
+    poll_interval_seconds: float = 2.0
+    max_polls: int = 150
+
+
+@app.post("/v1/providers/tripo/generate")
+def tripo_generate(req: TripoGenerateRequest):
+    try:
+        api_key = api_key_from_env("TRIPO_API_KEY")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    client = TripoClient(api_key)
+    if req.mode == "text":
+        if not req.prompt:
+            raise HTTPException(status_code=422, detail="mode='text' requires a prompt")
+        submit = lambda: client.create_text(req.prompt)
+    elif req.mode == "image":
+        if not req.input_ref:
+            raise HTTPException(status_code=422, detail="mode='image' requires input_ref")
+        submit = lambda: client.create_image(req.input_ref)
+    else:
+        raise HTTPException(status_code=422, detail=f"Unknown Tripo mode: {req.mode!r}")
+    return run_single_task(submit, client.query, poll_interval_seconds=req.poll_interval_seconds, max_polls=req.max_polls)
+
+
+class Hi3DGenerateRequest(BaseModel):
+    image_path: str
+    face_count: int = 5_000_000
+    output_format: str = "glb"
+    poll_interval_seconds: float = 2.0
+    max_polls: int = 150
+
+
+@app.post("/v1/providers/hi3d/generate")
+def hi3d_generate(req: Hi3DGenerateRequest):
+    try:
+        api_key = api_key_from_env("HI3D_API_KEY")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    # Validated up front, not inside run_single_task: that function catches
+    # every exception raised during submit() and folds it into a soft-fail
+    # receipt (HTTP 200, status="failed") -- correct for a genuine
+    # provider-side failure after submission, but wrong for a missing local
+    # input file, which is a caller error and should be a distinct 404 like
+    # every other file-path endpoint in this module. Verified this
+    # distinction actually matters by testing run_single_task's real
+    # behavior before relying on it, rather than assuming a wrapping
+    # try/except around the call would ever fire (it would not: the
+    # FileNotFoundError never leaves run_single_task).
+    if not Path(req.image_path).is_file():
+        raise HTTPException(status_code=404, detail=f"{req.image_path} does not exist")
+    client = Hi3DClient(api_key)
+
+    def submit():
+        task_id, _plan = client.create_image_file(req.image_path, face_count=req.face_count, output_format=req.output_format)
+        return task_id
+
+    return run_single_task(submit, client.query, poll_interval_seconds=req.poll_interval_seconds, max_polls=req.max_polls)

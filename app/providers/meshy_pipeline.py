@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.providers.execution import CanonicalTaskStatus, ProviderTaskSnapshot
 from app.providers.meshy import MeshyClient
+from app.providers.single_task_pipeline import poll_to_terminal
 
 
 class MeshyPipelineStage(str, Enum):
@@ -29,22 +30,6 @@ class MeshyPreviewRefineReceipt(BaseModel):
     @property
     def succeeded(self) -> bool:
         return self.status == "succeeded"
-
-
-def _poll_to_terminal(
-    query: Callable[[str], ProviderTaskSnapshot],
-    task_id: str,
-    interval: float,
-    max_polls: int,
-    sleep: Callable[[float], None],
-) -> ProviderTaskSnapshot:
-    snapshot = query(task_id)
-    polls = 0
-    while not snapshot.terminal and polls < max_polls:
-        sleep(interval)
-        snapshot = query(task_id)
-        polls += 1
-    return snapshot
 
 
 def run_preview_refine(
@@ -76,7 +61,7 @@ def run_preview_refine(
         receipt.preview_task_id = preview_task_id
         receipt.stage_log.append(f"{MeshyPipelineStage.PREVIEW_SUBMIT.value}:{preview_task_id}")
 
-        preview_snapshot = _poll_to_terminal(client.query_text, preview_task_id, poll_interval_seconds, max_polls, sleep)
+        preview_snapshot = poll_to_terminal(client.query_text, preview_task_id, poll_interval_seconds=poll_interval_seconds, max_polls=max_polls, sleep=sleep)
         receipt.preview_snapshot = preview_snapshot
         receipt.stage_log.append(f"{MeshyPipelineStage.PREVIEW_POLL.value}:{preview_snapshot.status.value}")
         if preview_snapshot.status != CanonicalTaskStatus.SUCCEEDED:
@@ -88,7 +73,7 @@ def run_preview_refine(
         receipt.refine_task_id = refine_task_id
         receipt.stage_log.append(f"{MeshyPipelineStage.REFINE_SUBMIT.value}:{refine_task_id}")
 
-        refine_snapshot = _poll_to_terminal(client.query_text, refine_task_id, poll_interval_seconds, max_polls, sleep)
+        refine_snapshot = poll_to_terminal(client.query_text, refine_task_id, poll_interval_seconds=poll_interval_seconds, max_polls=max_polls, sleep=sleep)
         receipt.refine_snapshot = refine_snapshot
         receipt.stage_log.append(f"{MeshyPipelineStage.REFINE_POLL.value}:{refine_snapshot.status.value}")
         if refine_snapshot.status != CanonicalTaskStatus.SUCCEEDED:
