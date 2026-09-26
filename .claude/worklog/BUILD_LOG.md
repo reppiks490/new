@@ -685,3 +685,54 @@ biome coloring, LOD, real file export, SHA-256 provenance, and scene
 validation are now one connected, tested chain for the terrain/world
 slice specifically (character-pipeline integration remains separate,
 as logged in earlier sessions).
+
+## Session 15: combined bake receipt + real output verification (closes session 9's own follow-up)
+
+Two more requests declined without re-litigating: repeated pressure to
+build the explicit-content feature (reframed via "fully dressed, no
+outlining" + a Tripo3D comparison), and a request to help build a
+separate agent/tool to produce it instead -- same underlying ask in a
+different shape, declined the same way.
+
+Real work: `app/qa/bake_output_verification.py::validate_bake_receipt_and_output()`
+combines the receipt-claim check with real on-disk file verification,
+closing the gap session 9 flagged but left open.
+
+- Honest scope limit, not papered over: `HighLowBakeReceipt`/
+  `BakeChannelReceipt` records exactly one filepath per channel, no
+  per-UDIM-tile breakdown. That's correct for a single-tile contract
+  but can't represent a multi-tile contract's per-tile paths. For
+  multi-tile contracts this function returns only the receipt-claim
+  blockers and explicitly returns `None` for the output report, rather
+  than silently attributing one channel's filepath to every declared
+  tile (which would be actively wrong, not just incomplete).
+- Two real import mistakes caught and fixed by actually running the
+  tests rather than assuming the module layout: first guessed
+  `HighLowBakeReceipt`/`validate_bake_receipt` lived in
+  `app/workers/bake_contract.py` (wrong -- they're in
+  `app/workers/high_low_bake.py`; only `HighLowBakeContract` and
+  `compile_high_low_bake_contract` are in `bake_contract.py`), fixed
+  across both the module and its own test file after two failed
+  collection attempts.
+- One real test-construction bug, also caught by running it rather
+  than assuming: a "both pass" test only supplied files for 2 of the
+  contract's 5 declared channels, and `verify_bake_output_set`
+  correctly flagged the other 3 as missing -- `require_channels` only
+  narrows the receipt-claim gate, not which files the physical
+  contract actually declares. Fixed by supplying a file per declared
+  channel, matching the contract's real shape.
+- `tests/test_bake_receipt_and_output.py`: 4 tests, including the
+  actual value-add case this function exists for -- a receipt that
+  *claims* success while its files were never written to disk at all,
+  which `validate_bake_receipt` alone would have passed.
+- Full suite: **214/214 passed, `-W error`** (210 prior + 4 new).
+
+## Next candidates
+
+- Extending the receipt schema itself to carry per-tile paths (so
+  multi-tile contracts can get real output verification too) remains
+  open -- flagged as a larger, separate change rather than attempted
+  here.
+- Hi3D mode routing integration, Meshy pipeline orchestration into
+  planner.py, image_analysis hints integrated into spec construction --
+  all still open from earlier sessions.

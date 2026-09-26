@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from app.providers.provenance import sha256_file
 from app.qa.textures import inspect_texture
 from app.workers.bake_contract import HighLowBakeContract
+from app.workers.high_low_bake import HighLowBakeReceipt, validate_bake_receipt
 
 
 class BakeFileVerification(BaseModel):
@@ -116,3 +117,48 @@ def verify_bake_output_set(
         missing=missing,
         blockers=blockers,
     )
+
+
+def validate_bake_receipt_and_output(
+    contract: HighLowBakeContract,
+    receipt: HighLowBakeReceipt,
+    *,
+    require_channels: set[str] | None = None,
+) -> tuple[list[str], BakeSetVerificationReport | None]:
+    """Combine the receipt-claim check (validate_bake_receipt -- did the
+    Blender worker's own receipt claim each required channel executed) with
+    real on-disk file verification (verify_bake_output_set), closing the gap
+    where a receipt could claim success while its files are missing,
+    truncated, or undersized.
+
+    Real limitation, stated rather than papered over: HighLowBakeReceipt /
+    BakeChannelReceipt records exactly one filepath per channel, with no
+    per-UDIM-tile breakdown. That correctly represents a single-tile
+    contract (the common single-region-bake case) but cannot correctly
+    represent a multi-tile contract's per-tile output paths -- one filepath
+    cannot stand in for N tiles' worth of files. Extending the receipt
+    schema itself to carry per-tile paths is a larger, separate change (see
+    BUILD_LOG). For a multi-tile contract this function therefore returns
+    only the receipt-claim blockers and skips file verification (returning
+    None for the output report) rather than silently attributing a single
+    channel filepath to every declared tile, which would be actively wrong.
+    """
+    blockers = validate_bake_receipt(contract, receipt, require_channels=require_channels)
+    if len(contract.udim_tiles) != 1:
+        return blockers, None
+
+    tile = contract.udim_tiles[0]
+    resolved_paths = {
+        (ch.channel, tile): ch.filepath
+        for ch in receipt.channels
+        if ch.executed and ch.filepath
+    }
+    output_report = verify_bake_output_set(contract, resolved_paths)
+    if not output_report.passed:
+        blockers = list(blockers)
+        blockers.extend(f"Bake output verification: {b}" for b in output_report.blockers)
+        blockers.extend(
+            f"Bake output verification: {f.channel}@{f.tile}: " + "; ".join(f.blockers)
+            for f in output_report.files if not f.passed
+        )
+    return blockers, output_report
