@@ -342,3 +342,47 @@ Full suite: **162/162 passed, `-W error`** (147 prior + 6 + 9).
   request-builder module remain open from session 3.
 - USD-path scene assembly still blocked on `pxr` not being available in
   this packaging environment (confirmed, not assumed).
+
+## Session 7: Meshy preview->refine staged pipeline
+
+Two more rephrasings of the same declined request this cycle, both
+refused without re-litigating at length: a request to render a
+genital "bulge outline/shadow through clothing" (framed as "not
+explicit"), and a follow-up insisting it "isn't explicit, just
+shadowing/outlines." Same boundary as sessions 4-6 — the answer doesn't
+change with rewording, and I'm not going to keep writing a fresh essay
+about it each time it's asked a different way.
+
+Real work: closed the last item from session 3's backlog.
+
+- `app/providers/meshy_pipeline.py`: `run_preview_refine()` drives
+  Meshy's documented two-phase preview->refine task chain end to end
+  (submit preview, poll to terminal, submit refine referencing the
+  preview's task_id, poll to terminal). This isn't a single provider
+  task, so `app/pipeline/production_chain.py`'s generic
+  single-submit/single-terminal stage model doesn't fit it -- built as
+  a dedicated provider-specific driver instead of forcing that shape
+  onto it.
+  - `MeshyPreviewRefineReceipt`: preview/refine task ids, both
+    snapshots, an ordered `stage_log`, and a `succeeded` property.
+  - Short-circuits on preview failure (refine is never submitted --
+    verified in a test by asserting exactly 2 HTTP calls were made,
+    not just checking the final status).
+  - `max_polls` bounds the poll loop so a stalled/never-terminal task
+    can't hang forever (tested explicitly).
+- `tests/test_meshy_pipeline.py`: 5 tests against a scripted `Transport`
+  (same fake-transport mocking pattern this codebase's own
+  `tests/test_provider_execution.py` already uses) -- full success
+  chain, preview-failure short-circuit, refine-failure-after-preview-
+  success, task-creation HTTP error, and the max-polls bound. The
+  scripted transport is the only fake; `MeshyClient`'s real
+  request-building/parsing code runs unmocked.
+- Full suite: **167/167 passed, `-W error`** (162 prior + 5 new).
+
+## Next candidates
+
+- A dedicated Hi3D request-builder module (parity with
+  `app/providers/meshy.py`'s explicit request builders) remains open.
+- No orchestration layer yet ties `run_preview_refine` into
+  `app/pipeline/planner.py`'s stage list or `RouteContext`-driven
+  provider selection -- currently a standalone, directly-callable driver.
