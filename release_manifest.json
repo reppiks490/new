@@ -1,10 +1,50 @@
 {
-  "file_count": 142,
+  "file_count": 199,
   "files": [
     {
+      "path": ".claude/settings.local.json",
+      "sha256": "8fea474a42c020369678e80143547f1f992e8d697b8fefb72a6d96cfbfe7b0d3",
+      "size_bytes": 174
+    },
+    {
+      "path": ".claude/worklog/BUILD_LOG.md",
+      "sha256": "a94ffa9d274ab87b8007461684a1da3b38424f5800898fb39362849b5dc4cf15",
+      "size_bytes": 59976
+    },
+    {
+      "path": ".dockerignore",
+      "sha256": "215c8a686c4e97b9af45c73c8973a8bab92c3ec2fb1b4dccf1d3df7d9dcafa28",
+      "size_bytes": 133
+    },
+    {
+      "path": ".env.example",
+      "sha256": "b52989e4d96c0490ec57db71ff6fb70163f3f822f442025f4b016eaa1dc3bfba",
+      "size_bytes": 1625
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "2a18ffad977307e8cb1d55d2226f63e2b14e1b46effb55afc12d895673b423ab",
+      "size_bytes": 1523
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "3bff2e931d2a98ffae0273d08e91b479755fbd0bc2e2bcdf31043a1c6a07cab9",
+      "size_bytes": 66
+    },
+    {
+      "path": "Dockerfile",
+      "sha256": "7f2a4244f9404e05192a2854a5c0d2bf4c22c2a09cad26c917ba6513e6b76b7b",
+      "size_bytes": 1009
+    },
+    {
+      "path": "GUIDE.md",
+      "sha256": "fdd3cc14290ef8802c58ca54f6353e19877c0ba08ec94aa55e6e998ee40ba7a5",
+      "size_bytes": 8168
+    },
+    {
       "path": "README.md",
-      "sha256": "dba664e3437d9158e6a2cb1a67192fba541a636e1d886c33bbf2bca41e49fc47",
-      "size_bytes": 4564
+      "sha256": "b8769946663f080ea67e503b667c3ba2a5eeb8493540e6de8bbafa18d0eb8bd4",
+      "size_bytes": 10393
     },
     {
       "path": "app/__init__.py",
@@ -17,14 +57,39 @@
       "size_bytes": 0
     },
     {
+      "path": "app/core/animation_models.py",
+      "sha256": "e5b7cdbac95c3b388d93975dfba04d79c89898768a28706ca955c488cda318f9",
+      "size_bytes": 1506
+    },
+    {
+      "path": "app/core/body_morphs.py",
+      "sha256": "a96505680f3ddc622e64d0835b39efd145b42abf10bae0755b5119c79c471317",
+      "size_bytes": 6219
+    },
+    {
+      "path": "app/core/content_filters.py",
+      "sha256": "d784ade69e76a6cef009edf6bfb548efac5b7775b3e7056b25dce9bc8d8d8fba",
+      "size_bytes": 3597
+    },
+    {
       "path": "app/core/models.py",
-      "sha256": "ad1d1d34445435112e784760fcfaae6b3fbb5ae2114ca3edd1b8b7366ccd7645",
-      "size_bytes": 2417
+      "sha256": "89d0ea78b1aafa08f9da7a32dcdc9ffeb276292a52045ea59a776aec8ec3937d",
+      "size_bytes": 3026
     },
     {
       "path": "app/core/policy.py",
-      "sha256": "e9d0cbf670ad806b6dcea3d1499e192bdddaa445fc357988d2811c6de3730b19",
-      "size_bytes": 1431
+      "sha256": "cf4a04999324f55b53a2b72f0a22afcb0cddaadf4aa41a5cfbe4238dacc29172",
+      "size_bytes": 1637
+    },
+    {
+      "path": "app/core/scene_models.py",
+      "sha256": "f9427ee1be908c2abe40788b88aa43a75a9c555ca1691a289066a6954b11da14",
+      "size_bytes": 3372
+    },
+    {
+      "path": "app/core/scene_policy.py",
+      "sha256": "ba81151c47b6071ba40a6de6c2114e7ca767d2746d82849ff20377e7abc3c068",
+      "size_bytes": 1772
     },
     {
       "path": "app/exports/__init__.py",
@@ -35,6 +100,11 @@
       "path": "app/exports/gltf_validation.py",
       "sha256": "e1b34226a885b65afa8c616e5f6f8c65b0bfb82544063979c74fe76ce648d9de",
       "size_bytes": 11465
+    },
+    {
+      "path": "app/exports/scene_export.py",
+      "sha256": "d7cf0f7e6875f22f702beaccf0d18254dad7fc376a8c531174d891ebbce16d8d",
+      "size_bytes": 6624
     },
     {
       "path": "app/exports/usdskel.py",
@@ -48,8 +118,8 @@
     },
     {
       "path": "app/main.py",
-      "sha256": "a7cd467b30e97f4f70cc6d306c510d0203d9ee3f7eff45db25d870cb12636eac",
-      "size_bytes": 24173
+      "sha256": "b3a66a734a2d83b88027dede72fb82053ee3eac134381e261f22d571c28c3986",
+      "size_bytes": 36342
     },
     {
       "path": "app/materials/__init__.py",
@@ -82,14 +152,24 @@
       "size_bytes": 0
     },
     {
+      "path": "app/pipeline/image_analysis.py",
+      "sha256": "def90ee54e6ad520204fcd48dac830e937e3c5e901ad96bf336d6e704c1aeb54",
+      "size_bytes": 3715
+    },
+    {
       "path": "app/pipeline/planner.py",
-      "sha256": "22951f6b5438c5b2df7f1d41ba477832c06d9ca12808bb4084054bdcfd93be1a",
-      "size_bytes": 3938
+      "sha256": "fc16b5472d2136da2fe3d292572a54beca6f9d61ffb8b2a66e87563ff9ebf016",
+      "size_bytes": 5370
     },
     {
       "path": "app/pipeline/production_chain.py",
       "sha256": "1548ad9afe357c8798ea11e377c475b3f7feec40ffd8e12fd5222ba02646db1a",
       "size_bytes": 4868
+    },
+    {
+      "path": "app/pipeline/scene_planner.py",
+      "sha256": "38569f5cc39932e1d7c975e0e0cc4872b45b26f4fb498ba612ca5573764315c3",
+      "size_bytes": 3619
     },
     {
       "path": "app/providers/__init__.py",
@@ -108,8 +188,8 @@
     },
     {
       "path": "app/providers/catalog.py",
-      "sha256": "98f82a341339bcc9cbd5fd26da2fd953a67394a1ebd9ffe06464ead4ba7c6d57",
-      "size_bytes": 4068
+      "sha256": "8473ba8d4c37c4c79aa218733706cb81c80061712917fc9dc8f0cf78d9bf38eb",
+      "size_bytes": 5897
     },
     {
       "path": "app/providers/chain.py",
@@ -132,6 +212,11 @@
       "size_bytes": 6657
     },
     {
+      "path": "app/providers/hi3d_modes.py",
+      "sha256": "23646d022c5b536facfc41080778a4b21bf4029d14386bbc6dc5ee8718026057",
+      "size_bytes": 4252
+    },
+    {
       "path": "app/providers/ingest.py",
       "sha256": "5242cd923374568e0e436d23155ac0629f7f291f8b0afc90f287746e53828f1f",
       "size_bytes": 3157
@@ -147,9 +232,14 @@
       "size_bytes": 7108
     },
     {
+      "path": "app/providers/meshy_pipeline.py",
+      "sha256": "de04041795e8d37e5bf056b012eb83860968cb675877364c567933fb0d5f4f0b",
+      "size_bytes": 3861
+    },
+    {
       "path": "app/providers/models.py",
-      "sha256": "629940ebce27d993150de5fae847dd70d36c4a256447d4ea67a9d0e590ff65a9",
-      "size_bytes": 1647
+      "sha256": "21a441ea76a83e6ad6b928ef052de7a86ba58de44f121d710644e7a069f675c6",
+      "size_bytes": 2487
     },
     {
       "path": "app/providers/orchestrator.py",
@@ -163,8 +253,8 @@
     },
     {
       "path": "app/providers/router.py",
-      "sha256": "af1d4fe609e452f5fe5a0d3918a490143af016412bc4afa227a2bb55fa140164",
-      "size_bytes": 5143
+      "sha256": "ab72aa65324f489b8e9637a07e8835179ae6b725e9d13274d2cd5a749cb8549b",
+      "size_bytes": 8282
     },
     {
       "path": "app/providers/scoring.py",
@@ -175,6 +265,11 @@
       "path": "app/providers/selection.py",
       "sha256": "83d86717867aaa3f2b62ca4444761538a23b7b0e4c9c655c1d00ded3db6e33f3",
       "size_bytes": 3999
+    },
+    {
+      "path": "app/providers/single_task_pipeline.py",
+      "sha256": "6ac96aa8c6aee5b47741b1b7f496178461e7c5752bb8754f925c72e5d09c7f2f",
+      "size_bytes": 2370
     },
     {
       "path": "app/providers/tripo.py",
@@ -190,6 +285,16 @@
       "path": "app/qa/__init__.py",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "size_bytes": 0
+    },
+    {
+      "path": "app/qa/animation.py",
+      "sha256": "a55e03265fecfb5000789f4166a2601e9408b3d9d1b6685fb96546b3c2aa14b0",
+      "size_bytes": 1331
+    },
+    {
+      "path": "app/qa/bake_output_verification.py",
+      "sha256": "2d3a9864fd9ec6e4e4a03a7a0bc72a8ce59fe9705e767decccd781577ba4331d",
+      "size_bytes": 6848
     },
     {
       "path": "app/qa/exact_intersections.py",
@@ -252,6 +357,11 @@
       "size_bytes": 3107
     },
     {
+      "path": "app/qa/scene.py",
+      "sha256": "50315e66b46781d28cc4f3f72efd19776b568754e9e1d1262633bb6e7302e3ed",
+      "size_bytes": 1858
+    },
+    {
       "path": "app/qa/self_intersection.py",
       "sha256": "5f6b74b889a2a3f538df689a2bb31f47051a47feb428e09aaa0deb9917b1cb7c",
       "size_bytes": 2395
@@ -263,8 +373,13 @@
     },
     {
       "path": "app/qa/textures.py",
-      "sha256": "5f8f80baf027d28b3346a4951671803219deac9403d4a6039d76d751bd177112",
-      "size_bytes": 1241
+      "sha256": "1d6015846d617747f58580431ff88e7f225b2b971742c4b1a4739b3e6f50a9d9",
+      "size_bytes": 1948
+    },
+    {
+      "path": "app/qa/topology.py",
+      "sha256": "a93813f5b3e0c5806483d759a0356c58bdca16db700329fc74c1c6256163aed7",
+      "size_bytes": 3985
     },
     {
       "path": "app/qa/uv.py",
@@ -312,14 +427,34 @@
       "size_bytes": 1972
     },
     {
+      "path": "app/render/job.py",
+      "sha256": "73d50c94ea076cebb725a3c32810ebbf90fd0ed72e32f8549bc617d4b97b9a97",
+      "size_bytes": 1479
+    },
+    {
       "path": "app/render/multiview.py",
       "sha256": "b5b4cf81c5283fc2bf013cf0995db948515540e155993737df6d239639fd6b86",
       "size_bytes": 2516
     },
     {
+      "path": "app/render/output_resolution.py",
+      "sha256": "3078e94871b4fe1f51475be5e1ce46758e0bf5e0c29dbf76e8538dc2b1a7d52a",
+      "size_bytes": 4096
+    },
+    {
+      "path": "app/render/output_verification.py",
+      "sha256": "e2ed63488255a952fbd981cf9650e5ea8105df4525778d123ac7e2af73618525",
+      "size_bytes": 2517
+    },
+    {
       "path": "app/rigging/__init__.py",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "size_bytes": 0
+    },
+    {
+      "path": "app/rigging/body_morph_apply.py",
+      "sha256": "07704bfda753fe9e3ab87f2cc60ae6d8f8dd2843312e15a42187d6b427f832a9",
+      "size_bytes": 2844
     },
     {
       "path": "app/rigging/correctives.py",
@@ -433,13 +568,38 @@
     },
     {
       "path": "app/workers/high_low_bake.py",
-      "sha256": "6154cc3dd5a7edea0f11948afa93b42bf4d0de5fdfc3ac35637c4a2511791e3a",
-      "size_bytes": 2767
+      "sha256": "895e3821b8b2e3a719e4bf48ce0f5f141d95cdf8b634b95dbd57a952df973f9f",
+      "size_bytes": 3419
     },
     {
       "path": "app/workers/localized_repair.py",
       "sha256": "4150a1c6d49b6027fa4ef6cb5b7b999cf81c58769c6e37d6ccc79c95822e66cc",
       "size_bytes": 2399
+    },
+    {
+      "path": "app/world/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    {
+      "path": "app/world/biomes.py",
+      "sha256": "937d248d78aaa9a82e649628ad66b7112881c42544b79f745f5e286eb2fd5082",
+      "size_bytes": 4182
+    },
+    {
+      "path": "app/world/scene_integration.py",
+      "sha256": "30dd10043632177bd3b611e8746510c61fe23ee530450efab009541157a99a5e",
+      "size_bytes": 4090
+    },
+    {
+      "path": "app/world/terrain.py",
+      "sha256": "e55b066bfbf2454a0db2eb749d1bcfded53ac12ce68669d9980ccf9d85332e94",
+      "size_bytes": 5139
+    },
+    {
+      "path": "app/world/world_grid.py",
+      "sha256": "54025d20f187a8bcdb78cc6fbba53206445684c638e5f6430de1f23e27b09d78",
+      "size_bytes": 6994
     },
     {
       "path": "blender_scripts/character_pipeline.py",
@@ -460,6 +620,31 @@
       "path": "blender_scripts/production_pipeline.py",
       "sha256": "851fdd3adcf377cb698ef138e78125634deb11aed266b889206794bdae44e597",
       "size_bytes": 3739
+    },
+    {
+      "path": "character3d_masterbuild.egg-info/PKG-INFO",
+      "sha256": "c025cd29d59a21c8a9370e298fc948c291cc2227215ffe08368de8774471a8c9",
+      "size_bytes": 694
+    },
+    {
+      "path": "character3d_masterbuild.egg-info/SOURCES.txt",
+      "sha256": "13778c73937a55b2c03a9c5ea498855360d0ba1605ba8d8fbe0f0acc6a84ce2f",
+      "size_bytes": 4204
+    },
+    {
+      "path": "character3d_masterbuild.egg-info/dependency_links.txt",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size_bytes": 1
+    },
+    {
+      "path": "character3d_masterbuild.egg-info/requires.txt",
+      "sha256": "4dd2768898338419a0205c2af1b98d5f324cc91cb26179da7886d372e3214257",
+      "size_bytes": 217
+    },
+    {
+      "path": "character3d_masterbuild.egg-info/top_level.txt",
+      "sha256": "8a8f60ecb09b7e64c6d5214a8043865e608507db8c3f61f995eae6d078875901",
+      "size_bytes": 4
     },
     {
       "path": "config/capability_packs.yaml",
@@ -508,8 +693,8 @@
     },
     {
       "path": "docs/SECURITY_AND_TRUST.md",
-      "sha256": "9c9f6c8c9bc117f4039167e3cbae3b481904f11300961ea33da4e00eede52669",
-      "size_bytes": 917
+      "sha256": "58b84740c6af99f9baefd613ec7440ea4835df3c49f85f33abc734e592a7771d",
+      "size_bytes": 2111
     },
     {
       "path": "docs/V07_PRODUCTION_GATES.md",
@@ -542,14 +727,19 @@
       "size_bytes": 2083
     },
     {
+      "path": "docs/V13_WORLDS_AND_RENDERING.md",
+      "sha256": "a9a8d9881fd2f22fd632cf2e76104f133bfcd76d3734c0730cc29637355a22f6",
+      "size_bytes": 6534
+    },
+    {
       "path": "docs/VENDOR_CAPABILITY_MATRIX.md",
-      "sha256": "4c6de61aa37ea1a6c42d0b8de3289da9db4c8f29473dfe2a6f135e80b4994fee",
-      "size_bytes": 2673
+      "sha256": "c46340f72364d89efab061f64e9c0fb3d06ce1cd2b587c694f5ae278a319680b",
+      "size_bytes": 4320
     },
     {
       "path": "pyproject.toml",
-      "sha256": "39c9923047f5631f1c0cbc2bcd12acf4523c6422839f831d4ecfd98dfea6a27e",
-      "size_bytes": 564
+      "sha256": "79a5358da751045511408c57cd712eb7881d74f2a1a3721ef8967c482226b284",
+      "size_bytes": 734
     },
     {
       "path": "scripts/build_canonical_manifest.py",
@@ -577,9 +767,39 @@
       "size_bytes": 461
     },
     {
+      "path": "tests/test_animation.py",
+      "sha256": "56f681b58ac13540b0e836b039bc4b55aa0ea234f504a22eb09c02abf026e110",
+      "size_bytes": 1733
+    },
+    {
+      "path": "tests/test_bake_output_verification.py",
+      "sha256": "1f57a04a12a6239a955ea71c1dfe308e811dcbdd62badcd6265182c09e96c077",
+      "size_bytes": 3837
+    },
+    {
+      "path": "tests/test_bake_receipt_and_output.py",
+      "sha256": "b7735f183a6e958c59e86dab5a2d8666db67cb696e83afacad3d26d94e8f1c7d",
+      "size_bytes": 7863
+    },
+    {
+      "path": "tests/test_biomes.py",
+      "sha256": "7fb99670d29ca34f83718b7ca3577f9f694092b274ef593670d5f7109cd85b98",
+      "size_bytes": 4467
+    },
+    {
+      "path": "tests/test_body_morphs.py",
+      "sha256": "894db80e785d8a8e30a27435b4f62c81386ebd16605632acc9e5d2e6ab43b718",
+      "size_bytes": 4365
+    },
+    {
       "path": "tests/test_candidate_selection.py",
       "sha256": "929bd11140eede10b60a1d09ff31c56d3dad7313b217354a6d8a823a0ccc75cb",
       "size_bytes": 1671
+    },
+    {
+      "path": "tests/test_content_filters.py",
+      "sha256": "85c4a2de0d360ce9828a5cde4cf1d44284e7bbeb006c332539c38fa3ce755432",
+      "size_bytes": 2433
     },
     {
       "path": "tests/test_geometry_tiers.py",
@@ -587,9 +807,24 @@
       "size_bytes": 589
     },
     {
+      "path": "tests/test_hi3d_modes.py",
+      "sha256": "938c383db064b16297ccf2afd0ce9e999f9e816fea0b528f669f7f461487fc5a",
+      "size_bytes": 1889
+    },
+    {
+      "path": "tests/test_image_analysis.py",
+      "sha256": "18e48ec273d7342aa45af32c054337e65817c0e472b71f257f7d57bf27ce378e",
+      "size_bytes": 3082
+    },
+    {
       "path": "tests/test_ledger.py",
       "sha256": "84a436c50e04084040f3540673021132e326fe71a4c2562195c40d91109850f9",
       "size_bytes": 783
+    },
+    {
+      "path": "tests/test_meshy_pipeline.py",
+      "sha256": "82499804c47a04ba52def2bcd79b05ee4233a9e9ff9d0ae37f5d1e57f16152bb",
+      "size_bytes": 4380
     },
     {
       "path": "tests/test_packs.py",
@@ -598,8 +833,8 @@
     },
     {
       "path": "tests/test_planner.py",
-      "sha256": "bf339add28c935c95c99fc48ed1d1228c3038136bf608b3cd2fba862de65b5d9",
-      "size_bytes": 836
+      "sha256": "f6cc7396a368d055fcd302f7cd05177aeabf530ecdbc3aca445e3bddbf136586",
+      "size_bytes": 3113
     },
     {
       "path": "tests/test_policy.py",
@@ -618,8 +853,8 @@
     },
     {
       "path": "tests/test_providers.py",
-      "sha256": "4a7cf31d0cfde0f0aba1f1e3c40af3598680408877bd45e54e72851040f8bf34",
-      "size_bytes": 2765
+      "sha256": "dd128b7d2437c54255180670cafd8c95a2fcf1eefb2329fe0233f0ae0e94f638",
+      "size_bytes": 7396
     },
     {
       "path": "tests/test_qa.py",
@@ -627,9 +862,44 @@
       "size_bytes": 1880
     },
     {
+      "path": "tests/test_render_job.py",
+      "sha256": "036d1b2d856b88baee48b287b628800624d368f2283615c03b849437dbb5f2fe",
+      "size_bytes": 1065
+    },
+    {
+      "path": "tests/test_render_output.py",
+      "sha256": "c186aba6418f11897f270dc4c21a106eef340b6f61e0c873917c6fecad49c263",
+      "size_bytes": 4881
+    },
+    {
       "path": "tests/test_runtime.py",
       "sha256": "ce6210e81c089be277b1229c4506842a5331a8fda0742ec762d5b064467ba830",
       "size_bytes": 1069
+    },
+    {
+      "path": "tests/test_scene.py",
+      "sha256": "433956951026801b3c22db0d5e691fcd97847a20369a2e0a8bc0e34f0ece9035",
+      "size_bytes": 2822
+    },
+    {
+      "path": "tests/test_scene_export.py",
+      "sha256": "2102c2105e72b4136a654682b913437206053d70ee803b3586008445b66f03d3",
+      "size_bytes": 3418
+    },
+    {
+      "path": "tests/test_scene_policy.py",
+      "sha256": "a662f6239de0efd220ec2e4a84a6cf4681d8b2497d4c7032b9f7db15c70b08da",
+      "size_bytes": 1385
+    },
+    {
+      "path": "tests/test_terrain.py",
+      "sha256": "fbf2d38bbaa528ee244b877cd16c4d03167bb0e8cc11365209b2818e3eb6fcda",
+      "size_bytes": 2427
+    },
+    {
+      "path": "tests/test_topology.py",
+      "sha256": "8f4ddd02fc20390987e8057b1b41af251e6efb7d5d3268fbaee61105b809216f",
+      "size_bytes": 3611
     },
     {
       "path": "tests/test_v06_quality.py",
@@ -638,12 +908,12 @@
     },
     {
       "path": "tests/test_v07_production.py",
-      "sha256": "ecd6b1a4aa801a47725fc44b64d8d78af43e3c70940ce052b86ab2c0954ff996",
+      "sha256": "417f466bcc3b313b2c0ded2392aa3042cba8ecba561cd1ab9f9f97298c171a37",
       "size_bytes": 5265
     },
     {
       "path": "tests/test_v08_api.py",
-      "sha256": "f65baf8e20e2fb6fc19b8ded12577b6c58ba4432e9a163094bd4304311ef7886",
+      "sha256": "ed2814ba38257817e00a4647f2cbc2e232e3bf777b3f526263f2bafd37eae967",
       "size_bytes": 1335
     },
     {
@@ -658,7 +928,7 @@
     },
     {
       "path": "tests/test_v09_api.py",
-      "sha256": "28dd521788a3739dd662ce5906026bdc6192eb1b8177341a4e845ab6a298836e",
+      "sha256": "86b498a85455f90da62674ad574e7894b5bb147cb98d05d71d10112eb609c3d5",
       "size_bytes": 1624
     },
     {
@@ -668,7 +938,7 @@
     },
     {
       "path": "tests/test_v10_api.py",
-      "sha256": "827dbb01025b39cb78d914509af01bf570a9398da924e3c8e470fdb3a890382f",
+      "sha256": "da79fd4a0d2a0c600a9d41c8791ab9eb233880ccf5b61ccdc77aedcf615486ec",
       "size_bytes": 1360
     },
     {
@@ -678,7 +948,7 @@
     },
     {
       "path": "tests/test_v12_api.py",
-      "sha256": "7c4a708069cae168b21217e0e03f248f9ff5c7712c8909e2057ce4f7899292c9",
+      "sha256": "36da2952c81f53d48f2147fc4b663c4f3cae58c38e0b563eac05d54b5d301496",
       "size_bytes": 484
     },
     {
@@ -710,11 +980,26 @@
       "path": "tests/test_v12_source_package.py",
       "sha256": "e562d86eda91dbebe40e98f1ead345976fca6fdcf966602e399365be9dc302d8",
       "size_bytes": 1105
+    },
+    {
+      "path": "tests/test_v13_api.py",
+      "sha256": "3a7ff58a068980d447025a5ec1aeece67ea88ed93c9330ca19f07cbdb965e387",
+      "size_bytes": 10997
+    },
+    {
+      "path": "tests/test_world_grid.py",
+      "sha256": "b4ff446e72c8d1b1fa04f1c82889dabd8219c7844db6c6c9922211f923aaccda",
+      "size_bytes": 7040
+    },
+    {
+      "path": "tests/test_world_scene_integration.py",
+      "sha256": "cf05b22258caabffb6242d82f3a45a4bbf5cc60ede649f44f9dff7843eec22cd",
+      "size_bytes": 2513
     }
   ],
   "project": "character3d-masterbuild",
   "schema_version": "character3d-source-release-v1",
-  "source_digest_sha256": "aff225a0ecc81a8a9e379a56f74cdff5525cff4dbd8efcf0bf50b5559b064ac0",
-  "total_bytes": 398508,
-  "version": "1.2.0"
+  "source_digest_sha256": "83645c3332abd4860710a5832506a3127e85ee27ff0da786ba05a0f6db2cdfc6",
+  "total_bytes": 680645,
+  "version": "1.3.0"
 }
