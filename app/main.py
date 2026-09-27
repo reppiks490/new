@@ -1067,12 +1067,13 @@ class RenderExecuteRequest(BaseModel):
     # <model>.displacement.json sidecar next to source_model, when present
     use_displacement: bool = True
     dicing_rate_px: float | None = None
-    micropolygon_budget: int = 25_000_000
+    micropolygon_budget: int = 6_000_000  # cycles_worker.DEFAULT_MICROPOLYGON_BUDGET
+    vegetation: dict = {}
 
 
 @app.post("/v1/render/execute")
 def render_execute(req: RenderExecuteRequest):
-    from app.render.cycles_worker import CameraSpec, LightingSpec, run_cycles_render
+    from app.render.cycles_worker import CameraSpec, LightingSpec, VegetationSpec, run_cycles_render
 
     try:
         job = compile_render_job(
@@ -1083,7 +1084,7 @@ def render_execute(req: RenderExecuteRequest):
             job, req.source_model, req.output_path, samples_override=req.samples_override,
             camera=CameraSpec(**req.camera), lighting=LightingSpec(**req.lighting),
             use_displacement=req.use_displacement, dicing_rate_override=req.dicing_rate_px,
-            micropolygon_budget=req.micropolygon_budget,
+            micropolygon_budget=req.micropolygon_budget, vegetation=VegetationSpec(**req.vegetation),
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

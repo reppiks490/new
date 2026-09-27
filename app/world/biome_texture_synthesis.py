@@ -467,3 +467,35 @@ def export_biome_texture_maps(
     if metallic_roughness_path is not None:
         result["metallic_roughness_path"] = str(Path(metallic_roughness_path))
     return result
+
+
+def synthesize_vegetation_density(
+    heightmap: np.ndarray,
+    *,
+    size: int,
+    seed: int = 0,
+    thresholds: BiomeThresholds | None = None,
+) -> np.ndarray:
+    """(size, size, 2) uint8: channel 0 = forest weight, channel 1 = plains
+    weight, from the same bicubic height, slope, biome thresholds and macro/
+    detail noise that paint the ground textures, so scattered trees stand
+    exactly where the texture shows forest (rock, snow, water and beach get
+    zero). Same texel/UV mapping as the texture maps."""
+    field = _TerrainTextureField(heightmap, size, seed, thresholds)
+    out = np.empty((size, size, 2), dtype=np.uint8)
+    cols = np.arange(size, dtype=np.float64)
+    u = ((cols + 0.5) / size)[None, :]
+    for r0 in range(0, size, 256):
+        rows = np.arange(r0, min(size, r0 + 256), dtype=np.float64)
+        v = ((rows + 0.5) / size)[:, None]
+        coords = np.stack([np.broadcast_to(v * (field.n - 1), (len(rows), size)),
+                           np.broadcast_to(u * (field.n - 1), (len(rows), size))])
+        coarse_h = ndimage.map_coordinates(field.height_coeffs, coords, order=3, mode="nearest", prefilter=False).astype(np.float32)
+        slope = ndimage.map_coordinates(field.slope_grid, coords, order=1, mode="nearest").astype(np.float32)
+        macro = fbm(u, v, base_frequency=MACRO_BASE_FREQUENCY, octaves=MACRO_OCTAVES, seed=seed + 101)
+        detail = fbm(u, v, base_frequency=DETAIL_BASE_FREQUENCY, octaves=field.detail_octaves, seed=seed + 202, gain=0.68)
+        h = coarse_h + np.float32(BOUNDARY_PERTURBATION) * (np.float32(0.6) * macro + np.float32(0.3) * detail)
+        w = _material_weights(h, slope * (np.float32(1.0) + np.float32(0.25) * macro), field.thresholds)
+        out[r0:r0 + len(rows), :, 0] = (np.clip(w["forest"], 0, 1) * 255 + 0.5).astype(np.uint8)
+        out[r0:r0 + len(rows), :, 1] = (np.clip(w["plains"], 0, 1) * 255 + 0.5).astype(np.uint8)
+    return out

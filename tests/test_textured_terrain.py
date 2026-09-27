@@ -159,3 +159,17 @@ def test_glb_export_without_displacement_writes_no_sidecar(tmp_path):
     result = export_textured_terrain_glb(SPEC, tmp_path / "flat.glb", texture_size=32, displacement=False)
     assert result["displacement"] is None
     assert not (tmp_path / "flat.displacement.png").exists()
+
+
+def test_diamond_square_is_deterministic_and_allows_power_12():
+    import hashlib
+
+    from app.world.terrain import diamond_square_heightmap
+
+    spec = TerrainSpec(name="d", size_meters=100, height_scale_meters=10, resolution_power=6, seed=5)
+    # pinned from the original scalar implementation: vectorizing must not change any seed's terrain
+    h = hashlib.sha256(diamond_square_heightmap(spec).tobytes()).hexdigest()
+    assert h == '6a22d2a6a34eb5f6535df6cba5a0122fba15dae687bb808218af8a3c008115e3'
+    assert TerrainSpec(name="b", size_meters=100, height_scale_meters=10, resolution_power=12).resolution_power == 12
+    with pytest.raises(ValueError):
+        TerrainSpec(name="b", size_meters=100, height_scale_meters=10, resolution_power=13)

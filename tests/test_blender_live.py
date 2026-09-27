@@ -288,3 +288,36 @@ def test_render_applies_displacement_with_adaptive_subdivision(tmp_path):
     a = np.asarray(Image.open(tmp_path / "on.png").convert("L"), dtype=float)
     b = np.asarray(Image.open(tmp_path / "off.png").convert("L"), dtype=float)
     assert np.abs(a - b).mean() > 0.5  # the geometry really changed
+
+
+def test_render_manifest_carries_the_vegetation_map(tmp_path):
+    from app.render.cycles_worker import VegetationSpec
+    from app.world.terrain import TerrainSpec
+    from app.world.textured_terrain import export_textured_terrain_glb
+
+    glb = tmp_path / "t.glb"
+    export_textured_terrain_glb(TerrainSpec(name="t", size_meters=50, resolution_power=3, height_scale_meters=10), glb, texture_size=16)
+    m = compile_cycles_render_manifest(_job(), glb, tmp_path / "o.png")
+    assert m["vegetation"]["path"].endswith("t.vegetation.png") and m["vegetation"]["forest_density_per_m2"] > 0
+    assert compile_cycles_render_manifest(_job(), glb, tmp_path / "o.png", vegetation=VegetationSpec(enabled=False))["vegetation"] is None
+    assert compile_cycles_render_manifest(_job(), glb, tmp_path / "o.png", use_displacement=False)["vegetation"] is None
+
+
+@blender
+def test_render_scatters_see_through_3d_trees_and_leaves_no_stray_files(tmp_path, monkeypatch):
+    from app.render.cycles_worker import VegetationSpec
+    from app.world.terrain import TerrainSpec
+    from app.world.textured_terrain import export_textured_terrain_glb
+
+    monkeypatch.chdir(tmp_path)
+    glb = tmp_path / "f.glb"
+    export_textured_terrain_glb(TerrainSpec(name="f", size_meters=300, resolution_power=5, height_scale_meters=40, seed=11), glb, texture_size=64)
+    before = set(tmp_path.iterdir())
+    r = run_cycles_render(_job(), glb, tmp_path / "v.png", samples_override=2,
+                          vegetation=VegetationSpec(forest_density_per_m2=0.02, plains_density_per_m2=0.01))
+    assert r.passed, (r.receipt, r.stderr_tail)
+    v = r.receipt["vegetation"]
+    assert v["instances"] > 100 and v["unique_tree_triangles"] > 1000
+    assert v["effective_triangles"] > v["unique_tree_triangles"]
+    # packed textures are unpacked into the job's own folder, never the CWD
+    assert {p.name for p in set(tmp_path.iterdir()) - before} <= {"v.png", "v.png.manifest.json", "v.png.receipt.json"}

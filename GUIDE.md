@@ -311,16 +311,41 @@ curl -X POST http://localhost:8000/v1/render/execute \
 ```
 
 **16K and geometry detail.** If a `<model>.displacement.json` sidecar sits
-next to `source_model` (textured terrain writes one), the render uses
-Cycles adaptive subdivision plus true displacement. The mesh is diced to
-about `dicing_rate_px` pixels on screen and pushed onto a smooth cubic
-surface, so ridgelines and outlines stay smooth at 8K/16K instead of
-showing the mesh's triangles. The dicing rate comes from the quality preset
+next to `source_model` (textured terrain writes one), the renderer rebuilds
+the terrain as a coarse grid of at most 257×257 quads. Cycles adaptive
+subdivision dices that grid to about `dicing_rate_px` pixels on screen and
+displaces it onto the smooth surface through every heightmap sample. The
+result keeps full terrain detail, with ridgelines and outlines that stay
+smooth at 8K/16K instead of showing triangles, and Blender's memory
+drops, because the dense mesh is never subdivided. The GLB itself keeps
+the dense mesh for engines and viewers. The dicing rate comes from the quality preset
 (hero 0.75 px) but is raised just enough to keep the micropolygon count
-under `micropolygon_budget` (default 25M, sized for about 16 GB of RAM).
+under `micropolygon_budget` (default 6M: measured ~1 KB per micropolygon on top of a ~6 GB scene baseline, so it fits 16 GB of RAM; raise it on bigger machines).
 At 16K that gives about 2 px. On a bigger machine, raise the budget or set
 `dicing_rate_px` directly. `"use_displacement": false` turns this off. The
 receipt records the rate requested, the rate used, and why.
+
+**Vegetation (real 3D trees).** Textured terrain also writes a
+`<model>.vegetation.png` density map (R = forest, G = plains), painted with
+the same biome weights as the ground textures. The renderer scatters
+procedural conifers and broadleaf trees from it with geometry-node
+instancing, and places each one on the displaced surface. Leaves are
+individual translucent cards, so canopies have real gaps and light
+passes through them. Measured on a 2 km island: 62,902 trees, ~210M
+instanced triangles, +0.3 GB. Tune with `"vegetation": {"forest_density_per_m2":
+0.033, "plains_density_per_m2": 0.0025, "seed": 7}` or turn it off with
+`{"enabled": false}`.
+
+**Memory on big terrain.** Terrain now goes up to `resolution_power` 12
+(4097² samples, 33.5M triangles; diamond-square is vectorized and
+bit-identical to the old code for every seed). The renderer never imports
+that mesh: with a base-grid sidecar it imports a quad proxy carrying the
+same materials and image bytes (importing the full 33.5M triangles
+was OOM-killed at 12.9 GB). Subdivision is capped at 2 micropolygons per
+displacement texel, since finer dicing adds no detail but a low camera
+kept dicing near and behind it to 4096 cuts per quad. Off-screen dicing is
+coarsened ×64, and persistent data is off for stills. Low-camera 1080p on
+the 33.5M-triangle, 16K-textured island with trees now peaks at 10.2 GB.
 
 The receipt records the compute device actually used. A requested GPU
 backend (OptiX, HIP, oneAPI, Metal) falls back to CPU if it isn't present,

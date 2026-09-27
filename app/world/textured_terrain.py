@@ -27,7 +27,7 @@ from scipy import ndimage
 import app.qa.textures  # noqa: F401  (raises PIL's pixel guard to cover 16K textures)
 from app.core.axes import ZUP_TO_YUP, export_mesh_from_zup
 from app.exports.glb_writer import write_textured_glb
-from app.world.biome_texture_synthesis import MIN_TEXTURE_SIZE, StreamingPNGWriter, export_biome_texture_maps
+from app.world.biome_texture_synthesis import MIN_TEXTURE_SIZE, StreamingPNGWriter, export_biome_texture_maps, synthesize_vegetation_density
 from app.world.biomes import BiomeThresholds
 from app.world.terrain import TerrainSpec, diamond_square_heightmap, heightmap_to_mesh, terrain_uvs
 
@@ -38,6 +38,7 @@ MAX_EMBEDDED_TEXTURE_SIZE = 16384
 # per cell of the densest terrain (1025^2) resolves it, and a float copy of a
 # larger map would cost the renderer gigabytes for no visible gain.
 MAX_DISPLACEMENT_SIZE = 8192
+MAX_VEGETATION_SIZE = 2048  # tree placement density; far coarser than any tree
 DISPLACEMENT_SCHEMA = "character3d-displacement-v1"
 
 
@@ -247,6 +248,13 @@ def export_textured_terrain_glb(
             "heights_file": base_path.name, "vertices_per_side": int(surface[::stride, ::stride].shape[0]),
             "stride": stride, "size_meters": spec.size_meters,
         })
+        heightmap, _ = terrain_surface(spec, thresholds, flatten_water=flatten_water)
+        veg_size = min(texture_size, MAX_VEGETATION_SIZE)
+        veg = synthesize_vegetation_density(heightmap, size=veg_size, seed=spec.seed, thresholds=thresholds)
+        veg_path = png_path.with_name(out.stem + ".vegetation.png")
+        Image.fromarray(np.dstack([veg, np.zeros(veg.shape[:2], np.uint8)]), mode="RGB").save(veg_path)
+        meta["vegetation"] = {"image": veg_path.name, "channels": {"R": "forest", "G": "plains"}, "resolution": veg_size}
+        json_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         result["displacement"] = {"image_path": str(png_path), "metadata_path": str(json_path),
                                   "min_m": meta["min_m"], "max_m": meta["max_m"], "resolution": size}
     return result

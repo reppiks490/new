@@ -16,7 +16,7 @@ class WorldGridSpec(BaseModel):
     # independently -- independent per-tile diamond-square runs would not
     # agree at shared borders. Slicing one array guarantees adjacent tiles
     # share their boundary row/column exactly.
-    world_resolution_power: int = Field(default=8, ge=2, le=10)
+    world_resolution_power: int = Field(default=8, ge=2, le=12)
     tile_count_x: int = Field(default=4, ge=1, le=32)
     tile_count_z: int = Field(default=4, ge=1, le=32)
     tile_size_meters: float = Field(gt=0, le=10_000)

@@ -60,8 +60,11 @@ def unpack_images_to_files(directory: Path) -> int:
         ext = '.' + (img.file_format or 'PNG').lower().replace('jpeg', 'jpg')
         target = directory / f'packed_{i:03d}{ext}'
         target.write_bytes(img.packed_file.data)
+        # REMOVE drops the packed copy and keeps filepath; USE_ORIGINAL
+        # re-writes the image under its name relative to the CWD
+        img.unpack(method='REMOVE')
         img.filepath = str(target)
-        img.unpack(method='USE_ORIGINAL')
+        img.reload()
         img.buffers_free()
         count += 1
     return count
@@ -174,6 +177,7 @@ def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
     scene = bpy.context.scene
     scene.cycles.dicing_rate = 1.0  # a multiplier on the per-object pixel size set below
     scene.cycles.max_subdivisions = int(subdivision['max_subdivisions'])
+    scene.cycles.offscreen_dicing_scale = float(subdivision.get('offscreen_dicing_scale', 4.0))
     base_info = None
     if disp.get('base_grid'):
         if len(meshes) != 1:
@@ -219,7 +223,18 @@ def main():
     try:
         bpy.ops.wm.read_factory_settings(use_empty=True)
         scene = bpy.context.scene
-        meshes = _import_model(Path(manifest['source_model']))
+        source = Path(manifest['source_model'])
+        disp = manifest.get('displacement')
+        if disp and disp.get('base_grid') and source.suffix.lower() == '.glb':
+            # the dense mesh would be replaced by the base grid anyway: import
+            # a quad-geometry proxy with the same materials and image bytes
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from glb_proxy import write_terrain_proxy
+            proxy = Path(manifest['output_path'] + '.textures') / 'terrain_proxy.glb'
+            receipt['proxy_import'] = write_terrain_proxy(source, proxy)
+            if receipt['proxy_import']:
+                source = proxy
+        meshes = _import_model(source)
         receipt['unpacked_images'] = unpack_images_to_files(Path(manifest['output_path'] + '.textures'))
         lo, hi = _world_bounds(meshes)
         center = (lo + hi) / 2
@@ -247,8 +262,15 @@ def main():
         sun.rotation_euler = (math.radians(90 - light['sun_elevation_deg']), 0, math.radians(light['sun_rotation_deg'] + 90))
         scene.collection.objects.link(sun)
 
-        disp = manifest.get('displacement')
         receipt['displacement'] = apply_displacement(meshes, disp, manifest['subdivision']) if disp else {'applied': False}
+        veg = manifest.get('vegetation')
+        if veg and disp:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from vegetation import scatter_vegetation
+            terrain = next(o for o in bpy.context.scene.objects if o.type == 'MESH' and o.modifiers)
+            receipt['vegetation'] = scatter_vegetation(terrain, disp, veg, seed=int(veg.get('seed', 7)))
+        else:
+            receipt['vegetation'] = {'applied': False}
 
         q = manifest['quality']
         scene.render.engine = 'CYCLES'
@@ -259,7 +281,10 @@ def main():
         scene.cycles.max_bounces = int(q['max_bounces'])
         scene.cycles.transparent_max_bounces = int(q['transparent_bounces'])
         scene.cycles.tile_size = int(q['tile_size'])
-        scene.render.use_persistent_data = bool(q['use_persistent_data'])
+        # one still per process: persistent data would only keep a second
+        # synced copy of the scene alive (measured +1.6 GB on 16K terrain)
+        scene.render.use_persistent_data = False
+        receipt['persistent_data_requested'] = bool(q['use_persistent_data'])
         scene.view_settings.view_transform = 'AgX' if 'AgX' in [v.identifier for v in type(scene.view_settings).bl_rna.properties['view_transform'].enum_items] else 'Filmic'
 
         o = manifest['output']

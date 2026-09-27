@@ -6,6 +6,7 @@ file it produced. compile_render_job decides "how good" (CyclesPreset) and
 """
 
 import json
+import math
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -32,6 +33,15 @@ class LightingSpec(BaseModel):
     sky_strength: float = Field(default=0.15, ge=0)  # 4.0/0.6 clipped 5.1% of pixels
 
 
+class VegetationSpec(BaseModel):
+    """Instanced 3D trees scattered from the terrain's vegetation sidecar.
+    Leaves are individual translucent cards, so canopies have real gaps."""
+    enabled: bool = True
+    forest_density_per_m2: float = Field(default=1 / 30, ge=0, le=1)
+    plains_density_per_m2: float = Field(default=1 / 400, ge=0, le=1)
+    seed: int = 7
+
+
 class CyclesRenderResult(BaseModel):
     returncode: int
     receipt: dict
@@ -43,7 +53,7 @@ class CyclesRenderResult(BaseModel):
         return self.returncode == 0 and self.receipt.get("status") == "succeeded" and self.verification.meets_or_exceeds_spec
 
 
-DEFAULT_MICROPOLYGON_BUDGET = 25_000_000
+DEFAULT_MICROPOLYGON_BUDGET = 6_000_000  # measured ~1 KB/micropolygon over a ~6 GB base: fits 16 GB
 ASSUMED_FRAME_COVERAGE = 0.8
 
 
@@ -61,6 +71,20 @@ def effective_dicing_rate(job: RenderJobSpec, *, micropolygon_budget: int, overr
                   "estimated_micropolygons": int(frame / rate ** 2)}
 
 
+OFFSCREEN_DICING_SCALE = 64.0  # Cycles default 4: terrain under/behind a low camera otherwise dices finely
+
+
+def texel_limited_subdivisions(displacement: dict | None, *, fallback: int = 12) -> int:
+    """Subdivision levels past 2 micropolygons per displacement texel add no
+    detail -- the map has nothing finer -- but near a low camera Cycles keeps
+    dicing to the cap (measured: 8.7 GB at the default camera vs >13.9 GB,
+    OOM, at a low one with the old cap of 12 = 4096 cuts per base quad)."""
+    if not displacement or not displacement.get("base_grid"):
+        return fallback
+    texels_per_quad = displacement["resolution"] / (displacement["base_grid"]["vertices_per_side"] - 1)
+    return max(1, min(fallback, math.ceil(math.log2(max(texels_per_quad, 1.0))) + 1))
+
+
 def find_displacement_sidecar(source_model: str | Path) -> dict | None:
     from app.world.textured_terrain import DISPLACEMENT_SCHEMA, displacement_sidecar_paths
 
@@ -74,7 +98,8 @@ def find_displacement_sidecar(source_model: str | Path) -> dict | None:
             or not png.is_file() or not base or not heights.is_file()):
         raise ValueError(f"invalid displacement sidecar next to {source_model}")
     return {
-        "path": str(png.resolve()), "min_m": float(meta["min_m"]), "max_m": float(meta["max_m"]),
+        "path": str(png.resolve()), "resolution": int(meta["resolution"]), "min_m": float(meta["min_m"]), "max_m": float(meta["max_m"]),
+        "vegetation_path": str(meta_path.with_name(meta["vegetation"]["image"]).resolve()) if meta.get("vegetation") else None,
         "base_grid": {"heights_path": str(heights.resolve()), "vertices_per_side": int(base["vertices_per_side"]),
                       "size_meters": float(base["size_meters"])},
     }
@@ -91,7 +116,8 @@ def compile_cycles_render_manifest(
     use_displacement: bool = True,
     dicing_rate_override: float | None = None,
     micropolygon_budget: int = DEFAULT_MICROPOLYGON_BUDGET,
-    max_subdivisions: int = 12,
+    max_subdivisions: int | None = None,
+    vegetation: VegetationSpec | None = None,
 ) -> dict:
     out = Path(output_path)
     fmt = _FORMATS.get(out.suffix.lower())
@@ -109,11 +135,19 @@ def compile_cycles_render_manifest(
     if micropolygon_budget < 1:
         raise ValueError("micropolygon_budget must be >= 1")
     displacement = find_displacement_sidecar(source_model) if use_displacement else None
+    if max_subdivisions is None:
+        max_subdivisions = texel_limited_subdivisions(displacement)
+    veg = vegetation or VegetationSpec()
+    vegetation_manifest = None
+    if veg.enabled and displacement and displacement.get("vegetation_path") and Path(displacement["vegetation_path"]).is_file():
+        vegetation_manifest = {"path": displacement["vegetation_path"], **veg.model_dump(exclude={"enabled"})}
     rate, dicing = effective_dicing_rate(job, micropolygon_budget=micropolygon_budget, override=dicing_rate_override)
     return {
         "schema": "character3d-cycles-render-v1",
         "displacement": displacement,
-        "subdivision": {"dicing_rate_px": rate, "max_subdivisions": max_subdivisions, **dicing},
+        "vegetation": vegetation_manifest,
+        "subdivision": {"dicing_rate_px": rate, "max_subdivisions": max_subdivisions,
+                        "offscreen_dicing_scale": OFFSCREEN_DICING_SCALE, **dicing},
         "source_model": str(Path(source_model).resolve()),
         "output_path": str(out.resolve()),
         "receipt_path": str(out.resolve().with_suffix(out.suffix + ".receipt.json")),
@@ -136,6 +170,7 @@ def run_cycles_render(
     use_displacement: bool = True,
     dicing_rate_override: float | None = None,
     micropolygon_budget: int = DEFAULT_MICROPOLYGON_BUDGET,
+    vegetation: VegetationSpec | None = None,
     blender_executable: str | None = None,
     timeout_seconds: int = 6 * 60 * 60,
 ) -> CyclesRenderResult:
@@ -148,7 +183,7 @@ def run_cycles_render(
     manifest = compile_cycles_render_manifest(
         job, source, output_path, camera=camera, lighting=lighting, samples_override=samples_override,
         use_displacement=use_displacement, dicing_rate_override=dicing_rate_override,
-        micropolygon_budget=micropolygon_budget,
+        micropolygon_budget=micropolygon_budget, vegetation=vegetation,
     )
     out = Path(manifest["output_path"])
     out.parent.mkdir(parents=True, exist_ok=True)
