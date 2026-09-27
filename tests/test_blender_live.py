@@ -229,3 +229,17 @@ def test_repair_of_a_quad_mesh_targets_the_right_faces_and_never_caps_open_borde
     assert receipt.detected_faces == 16  # the two rows of quads along the crossing, in Blender's quad index space
     assert after.intersecting_pair_count == 0  # independent check, including coplanar overlap
     assert receipt.created_faces == 0 and receipt.open_boundary_chains > 0  # cut strips are left open, borders never capped
+
+
+@blender
+def test_character_pipeline_worker_initializes_the_scene_on_this_blender(tmp_path):
+    from app.workers.blender import build_blender_job_invocation, execute
+
+    manifest = tmp_path / "job.json"
+    manifest.write_text(json.dumps({"job_id": "t1"}))
+    proc = execute(build_blender_job_invocation(find_blender(), manifest, "blender_scripts/character_pipeline.py"), timeout_seconds=300)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    receipt = json.loads((tmp_path / "blender_receipt.json").read_text())
+    assert receipt["status"] == "scene_initialized"
+    assert receipt["render_engine"] in {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"}
+    assert set(receipt["collections"]) == {"C3D_BASE", "C3D_HERO", "C3D_GROOM", "C3D_RIG", "C3D_EXPORT"}
