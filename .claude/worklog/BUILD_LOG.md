@@ -1332,3 +1332,14 @@ textures, 1487 s on 4 CPU cores, resolution verified, image inspected.
 
 Tests: 385 -> 408, all `-W error`, including 12 live Blender tests (real
 renders, bakes, repairs, exports) that skip only when Blender is absent.
+
+**Release 1.5.0 verification.** Installing the first 1.5.0 ZIP into a fresh
+venv failed 10 tests: the deterministic ZIP stamped every entry 0644, so the
+extracted `scripts/blender` shim was not executable. Fixed (0755 for files
+executable in the tree, still byte-deterministic) with a regression test.
+Final ZIP: built from a clean worktree of HEAD, byte-identical on rebuild,
+fresh venv from the extracted ZIP, 409/409 passed `-W error` with zero skips
+(live Blender tests running through the ZIP's own shim), server booted from
+the extraction: readiness blender live / openusd live, textured terrain
+generated, a real Cycles render through POST /v1/render/execute verified at
+1920x1080, 404/422 error paths correct, zero server-log errors.
