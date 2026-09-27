@@ -23,6 +23,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          # Real Blender for the live render/export tests. bpy 5.0.1 ships
+          # cp311 wheels only, so the 3.12 leg skips those tests. Isolated
+          # venv: bpy pins numpy<2, the app needs numpy>=2.
+          if [ "${{ matrix.python-version }}" = "3.11" ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+              libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6 libgl1 libegl1
+            python -m venv "$HOME/blender-bpy"
+            "$HOME/blender-bpy/bin/pip" install bpy==5.0.1
+            echo "BLENDER_BPY_PYTHON=$HOME/blender-bpy/bin/python" >> "$GITHUB_ENV"
+            echo "BLENDER_BIN=$PWD/scripts/blender" >> "$GITHUB_ENV"
+            BLENDER_BPY_PYTHON="$HOME/blender-bpy/bin/python" scripts/blender --version
+          fi
 
       - name: Smoke-test app import
         run: python -c "import app.main; assert hasattr(app.main, 'app')"

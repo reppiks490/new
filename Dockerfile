@@ -12,7 +12,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml ./
 COPY app ./app
 COPY config ./config
-RUN pip install --no-cache-dir -e .
+COPY blender_scripts ./blender_scripts
+COPY scripts ./scripts
+# [usd] = OpenUSD (usd-core) for authoritative USD/UsdSkel validation.
+RUN pip install --no-cache-dir -e ".[usd]"
+
+# Blender 5.0.1 as the official `bpy` build, in its own venv (bpy pins
+# numpy<2; this app needs numpy>=2), exposed as `blender` via the CLI shim.
+# Build with --build-arg WITH_BLENDER=0 for a smaller image without it.
+ARG WITH_BLENDER=1
+RUN if [ "$WITH_BLENDER" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6 libgl1 libegl1 \
+      && rm -rf /var/lib/apt/lists/* \
+      && python -m venv /opt/blender-bpy \
+      && /opt/blender-bpy/bin/pip install --no-cache-dir bpy==5.0.1 \
+      && ln -s /app/scripts/blender /usr/local/bin/blender \
+      && blender --version; \
+    fi
 
 RUN mkdir -p /app/workspace
 ENV CHARACTER3D_LEASE_DB=/app/workspace/runtime_leases.db \

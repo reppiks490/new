@@ -269,16 +269,49 @@ Each returns a receipt: `task_id`, the final `status` (`succeeded` /
 the provider returned. Nothing here is a mock; if it says `succeeded`,
 that's a live provider generation.
 
-## 6. Blender-dependent stages
+## 6. Blender and OpenUSD
 
-Repair, high→low baking, and Blender-side export/rig stages need a real
-Blender install and a `BLENDER_BIN` pointing at it (or `blender` on your
-`PATH`). This project has never run those stages live — `GET /v1/runtime/readiness`
-will tell you honestly whether Blender is available on your machine before
-you try. The contracts, receipts, and verification for these stages are
-all implemented and tested; only live execution against a real Blender
-binary is untested territory, because no environment this project has run
-in ever had one.
+Both run live. Blender stages (production export, high→low baking,
+localized repair, Cycles rendering) and authoritative USD validation are
+exercised by the test suite, not just planned.
+
+**OpenUSD** comes with `pip install -e ".[usd]"` (included in `[dev]` and
+the Docker image).
+
+**Blender** can be any real install (`BLENDER_BIN=/path/to/blender`), or
+the official `bpy` 5.0.1 build through the bundled CLI shim, which is
+what the Docker image and CI use. `bpy` needs Python 3.11 and pins
+numpy<2 (this app needs numpy≥2), so it goes in its own venv:
+
+```bash
+python3.11 -m venv /opt/blender-bpy
+/opt/blender-bpy/bin/pip install bpy==5.0.1
+export BLENDER_BIN="$PWD/scripts/blender"      # or: ln -s "$PWD/scripts/blender" /usr/local/bin/blender
+# set BLENDER_BPY_PYTHON if the venv lives somewhere other than /opt/blender-bpy
+blender --version                              # Blender 5.0.1 (bpy module)
+curl http://localhost:8000/v1/runtime/readiness  # blender: live, openusd_pxr: live
+```
+
+**Render for real in Cycles** at any tier up to 16K, PNG or EXR, with the
+output file opened and checked against the requested resolution:
+
+```bash
+curl -X POST http://localhost:8000/v1/render/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_model": "./workspace/highlands.glb",
+    "output_path": "./workspace/highlands_8k.png",
+    "vram_gb": 24, "ram_gb": 64,
+    "quality_mode": "production",
+    "resolution_tier": "8k"
+  }'
+```
+
+The receipt records the compute device actually used. A requested GPU
+backend (OptiX, HIP, oneAPI, Metal) falls back to CPU if it isn't present,
+and the receipt says so. `samples_override` trades quality for time;
+`camera` and `lighting` take azimuth/elevation/focal length and sun
+angle/strength.
 
 ## 7. Where to look next
 
