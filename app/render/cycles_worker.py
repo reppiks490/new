@@ -43,6 +43,36 @@ class CyclesRenderResult(BaseModel):
         return self.returncode == 0 and self.receipt.get("status") == "succeeded" and self.verification.meets_or_exceeds_spec
 
 
+DEFAULT_MICROPOLYGON_BUDGET = 25_000_000
+ASSUMED_FRAME_COVERAGE = 0.8
+
+
+def effective_dicing_rate(job: RenderJobSpec, *, micropolygon_budget: int, override: float | None = None) -> tuple[float, dict]:
+    """Adaptive-subdivision dicing rate in pixels. The quality preset's rate
+    (e.g. 0.75 px for hero) is used unless the micropolygons it would create
+    over the frame exceed the budget -- at 16K a 0.75 px rate means ~190M
+    micropolygons, far past what a CPU box holds -- in which case the rate is
+    raised just enough to fit, and the receipt records that."""
+    frame = job.output.full_width * job.output.full_height * ASSUMED_FRAME_COVERAGE
+    requested = override if override is not None else job.quality.subdivision_dicing_rate
+    floor = (frame / micropolygon_budget) ** 0.5
+    rate = max(requested, floor)
+    return rate, {"requested_px": requested, "budget_floor_px": round(floor, 4), "micropolygon_budget": micropolygon_budget,
+                  "estimated_micropolygons": int(frame / rate ** 2)}
+
+
+def find_displacement_sidecar(source_model: str | Path) -> dict | None:
+    from app.world.textured_terrain import DISPLACEMENT_SCHEMA, displacement_sidecar_paths
+
+    png, meta_path = displacement_sidecar_paths(source_model)
+    if not meta_path.is_file():
+        return None
+    meta = json.loads(meta_path.read_text())
+    if meta.get("schema") != DISPLACEMENT_SCHEMA or not png.is_file():
+        raise ValueError(f"invalid displacement sidecar next to {source_model}")
+    return {"path": str(png.resolve()), "min_m": float(meta["min_m"]), "max_m": float(meta["max_m"])}
+
+
 def compile_cycles_render_manifest(
     job: RenderJobSpec,
     source_model: str | Path,
@@ -51,6 +81,10 @@ def compile_cycles_render_manifest(
     camera: CameraSpec | None = None,
     lighting: LightingSpec | None = None,
     samples_override: int | None = None,
+    use_displacement: bool = True,
+    dicing_rate_override: float | None = None,
+    micropolygon_budget: int = DEFAULT_MICROPOLYGON_BUDGET,
+    max_subdivisions: int = 12,
 ) -> dict:
     out = Path(output_path)
     fmt = _FORMATS.get(out.suffix.lower())
@@ -63,8 +97,16 @@ def compile_cycles_render_manifest(
     quality = job.quality.model_dump()
     if samples_override is not None:
         quality["samples"] = samples_override
+    if dicing_rate_override is not None and dicing_rate_override <= 0:
+        raise ValueError("dicing_rate_override must be > 0")
+    if micropolygon_budget < 1:
+        raise ValueError("micropolygon_budget must be >= 1")
+    displacement = find_displacement_sidecar(source_model) if use_displacement else None
+    rate, dicing = effective_dicing_rate(job, micropolygon_budget=micropolygon_budget, override=dicing_rate_override)
     return {
         "schema": "character3d-cycles-render-v1",
+        "displacement": displacement,
+        "subdivision": {"dicing_rate_px": rate, "max_subdivisions": max_subdivisions, **dicing},
         "source_model": str(Path(source_model).resolve()),
         "output_path": str(out.resolve()),
         "receipt_path": str(out.resolve().with_suffix(out.suffix + ".receipt.json")),
@@ -84,6 +126,9 @@ def run_cycles_render(
     camera: CameraSpec | None = None,
     lighting: LightingSpec | None = None,
     samples_override: int | None = None,
+    use_displacement: bool = True,
+    dicing_rate_override: float | None = None,
+    micropolygon_budget: int = DEFAULT_MICROPOLYGON_BUDGET,
     blender_executable: str | None = None,
     timeout_seconds: int = 6 * 60 * 60,
 ) -> CyclesRenderResult:
@@ -95,6 +140,8 @@ def run_cycles_render(
         raise RuntimeError("Blender is not available (set BLENDER_BIN or put `blender` on PATH)")
     manifest = compile_cycles_render_manifest(
         job, source, output_path, camera=camera, lighting=lighting, samples_override=samples_override,
+        use_displacement=use_displacement, dicing_rate_override=dicing_rate_override,
+        micropolygon_budget=micropolygon_budget,
     )
     out = Path(manifest["output_path"])
     out.parent.mkdir(parents=True, exist_ok=True)

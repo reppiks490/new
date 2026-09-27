@@ -895,7 +895,9 @@ def world_terrain_biome_texture(req: BiomeTextureSynthesisRequest):
 class TexturedTerrainRequest(BaseModel):
     terrain: TerrainSpec
     output_path: str
-    texture_size: int = Field(default=2048, ge=8, le=8192)
+    texture_size: int = Field(default=2048, ge=8, le=16384)
+    # also write <name>.displacement.png/.json for render-time subdivision
+    displacement: bool = True
 
 
 @app.post("/v1/world/terrain/generate-textured")
@@ -903,16 +905,12 @@ def terrain_generate_textured(req: TexturedTerrainRequest):
     from app.world.textured_terrain import export_textured_terrain_glb
 
     try:
-        mesh = export_textured_terrain_glb(req.terrain, req.output_path, texture_size=req.texture_size)
+        result = export_textured_terrain_glb(
+            req.terrain, req.output_path, texture_size=req.texture_size, displacement=req.displacement,
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-    return {
-        "output_path": str(Path(req.output_path)),
-        "vertex_count": len(mesh.vertices),
-        "face_count": len(mesh.faces),
-        "texture_size": req.texture_size,
-        "maps": ["baseColor", "metallicRoughness", "normal"],
-    }
+    return {**result, "maps": ["baseColor", "metallicRoughness", "normal"]}
 
 
 class WorldTileRequest(BaseModel):
@@ -1065,6 +1063,11 @@ class RenderExecuteRequest(BaseModel):
     samples_override: int | None = None
     camera: dict = {}
     lighting: dict = {}
+    # render-time adaptive subdivision + displacement from a
+    # <model>.displacement.json sidecar next to source_model, when present
+    use_displacement: bool = True
+    dicing_rate_px: float | None = None
+    micropolygon_budget: int = 25_000_000
 
 
 @app.post("/v1/render/execute")
@@ -1079,6 +1082,8 @@ def render_execute(req: RenderExecuteRequest):
         result = run_cycles_render(
             job, req.source_model, req.output_path, samples_override=req.samples_override,
             camera=CameraSpec(**req.camera), lighting=LightingSpec(**req.lighting),
+            use_displacement=req.use_displacement, dicing_rate_override=req.dicing_rate_px,
+            micropolygon_budget=req.micropolygon_budget,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

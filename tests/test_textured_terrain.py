@@ -42,7 +42,7 @@ def test_metallic_roughness_channels_follow_gltf_layout():
     assert mr[..., 1].std() > 0  # G = real per-pixel roughness
 
 
-@pytest.mark.parametrize("size", [4, 8193])
+@pytest.mark.parametrize("size", [4, 16385])
 def test_rejects_texture_size_out_of_range(size):
     with pytest.raises(ValueError):
         build_textured_terrain(SPEC, texture_size=size)
@@ -90,3 +90,55 @@ def test_default_terrain_is_not_vertex_scale_noise():
     h = diamond_square_heightmap(TerrainSpec(name="t", size_meters=1000, resolution_power=8, height_scale_meters=200, seed=11))
     lap = np.abs(4 * h[1:-1, 1:-1] - h[:-2, 1:-1] - h[2:, 1:-1] - h[1:-1, :-2] - h[1:-1, 2:]).mean()
     assert lap < 0.03
+
+
+def test_displacement_residual_is_zero_at_vertices_and_cubic_minus_triangle_between():
+    from scipy import ndimage
+
+    from app.world.textured_terrain import displacement_residual
+
+    rng = np.random.default_rng(3)
+    surface = rng.random((9, 9))
+    n = 9
+    size = 8 * (n - 1)  # texel centres never land exactly on vertices; sample the formula directly too
+    res = displacement_residual(surface, size)
+    assert res.shape == (size, size) and res.dtype == np.float32
+    coeffs = ndimage.spline_filter(surface, order=3, mode="nearest")
+    # at the vertices the cubic spline interpolates the samples -> residual 0
+    at_vertices = ndimage.map_coordinates(coeffs, np.mgrid[0:n, 0:n].reshape(2, -1).astype(float), order=3, mode="nearest", prefilter=False)
+    assert np.allclose(at_vertices, surface.reshape(-1), atol=1e-9)
+    # an interior texel in the upper-left triangle of cell (2, 3)
+    r, c = 2 * 8 + 1, 3 * 8 + 2
+    gy, gx = (r + 0.5) / size * (n - 1), (c + 0.5) / size * (n - 1)
+    fy, fx = gy - 2, gx - 3
+    assert fx + fy <= 1
+    linear = surface[2, 3] + fx * (surface[2, 4] - surface[2, 3]) + fy * (surface[3, 3] - surface[2, 3])
+    cubic = ndimage.map_coordinates(coeffs, [[gy], [gx]], order=3, mode="nearest", prefilter=False)[0]
+    assert res[r, c] == pytest.approx(cubic - linear, abs=1e-6)
+
+
+def test_glb_export_writes_a_displacement_sidecar_that_round_trips(tmp_path):
+    import json
+
+    from PIL import Image
+
+    from app.world.textured_terrain import displacement_residual, terrain_surface
+
+    out = tmp_path / "vale.glb"
+    result = export_textured_terrain_glb(SPEC, out, texture_size=64)
+    meta = json.loads((tmp_path / "vale.displacement.json").read_text())
+    assert result["displacement"]["resolution"] == 64 and meta["encoding"] == "png16_linear"
+    with Image.open(tmp_path / "vale.displacement.png") as im:
+        q = np.asarray(im).astype(np.float64)
+    decoded = meta["min_m"] + q / 65535.0 * (meta["max_m"] - meta["min_m"])
+    _, surface = terrain_surface(SPEC)
+    expected = displacement_residual(surface, 64) * SPEC.height_scale_meters
+    step = (meta["max_m"] - meta["min_m"]) / 65535.0
+    assert np.abs(decoded - expected).max() <= step
+    assert meta["max_m"] > 0 > meta["min_m"]  # the cubic surface bulges both ways from the triangles
+
+
+def test_glb_export_without_displacement_writes_no_sidecar(tmp_path):
+    result = export_textured_terrain_glb(SPEC, tmp_path / "flat.glb", texture_size=32, displacement=False)
+    assert result["displacement"] is None
+    assert not (tmp_path / "flat.displacement.png").exists()

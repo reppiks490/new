@@ -243,3 +243,48 @@ def test_character_pipeline_worker_initializes_the_scene_on_this_blender(tmp_pat
     assert receipt["status"] == "scene_initialized"
     assert receipt["render_engine"] in {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"}
     assert set(receipt["collections"]) == {"C3D_BASE", "C3D_HERO", "C3D_GROOM", "C3D_RIG", "C3D_EXPORT"}
+
+
+def test_dicing_rate_is_raised_to_fit_the_micropolygon_budget():
+    from app.render.cycles_worker import effective_dicing_rate
+
+    job16 = compile_render_job(vram_gb=24, ram_gb=16, quality_mode="hero", resolution_tier=RenderResolutionTier.UHD_16K)
+    rate, info = effective_dicing_rate(job16, micropolygon_budget=25_000_000)
+    assert info["requested_px"] == job16.quality.subdivision_dicing_rate
+    assert rate > info["requested_px"] and info["estimated_micropolygons"] <= 25_000_000
+    roomy, _ = effective_dicing_rate(job16, micropolygon_budget=10**12)
+    assert roomy == job16.quality.subdivision_dicing_rate
+    assert effective_dicing_rate(job16, micropolygon_budget=10**12, override=0.5)[0] == 0.5
+
+
+def test_render_manifest_picks_up_the_displacement_sidecar(tmp_path):
+    from app.world.terrain import TerrainSpec
+    from app.world.textured_terrain import export_textured_terrain_glb
+
+    glb = tmp_path / "t.glb"
+    export_textured_terrain_glb(TerrainSpec(name="t", size_meters=50, resolution_power=3, height_scale_meters=10), glb, texture_size=16)
+    m = compile_cycles_render_manifest(_job(), glb, tmp_path / "o.png")
+    assert m["displacement"] and m["displacement"]["path"].endswith("t.displacement.png")
+    assert compile_cycles_render_manifest(_job(), glb, tmp_path / "o.png", use_displacement=False)["displacement"] is None
+    (tmp_path / "t.displacement.json").write_text('{"schema": "something-else"}')
+    with pytest.raises(ValueError):
+        compile_cycles_render_manifest(_job(), glb, tmp_path / "o.png")
+
+
+@blender
+def test_render_applies_displacement_with_adaptive_subdivision(tmp_path):
+    from PIL import Image
+
+    from app.world.terrain import TerrainSpec
+    from app.world.textured_terrain import export_textured_terrain_glb
+
+    glb = tmp_path / "ridge.glb"
+    export_textured_terrain_glb(TerrainSpec(name="r", size_meters=200, resolution_power=4, height_scale_meters=60, seed=4), glb, texture_size=64)
+    on = run_cycles_render(_job(), glb, tmp_path / "on.png", samples_override=2)
+    off = run_cycles_render(_job(), glb, tmp_path / "off.png", samples_override=2, use_displacement=False)
+    assert on.passed and off.passed, (on.receipt, on.stderr_tail)
+    assert on.receipt["displacement"]["applied"] and not off.receipt["displacement"]["applied"]
+    assert on.receipt["displacement"]["dicing_rate_px"] > 0
+    a = np.asarray(Image.open(tmp_path / "on.png").convert("L"), dtype=float)
+    b = np.asarray(Image.open(tmp_path / "off.png").convert("L"), dtype=float)
+    assert np.abs(a - b).mean() > 0.5  # the geometry really changed

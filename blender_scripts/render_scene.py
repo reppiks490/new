@@ -99,6 +99,53 @@ def _sky_world(sun_elevation_deg: float, sun_rotation_deg: float, strength: floa
     return sky.sky_type
 
 
+def _material_output(nt):
+    outputs = [n for n in nt.nodes if n.type == 'OUTPUT_MATERIAL']
+    active = [n for n in outputs if n.is_active_output]
+    return (active or outputs or [nt.nodes.new('ShaderNodeOutputMaterial')])[0]
+
+
+def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
+    """Cycles adaptive subdivision (dices to ~dicing_rate_px on screen) plus
+    true displacement from the exported residual map, so geometry detail
+    scales with the output resolution instead of being fixed by the mesh."""
+    img = bpy.data.images.load(disp['path'])
+    img.colorspace_settings.name = 'Non-Color'
+    span = disp['max_m'] - disp['min_m']
+    scene = bpy.context.scene
+    scene.cycles.dicing_rate = 1.0  # a multiplier on the per-object pixel size set below
+    scene.cycles.max_subdivisions = int(subdivision['max_subdivisions'])
+    materials = set()
+    for obj in meshes:
+        mod = obj.modifiers.new('C3D_AdaptiveSubdivision', 'SUBSURF')
+        mod.subdivision_type = 'SIMPLE'  # displacement supplies the shape; don't shrink-smooth the terrain
+        mod.use_adaptive_subdivision = True
+        mod.adaptive_space = 'PIXEL'
+        mod.adaptive_pixel_size = float(subdivision['dicing_rate_px'])
+        materials.update(s.material for s in obj.material_slots if s.material is not None)
+    for mat in materials:
+        nt = mat.node_tree
+        tex = nt.nodes.new('ShaderNodeTexImage')
+        tex.image = img
+        tex.interpolation = 'Cubic'
+        decode = nt.nodes.new('ShaderNodeMath')
+        decode.operation = 'MULTIPLY_ADD'  # value * span + min -> meters
+        decode.inputs[1].default_value = span
+        decode.inputs[2].default_value = disp['min_m']
+        node = nt.nodes.new('ShaderNodeDisplacement')
+        node.space = 'OBJECT'
+        node.inputs['Midlevel'].default_value = 0.0
+        node.inputs['Scale'].default_value = 1.0
+        nt.links.new(tex.outputs['Color'], decode.inputs[0])
+        nt.links.new(decode.outputs[0], node.inputs['Height'])
+        nt.links.new(node.outputs['Displacement'], _material_output(nt).inputs['Displacement'])
+        mat.displacement_method = 'DISPLACEMENT'  # the normal map still carries the micro-relief
+        mat.max_vertex_displacement = max(abs(disp['min_m']), abs(disp['max_m'])) * 1.01
+    return {'applied': True, 'image': disp['path'], 'range_m': [disp['min_m'], disp['max_m']],
+            'materials': len(materials), 'dicing_rate_px': float(subdivision['dicing_rate_px']),
+            'max_subdivisions': int(subdivision['max_subdivisions'])}
+
+
 def main():
     a = _args()
     manifest = json.loads(Path(a.manifest).read_text())
@@ -134,6 +181,9 @@ def main():
         sun.data.angle = math.radians(0.53)
         sun.rotation_euler = (math.radians(90 - light['sun_elevation_deg']), 0, math.radians(light['sun_rotation_deg'] + 90))
         scene.collection.objects.link(sun)
+
+        disp = manifest.get('displacement')
+        receipt['displacement'] = apply_displacement(meshes, disp, manifest['subdivision']) if disp else {'applied': False}
 
         q = manifest['quality']
         scene.render.engine = 'CYCLES'

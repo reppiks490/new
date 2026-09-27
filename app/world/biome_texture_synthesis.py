@@ -365,17 +365,19 @@ class StreamingPNGWriter:
     _SIGNATURE = b"\x89PNG\r\n\x1a\n"
     _COLOR_TYPES = {1: 0, 3: 2}
 
-    def __init__(self, path: str | Path, width: int, height: int, channels: int, *, compress_level: int = 4):
+    def __init__(self, path: str | Path, width: int, height: int, channels: int, *, compress_level: int = 4, bit_depth: int = 8):
         if channels not in self._COLOR_TYPES:
             raise ValueError("channels must be 1 (grayscale) or 3 (RGB)")
+        if bit_depth not in (8, 16):
+            raise ValueError("bit_depth must be 8 or 16")
         self.path = Path(path)
-        self.width, self.height, self.channels = width, height, channels
+        self.width, self.height, self.channels, self.bit_depth = width, height, channels, bit_depth
         self._rows_written = 0
         self._compressor = zlib.compressobj(compress_level)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "wb")
         self._file.write(self._SIGNATURE)
-        self._chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, self._COLOR_TYPES[channels], 0, 0, 0))
+        self._chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, bit_depth, self._COLOR_TYPES[channels], 0, 0, 0))
 
     def _chunk(self, tag: bytes, data: bytes) -> None:
         self._file.write(struct.pack(">I", len(data)))
@@ -384,15 +386,19 @@ class StreamingPNGWriter:
         self._file.write(struct.pack(">I", zlib.crc32(data, zlib.crc32(tag)) & 0xFFFFFFFF))
 
     def write_rows(self, rows: np.ndarray) -> None:
-        rows = np.ascontiguousarray(rows, dtype=np.uint8).reshape(rows.shape[0], self.width * self.channels)
-        if self._rows_written + rows.shape[0] > self.height:
+        count = rows.shape[0]
+        if self._rows_written + count > self.height:
             raise ValueError("more rows written than the declared image height")
-        scanlines = np.zeros((rows.shape[0], rows.shape[1] + 1), dtype=np.uint8)  # leading 0 = filter "None"
-        scanlines[:, 1:] = rows
+        if self.bit_depth == 16:  # PNG samples are big-endian
+            payload = np.ascontiguousarray(rows, dtype=">u2").reshape(count, self.width * self.channels).view(np.uint8)
+        else:
+            payload = np.ascontiguousarray(rows, dtype=np.uint8).reshape(count, self.width * self.channels)
+        scanlines = np.zeros((count, payload.shape[1] + 1), dtype=np.uint8)  # leading 0 = filter "None"
+        scanlines[:, 1:] = payload
         data = self._compressor.compress(scanlines.tobytes())
         if data:
             self._chunk(b"IDAT", data)
-        self._rows_written += rows.shape[0]
+        self._rows_written += count
 
     def close(self) -> None:
         if self._file.closed:
@@ -419,25 +425,35 @@ def export_biome_texture_maps(
     basecolor_path: str | Path,
     roughness_path: str | Path,
     normal_path: str | Path | None = None,
+    metallic_roughness_path: str | Path | None = None,
     seed: int = 0,
     thresholds: BiomeThresholds | None = None,
     band_rows: int | None = None,
     workers: int | None = None,
 ) -> dict[str, str]:
     """Synthesize and stream the maps to real PNG files with bounded memory.
-    Partial files are removed if generation fails midway."""
+    metallic_roughness_path adds a glTF-packed map (G = roughness,
+    B = metallic = 0, R unused = 255). Partial files are removed if
+    generation fails midway."""
     field = _TerrainTextureField(heightmap, texture_size, seed, thresholds)
     writers: list[StreamingPNGWriter] = []
     try:
         writers.append(StreamingPNGWriter(basecolor_path, texture_size, texture_size, 3))
         writers.append(StreamingPNGWriter(roughness_path, texture_size, texture_size, 1))
+        normal_writer = mr_writer = None
         if normal_path is not None:
-            writers.append(StreamingPNGWriter(normal_path, texture_size, texture_size, 3))
+            normal_writer = StreamingPNGWriter(normal_path, texture_size, texture_size, 3)
+            writers.append(normal_writer)
+        if metallic_roughness_path is not None:
+            mr_writer = StreamingPNGWriter(metallic_roughness_path, texture_size, texture_size, 3)
+            writers.append(mr_writer)
         for basecolor, roughness, normal in _iter_bands(field, band_rows, workers):
             writers[0].write_rows(basecolor)
             writers[1].write_rows(roughness)
-            if normal_path is not None:
-                writers[2].write_rows(normal)
+            if normal_writer is not None:
+                normal_writer.write_rows(normal)
+            if mr_writer is not None:
+                mr_writer.write_rows(np.stack([np.full_like(roughness, 255), roughness, np.zeros_like(roughness)], axis=-1))
         for writer in writers:
             writer.close()
     except BaseException:
@@ -448,4 +464,6 @@ def export_biome_texture_maps(
     result = {"basecolor_path": str(Path(basecolor_path)), "roughness_path": str(Path(roughness_path))}
     if normal_path is not None:
         result["normal_path"] = str(Path(normal_path))
+    if metallic_roughness_path is not None:
+        result["metallic_roughness_path"] = str(Path(metallic_roughness_path))
     return result
