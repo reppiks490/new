@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal
+
 from pydantic import BaseModel, Field, ConfigDict
 
 from app.qa.exact_intersections import ExactIntersectionReport
@@ -16,6 +18,11 @@ class LocalizedRepairContract(BaseModel):
     boundary_rings: int = Field(default=1, ge=0, le=6)
     preserve_vertex_groups: bool = True
     preserve_shape_keys: bool = True
+    # affected_faces come from app.qa.exact_intersections (trimesh triangle
+    # indices). Blender's importers keep quads/ngons and may reorder faces,
+    # so by default the worker re-detects in its own polygon index space;
+    # "blender_polygons" means affected_faces already are Blender indices.
+    face_index_space: Literal["detect_in_blender", "blender_polygons"] = "detect_in_blender"
     blockers: list[str] = Field(default_factory=list)
 
 
@@ -27,6 +34,15 @@ class LocalizedRepairReceipt(BaseModel):
     output_mesh: str | None = None
     affected_faces: int = 0
     created_faces: int = 0
+    contract_face_count: int | None = None
+    detected_faces: int | None = None
+    detected_pairs: int | None = None
+    remaining_intersecting_faces: int | None = None
+    remaining_intersecting_pairs: int | None = None
+    filled_hole_loops: int | None = None
+    open_boundary_chains: int | None = None
+    input_was_closed: bool | None = None
+    boundary_edges_after: int | None = None
     blender_version: str | None = None
     error: str | None = None
 

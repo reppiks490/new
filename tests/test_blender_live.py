@@ -171,3 +171,61 @@ def test_bake_pinned_to_the_old_2cm_reach_is_rejected_by_its_measured_miss_rate(
     assert receipt.hit_mask.miss_fraction > 0.3
     blockers, _ = validate_bake_receipt_and_output(contract, receipt)
     assert any("missed the high-poly" in b for b in blockers)
+
+
+def _repair(tmp_path, source):
+    from app.qa.exact_intersections import detect_exact_self_intersections
+    from app.workers.blender import execute
+    from app.workers.localized_repair import (
+        LocalizedRepairReceipt, build_localized_repair_invocation, compile_localized_repair_contract, write_localized_repair_contract,
+    )
+
+    before = detect_exact_self_intersections(source)
+    out = tmp_path / f"repaired{source.suffix}"
+    contract = compile_localized_repair_contract(before, source, out)
+    assert not contract.blockers, contract.blockers
+    cp = write_localized_repair_contract(contract, tmp_path / "repair_contract.json")
+    proc = execute(build_localized_repair_invocation(find_blender(), cp, "blender_scripts/localized_intersection_repair.py"), timeout_seconds=600)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    receipt = LocalizedRepairReceipt.model_validate_json((tmp_path / "localized_repair_receipt.json").read_text())
+    return before, receipt, detect_exact_self_intersections(out), out
+
+
+@blender
+def test_repair_of_overlapping_closed_shells_removes_intersections_and_stays_closed(tmp_path):
+    import trimesh
+
+    from app.qa.mesh import inspect_mesh
+
+    a = trimesh.creation.icosphere(subdivisions=3)
+    b = trimesh.creation.icosphere(subdivisions=3)
+    b.apply_translation([1.95, 0, 0])
+    source = tmp_path / "shells.glb"
+    trimesh.util.concatenate([a, b]).export(source)
+    before, receipt, after, out = _repair(tmp_path, source)
+    assert before.intersecting_pair_count > 0
+    assert receipt.status == "succeeded" and receipt.input_was_closed
+    assert after.intersecting_pair_count == 0 and receipt.remaining_intersecting_pairs == 0
+    assert receipt.boundary_edges_after == 0 and receipt.filled_hole_loops >= 2
+    assert inspect_mesh(out).watertight
+
+
+@blender
+def test_repair_of_a_quad_mesh_targets_the_right_faces_and_never_caps_open_borders(tmp_path):
+    n = 8
+    lines, faces = [], []
+    for plane in ("xy", "xz"):
+        base = len(lines)
+        for i in range(n + 1):
+            for j in range(n + 1):
+                u, v = -1 + 2 * i / n, -1 + 2 * j / n
+                lines.append((u, v, 0.013) if plane == "xy" else (u, 0.017, v))
+        faces += [(base + i * (n + 1) + j, base + (i + 1) * (n + 1) + j, base + (i + 1) * (n + 1) + j + 1, base + i * (n + 1) + j + 1)
+                  for i in range(n) for j in range(n)]
+    source = tmp_path / "crossing.obj"
+    source.write_text("".join("v %f %f %f\n" % v for v in lines) + "".join("f %d %d %d %d\n" % tuple(x + 1 for x in f) for f in faces))
+    before, receipt, after, _ = _repair(tmp_path, source)
+    assert before.intersecting_pair_count > 0
+    assert receipt.detected_faces == 16  # the two rows of quads along the crossing, in Blender's quad index space
+    assert after.intersecting_pair_count == 0  # independent check, including coplanar overlap
+    assert receipt.created_faces == 0 and receipt.open_boundary_chains > 0  # cut strips are left open, borders never capped

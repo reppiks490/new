@@ -97,6 +97,82 @@ def triangles_intersect(t1: Iterable[Iterable[float]], t2: Iterable[Iterable[flo
     return False, False
 
 
+def _canonical_vertex_ids(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """(n, 3) per-face vertex ids after welding by position. Exported meshes
+    duplicate vertices at UV/normal seams, so index-based adjacency misses
+    neighbours that share an edge or corner in space."""
+    scale = max(float(np.ptp(vertices, axis=0).max()) if len(vertices) else 1.0, 1e-12)
+    keys = np.round(vertices / (scale * 1e-9)).astype(np.int64)
+    _, inverse = np.unique(keys, axis=0, return_inverse=True)
+    return inverse.reshape(-1)[faces]
+
+
+def _in_wedge_2d(u: np.ndarray, w: np.ndarray, d: np.ndarray, eps: float) -> bool:
+    def cross(x, y): return float(x[0] * y[1] - x[1] * y[0])
+    span = cross(u, w)
+    if abs(span) <= eps:
+        return False
+    sign = 1.0 if span > 0 else -1.0
+    return cross(u, d) * sign > eps and cross(d, w) * sign > eps
+
+
+def _shared_vertex_intersect(a: np.ndarray, b: np.ndarray, ia: int, ib: int, eps: float) -> tuple[bool, bool]:
+    """Triangles a, b share exactly one vertex (a[ia] == b[ib]). True only if
+    they overlap somewhere other than that shared point."""
+    v = a[ia]
+    a1, a2 = a[(ia + 1) % 3], a[(ia + 2) % 3]
+    b1, b2 = b[(ib + 1) % 3], b[(ib + 2) % 3]
+    na = np.cross(a1 - v, a2 - v)
+    nb = np.cross(b1 - v, b2 - v)
+    if np.linalg.norm(na) < eps or np.linalg.norm(nb) < eps:
+        return False, False
+    na /= np.linalg.norm(na)
+    nb /= np.linalg.norm(nb)
+    if np.linalg.norm(np.cross(na, nb)) <= 1e-9 and abs(float(np.dot(b1 - v, na))) <= eps and abs(float(np.dot(b2 - v, na))) <= eps:
+        # coplanar: overlap iff the two corner wedges share interior directions
+        keep = [i for i in range(3) if i != int(np.argmax(np.abs(na)))]
+        ua, wa, ub, wb = (x[keep] - v[keep] for x in (a1, a2, b1, b2))
+        bis_a, bis_b = ua / np.linalg.norm(ua) + wa / np.linalg.norm(wa), ub / np.linalg.norm(ub) + wb / np.linalg.norm(wb)
+        e2 = eps * eps
+        hit = (_in_wedge_2d(ua, wa, bis_b, e2) or _in_wedge_2d(ub, wb, bis_a, e2)
+               or any(_in_wedge_2d(ua, wa, d, e2) for d in (ub, wb)) or any(_in_wedge_2d(ub, wb, d, e2) for d in (ua, wa)))
+        return hit, True
+
+    def far_point(p1, p2, plane_n):
+        d1, d2 = float(np.dot(p1 - v, plane_n)), float(np.dot(p2 - v, plane_n))
+        if (d1 > eps and d2 > eps) or (d1 < -eps and d2 < -eps):
+            return None  # triangle meets the other plane only at v
+        if abs(d1 - d2) <= eps:
+            return None
+        return p1 + (p2 - p1) * (d1 / (d1 - d2))
+
+    pa = far_point(a1, a2, nb)
+    pb = far_point(b1, b2, na)
+    if pa is None or pb is None:
+        return False, False
+    da, db = pa - v, pb - v
+    if np.linalg.norm(da) <= eps or np.linalg.norm(db) <= eps:
+        return False, False
+    # Both triangles' traces on the planes' intersection line start at v;
+    # they overlap beyond v only if they point the same way.
+    return float(np.dot(da, db)) > eps * eps, False
+
+
+def _shared_edge_intersect(a: np.ndarray, b: np.ndarray, oa: int, ob: int, eps: float) -> tuple[bool, bool]:
+    """Triangles share an edge; oa/ob index each one's opposite vertex. They
+    overlap only if coplanar and folded onto the same side of the edge."""
+    e0, e1 = a[(oa + 1) % 3], a[(oa + 2) % 3]
+    n = np.cross(e1 - e0, a[oa] - e0)
+    if np.linalg.norm(n) < eps:
+        return False, False
+    n /= np.linalg.norm(n)
+    if abs(float(np.dot(b[ob] - e0, n))) > eps:
+        return False, False
+    side_a = float(np.dot(np.cross(e1 - e0, a[oa] - e0), n))
+    side_b = float(np.dot(np.cross(e1 - e0, b[ob] - e0), n))
+    return side_a * side_b > 0, True
+
+
 def detect_exact_self_intersections(path: str | Path, *, max_pairs: int = 2000) -> ExactIntersectionReport:
     p = Path(path)
     mesh = trimesh.load(p, force="mesh", process=False)
@@ -106,8 +182,9 @@ def detect_exact_self_intersections(path: str | Path, *, max_pairs: int = 2000) 
     n = len(triangles)
     if n == 0:
         return ExactIntersectionReport(path=str(p), face_count=0, tested_pairs=0, intersecting_pair_count=0, intersecting_face_count=0, intersecting_ratio=0)
+    ids = _canonical_vertex_ids(np.asarray(mesh.vertices, dtype=float), np.asarray(mesh.faces))
+    eps = max(float(np.ptp(triangles.reshape(-1, 3), axis=0).max()), 1e-12) * 1e-9
     mins = triangles.min(axis=1); maxs = triangles.max(axis=1)
-    adjacency = {tuple(sorted(map(int, pair))) for pair in np.asarray(mesh.face_adjacency)}
     pairs: list[ExactIntersectionPair] = []
     tested = 0; truncated = False
     chunk = 256
@@ -117,9 +194,18 @@ def detect_exact_self_intersections(path: str | Path, *, max_pairs: int = 2000) 
         rows, cols = np.nonzero(overlap)
         for r, c in zip(rows.tolist(), cols.tolist()):
             a = start+r; b = c
-            if b <= a or (a,b) in adjacency: continue
+            if b <= a: continue
             tested += 1
-            hit, coplanar = triangles_intersect(triangles[a], triangles[b])
+            shared = [(i, j) for i in range(3) for j in range(3) if ids[a][i] == ids[b][j]]
+            if len(shared) >= 3:
+                hit, coplanar = True, True  # duplicate face
+            elif len(shared) == 2:
+                oa = ({0, 1, 2} - {i for i, _ in shared}).pop(); ob = ({0, 1, 2} - {j for _, j in shared}).pop()
+                hit, coplanar = _shared_edge_intersect(triangles[a], triangles[b], oa, ob, eps)
+            elif len(shared) == 1:
+                hit, coplanar = _shared_vertex_intersect(triangles[a], triangles[b], shared[0][0], shared[0][1], eps)
+            else:
+                hit, coplanar = triangles_intersect(triangles[a], triangles[b])
             if hit:
                 pairs.append(ExactIntersectionPair(face_a=a, face_b=b, coplanar=coplanar))
                 if len(pairs) >= max_pairs:

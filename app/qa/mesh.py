@@ -55,6 +55,15 @@ def _degenerate_count(mesh: trimesh.Trimesh) -> int:
         return int(np.count_nonzero(repeated))
 
 
+def _closed_surface(mesh: trimesh.Trimesh) -> bool:
+    """Watertightness of the surface, not of the vertex buffer: exporters
+    duplicate vertices at UV/normal seams, which makes an unwelded closed
+    mesh look open at every seam."""
+    welded = mesh.copy()
+    welded.merge_vertices(merge_tex=True, merge_norm=True)
+    return bool(welded.is_watertight)
+
+
 def _uv_ratio(mesh: trimesh.Trimesh) -> float:
     uv = getattr(getattr(mesh, "visual", None), "uv", None)
     if uv is None:
@@ -79,7 +88,7 @@ def inspect_mesh(path: str | Path) -> MeshQAReport:
     vertex_count = sum(len(m.vertices) for m in meshes)
     degenerate = sum(_degenerate_count(m) for m in meshes)
     area = float(sum(float(m.area) for m in meshes))
-    watertight = all(bool(m.is_watertight) for m in meshes)
+    watertight = all(_closed_surface(m) for m in meshes)
     winding = all(bool(m.is_winding_consistent) for m in meshes)
     bodies = sum(max(1, int(m.body_count)) for m in meshes)
     uv_weighted = sum(_uv_ratio(m) * max(len(m.vertices), 1) for m in meshes) / max(vertex_count, 1)

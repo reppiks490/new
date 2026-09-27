@@ -59,6 +59,8 @@ def evaluate_repair_acceptance(
         )
     if after_mesh.degenerate_face_ratio > before_mesh.degenerate_face_ratio + 1e-12:
         warnings.append("Repair increased the degenerate-face ratio.")
+    if before_mesh.watertight and not after_mesh.watertight:
+        blockers.append("Repair opened a previously closed surface (holes left unfilled).")
     if policy.require_consistent_winding and not after_mesh.winding_consistent:
         blockers.append("Repaired mesh has inconsistent winding.")
 
