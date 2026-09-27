@@ -8,7 +8,7 @@ from app.main import app
 
 def test_v09_health():
     c=TestClient(app)
-    assert c.get('/health').json()['version']=='1.4.0'
+    assert c.get('/health').json()['version']=='1.5.0'
 
 
 def test_production_chain_auth_is_server_derived(monkeypatch):

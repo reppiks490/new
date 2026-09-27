@@ -13,7 +13,7 @@ from app.providers.router import RouteContext, compile_provider_routing
 from app.render.output_resolution import RenderResolutionTier
 from app.core.axes import UpAxis, export_mesh_from_zup, load_mesh_zup
 
-app = FastAPI(title="Character3D Masterbuild", version="1.4.0")
+app = FastAPI(title="Character3D Masterbuild", version="1.5.0")
 PACK_REGISTRY_PATH = Path(__file__).parents[1] / "config" / "packs" / "registry.yaml"
 
 
@@ -35,7 +35,7 @@ class PackRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.4.0"}
+    return {"ok": True, "version": "1.5.0"}
 
 
 @app.get("/v1/hardware")
@@ -669,7 +669,7 @@ def build_fingerprint():
     root = _source_root()
     return {
         'root': str(root),
-        'fingerprint': compile_build_fingerprint(root, metadata={'project': 'character3d-masterbuild', 'version': '1.4.0'}),
+        'fingerprint': compile_build_fingerprint(root, metadata={'project': 'character3d-masterbuild', 'version': '1.5.0'}),
         'environment': capture_runtime_environment(),
     }
 

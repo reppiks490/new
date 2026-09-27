@@ -6,7 +6,7 @@ from app.main import app
 
 def test_v08_health_and_bake_contract():
     c=TestClient(app)
-    assert c.get('/health').json()['version']=='1.4.0'
+    assert c.get('/health').json()['version']=='1.5.0'
     r=c.post('/v1/blender/high-low-bake-contract',json={'high_mesh':'hi.glb','low_mesh':'lo.glb','cage_mesh':'cage.glb','extreme':True})
     assert r.status_code==200 and not r.json()['blockers'] and r.json()['resolution']==8192
 

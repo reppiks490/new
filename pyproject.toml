@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "character3d-masterbuild"
-version = "1.4.0"
+version = "1.5.0"
 description = "Local-first high-fidelity prompt-driven 3D character, scene, and world production pipeline"
 requires-python = ">=3.11"
 dependencies = [

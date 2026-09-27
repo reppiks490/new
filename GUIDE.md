@@ -65,7 +65,7 @@ Check it's alive:
 
 ```bash
 curl http://localhost:8000/health
-# {"ok":true,"version":"1.4.0"}
+# {"ok":true,"version":"1.5.0"}
 
 curl http://localhost:8000/v1/runtime/readiness
 ```
