@@ -101,3 +101,73 @@ def test_blender_shim_script_errors_exit_nonzero(tmp_path):
     ok.write_text("import sys, bpy\nassert sys.argv[sys.argv.index('--') + 1:] == ['--x', '1']\n")
     cp = subprocess.run([find_blender(), "--background", "--python", str(ok), "--", "--x", "1"], capture_output=True, text=True, timeout=300)
     assert cp.returncode == 0, cp.stderr[-1000:]
+
+
+def _bake_pair(tmp_path, *, split_tiles=False):
+    import trimesh
+
+    from app.core.axes import export_mesh_from_zup
+    from app.world.terrain import TerrainSpec, diamond_square_heightmap, heightmap_to_mesh, terrain_uvs
+
+    hm = diamond_square_heightmap(TerrainSpec(name="b", size_meters=20, resolution_power=6, height_scale_meters=4, roughness=0.7, seed=9))
+    high = heightmap_to_mesh(hm, size_meters=20, height_scale_meters=4)
+    low_hm = hm[::8, ::8]
+    low = heightmap_to_mesh(low_hm, size_meters=20, height_scale_meters=4)
+    uv = terrain_uvs(low_hm.shape[0])
+    if split_tiles:
+        # per-corner UVs; faces on the +X half move to UDIM tile 1002
+        faces = low.faces
+        corners = low.vertices[faces.reshape(-1)]
+        corner_uv = uv[faces.reshape(-1)].copy()
+        right = np.repeat(low.vertices[faces].mean(axis=1)[:, 0] > 10, 3)
+        corner_uv[right, 0] += 1.0
+        low = trimesh.Trimesh(vertices=corners, faces=np.arange(len(corners)).reshape(-1, 3), process=False)
+        uv = corner_uv
+    low.visual = trimesh.visual.TextureVisuals(uv=uv)
+    export_mesh_from_zup(high, tmp_path / "high.glb")
+    export_mesh_from_zup(low, tmp_path / "low.glb")
+    return tmp_path / "high.glb", tmp_path / "low.glb"
+
+
+def _run_bake(tmp_path, contract):
+    from app.workers.blender import execute
+    from app.workers.high_low_bake import build_high_low_bake_invocation, load_bake_receipt, write_bake_contract
+
+    cp = write_bake_contract(contract, tmp_path / "contract.json")
+    proc = execute(build_high_low_bake_invocation(find_blender(), cp, tmp_path, "blender_scripts/high_low_udim_bake.py"), timeout_seconds=900)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    return load_bake_receipt(tmp_path / "high_low_bake_receipt.json")
+
+
+@blender
+def test_bake_measures_reach_hits_the_surface_and_flags_empty_udim_tiles(tmp_path):
+    from app.qa.bake_output_verification import validate_bake_receipt_and_output
+    from app.workers.bake_contract import compile_high_low_bake_contract
+
+    high, low = _bake_pair(tmp_path, split_tiles=True)
+    contract = compile_high_low_bake_contract(high, low, udim_tiles=[1001, 1002, 1003], resolution=2048, bake_samples=2)
+    receipt = _run_bake(tmp_path, contract)
+    assert receipt.status == "succeeded"
+    assert receipt.ray["auto_ray_distance"] and receipt.ray["max_ray_distance"] > 0.02
+    assert receipt.uv_tiles == [1001, 1002]
+    assert receipt.uncovered_contract_tiles == [1003]
+    assert receipt.hit_mask.miss_fraction < contract.max_miss_fraction
+    normal = next(c for c in receipt.channels if c.channel == "normal")
+    assert sorted(normal.tile_filepaths) == [1001, 1002, 1003]
+    blockers, report = validate_bake_receipt_and_output(contract, receipt)
+    assert report is not None and report.passed  # every tile file is real and full-size
+    assert blockers and all("1003" in b for b in blockers)  # ...but the empty tile is called out
+
+
+@blender
+def test_bake_pinned_to_the_old_2cm_reach_is_rejected_by_its_measured_miss_rate(tmp_path):
+    from app.qa.bake_output_verification import validate_bake_receipt_and_output
+    from app.workers.bake_contract import compile_high_low_bake_contract
+
+    high, low = _bake_pair(tmp_path)
+    contract = compile_high_low_bake_contract(high, low, udim_tiles=[1001], resolution=2048, bake_samples=2,
+                                              ray_distance=0.02, cage_extrusion=0.0)
+    receipt = _run_bake(tmp_path, contract)
+    assert receipt.hit_mask.miss_fraction > 0.3
+    blockers, _ = validate_bake_receipt_and_output(contract, receipt)
+    assert any("missed the high-poly" in b for b in blockers)

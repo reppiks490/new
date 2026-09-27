@@ -22,6 +22,20 @@ class BakeChannelReceipt(BaseModel):
     # (see app/qa/bake_output_verification.py::validate_bake_receipt_and_output).
     tile_filepaths: dict[int, str] = Field(default_factory=dict)
     reason: str | None = None
+    bit_depth: int | None = None
+    samples: int | None = None
+
+
+class HitMaskTile(BaseModel):
+    hit_texels: int
+    miss_texels: int
+    miss_fraction: float | None = None
+
+
+class HitMaskReport(BaseModel):
+    resolution: int
+    per_tile: dict[int, HitMaskTile] = Field(default_factory=dict)
+    miss_fraction: float | None = None
 
 
 class HighLowBakeReceipt(BaseModel):
@@ -31,6 +45,16 @@ class HighLowBakeReceipt(BaseModel):
     channels: list[BakeChannelReceipt] = Field(default_factory=list)
     blender_version: str | None = None
     error: str | None = None
+    # v2 worker evidence (absent on v1 receipts): measured high/low surface
+    # deviation, the ray settings derived from it, which UDIM tiles the
+    # low-poly UVs actually occupy, and the measured ray miss rate.
+    deviation: dict | None = None
+    ray: dict | None = None
+    ao_distance: float | None = None
+    uv_tiles: list[int] | None = None
+    uncovered_contract_tiles: list[int] = Field(default_factory=list)
+    uv_outside_contract_tiles: list[int] = Field(default_factory=list)
+    hit_mask: HitMaskReport | None = None
 
     @property
     def executed_channels(self) -> set[str]:
@@ -93,4 +117,19 @@ def validate_bake_receipt(
         blockers.append("Required bake channels were not executed: " + ", ".join(missing))
     if contract.blockers:
         blockers.append("Bake contract contains blockers: " + "; ".join(contract.blockers))
+    if receipt.uncovered_contract_tiles:
+        blockers.append(
+            f"UDIM tile(s) {receipt.uncovered_contract_tiles} contain no low-poly UV islands; "
+            "their baked images are empty."
+        )
+    if receipt.uv_outside_contract_tiles:
+        blockers.append(
+            f"Low-poly UVs occupy UDIM tile(s) {receipt.uv_outside_contract_tiles} that the contract does not bake."
+        )
+    mask = receipt.hit_mask
+    if mask is not None and mask.miss_fraction is not None and mask.miss_fraction > contract.max_miss_fraction:
+        blockers.append(
+            f"{mask.miss_fraction:.1%} of UV-covered texels missed the high-poly (limit "
+            f"{contract.max_miss_fraction:.1%}); increase ray_distance/cage_extrusion or supply a cage."
+        )
     return blockers

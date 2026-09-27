@@ -43,9 +43,24 @@ class BakeSetVerificationReport(BaseModel):
         return not self.blockers and not self.missing and self.passed_count == self.expected_count
 
 
+def _image_dimensions(p: Path) -> tuple[int, int]:
+    # Bakes are written as OpenEXR (float precision), which PIL cannot open.
+    from app.render.output_verification import EXR_MAGIC, exr_dimensions
+    import struct
+
+    with open(p, "rb") as fh:
+        magic = fh.read(4)
+    if magic == struct.pack("<i", EXR_MAGIC):
+        return exr_dimensions(p)
+    report = inspect_texture(p)
+    return report.width, report.height
+
+
 def verify_bake_output_set(
     contract: HighLowBakeContract,
     resolved_paths: dict[tuple[str, int], str],
+    *,
+    channels: set[str] | None = None,
 ) -> BakeSetVerificationReport:
     """Verify every (channel, UDIM tile) a bake contract requires actually
     exists on disk as a real image at the expected resolution, is non-empty,
@@ -60,7 +75,8 @@ def verify_bake_output_set(
     (reusing app/providers/provenance.py's real SHA-256), rather than
     trusting a claim.
     """
-    expected_keys = [(ch.name, tile) for ch in contract.channels for tile in contract.udim_tiles]
+    names = [ch.name for ch in contract.channels if channels is None or ch.name in channels]
+    expected_keys = [(name, tile) for name in names for tile in contract.udim_tiles]
     files: list[BakeFileVerification] = []
     missing: list[str] = []
     blockers: list[str] = []
@@ -87,8 +103,7 @@ def verify_bake_output_set(
             file_blockers.append("File exists but is zero bytes.")
         else:
             try:
-                texture_report = inspect_texture(p)
-                width, height = texture_report.width, texture_report.height
+                width, height = _image_dimensions(p)
                 meets = max(width, height) >= contract.resolution
                 if not meets:
                     file_blockers.append(
@@ -158,7 +173,10 @@ def validate_bake_receipt_and_output(
         elif ch.filepath and single_tile:
             resolved_paths[(ch.channel, contract.udim_tiles[0])] = ch.filepath
 
-    output_report = verify_bake_output_set(contract, resolved_paths)
+    # Verify what is required plus anything the receipt claims it produced;
+    # channels no worker can bake (and that nobody required) aren't demanded.
+    expected_channels = set(require_channels or {"normal", "ambient_occlusion"}) | receipt.executed_channels
+    output_report = verify_bake_output_set(contract, resolved_paths, channels=expected_channels)
     if not output_report.passed:
         blockers = list(blockers)
         blockers.extend(f"Bake output verification: {b}" for b in output_report.blockers)
