@@ -214,6 +214,90 @@ def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
             'max_subdivisions': int(subdivision['max_subdivisions'])}
 
 
+def add_surface_detail(terrain) -> dict:
+    """Breaks the 'painted' look: textures stop at their texel size (12 cm
+    at 16K over 2 km), so up close the ground reads as smooth paint. Adds
+    render-time detail below that scale -- multiplicative color variation
+    (+/-12 %) and bump from noise at ~2 m, 25 cm and 3 cm -- on top of
+    the baked maps, in object space, so it's seamless and costs no memory."""
+    done = 0
+    for slot in terrain.material_slots:
+        mat = slot.material
+        if mat is None or not mat.node_tree:
+            continue
+        nt = mat.node_tree
+        bsdf = next((n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+        if bsdf is None:
+            continue
+        coord = nt.nodes.new('ShaderNodeTexCoord')
+        base_link = bsdf.inputs['Base Color'].links[0] if bsdf.inputs['Base Color'].links else None
+        if base_link is not None:
+            var = nt.nodes.new('ShaderNodeTexNoise')
+            var.inputs['Scale'].default_value = 0.45
+            var.inputs['Detail'].default_value = 8.0
+            ramp = nt.nodes.new('ShaderNodeMapRange')
+            ramp.inputs['To Min'].default_value = 0.88
+            ramp.inputs['To Max'].default_value = 1.12
+            mul = nt.nodes.new('ShaderNodeMix')
+            mul.data_type = 'RGBA'
+            mul.blend_type = 'MULTIPLY'
+            mul.inputs['Factor'].default_value = 1.0
+            nt.links.new(coord.outputs['Object'], var.inputs['Vector'])
+            nt.links.new(var.outputs['Fac'], ramp.inputs['Value'])
+            nt.links.new(base_link.from_socket, mul.inputs[6])
+            nt.links.new(ramp.outputs['Result'], mul.inputs[7])
+            nt.links.new(mul.outputs[2], bsdf.inputs['Base Color'])
+        normal_in = bsdf.inputs['Normal'].links[0].from_socket if bsdf.inputs['Normal'].links else None
+        prev = normal_in
+        for scale, strength, dist in ((0.5, 0.25, 0.3), (4.0, 0.35, 0.05), (33.0, 0.3, 0.01)):
+            noise = nt.nodes.new('ShaderNodeTexNoise')
+            noise.inputs['Scale'].default_value = scale
+            noise.inputs['Detail'].default_value = 6.0
+            noise.inputs['Roughness'].default_value = 0.6
+            bump = nt.nodes.new('ShaderNodeBump')
+            bump.inputs['Strength'].default_value = strength
+            bump.inputs['Distance'].default_value = dist
+            nt.links.new(coord.outputs['Object'], noise.inputs['Vector'])
+            nt.links.new(noise.outputs['Fac'], bump.inputs['Height'])
+            if prev is not None:
+                nt.links.new(prev, bump.inputs['Normal'])
+            prev = bump.outputs['Normal']
+        nt.links.new(prev, bsdf.inputs['Normal'])
+        done += 1
+    return {'materials': done}
+
+
+def add_atmosphere(terrain, disp: dict, density: float) -> dict:
+    """Aerial perspective: a thin scattering + absorbing volume over the
+    terrain (mean free path 1/density m), so distance hazes and blues the
+    way real air does instead of staying painted-crisp to the horizon."""
+    size_m = float(disp['base_grid']['size_meters'])
+    top = float(disp.get('max_height_m', 0.0)) + size_m * 0.5
+    pad = size_m * 1.0  # the sky beyond stays clear: Nishita already carries the far atmosphere
+    mesh = bpy.data.meshes.new('C3D_Atmosphere')
+    lo, hi = (-pad, -pad, -50.0), (size_m + pad, size_m + pad, top)
+    v = [(x, y, z) for z in (lo[2], hi[2]) for y in (lo[1], hi[1]) for x in (lo[0], hi[0])]
+    f = [(0, 2, 3, 1), (4, 5, 7, 6), (0, 1, 5, 4), (2, 6, 7, 3), (0, 4, 6, 2), (1, 3, 7, 5)]
+    mesh.from_pydata(v, [], f)
+    obj = bpy.data.objects.new('C3D_Atmosphere', mesh)
+    obj.matrix_world = terrain.matrix_world
+    bpy.context.scene.collection.objects.link(obj)
+    mat = bpy.data.materials.new('C3D_Atmosphere')
+    nt = mat.node_tree
+    for n in list(nt.nodes):
+        if n.type != 'OUTPUT_MATERIAL':
+            nt.nodes.remove(n)
+    vol = nt.nodes.new('ShaderNodeVolumePrincipled')
+    vol.inputs['Color'].default_value = (0.62, 0.74, 0.95, 1)  # Rayleigh-ish: scatters blue
+    vol.inputs['Density'].default_value = density
+    vol.inputs['Anisotropy'].default_value = 0.6  # forward-scattering haze glows toward the sun
+    vol.inputs['Absorption Color'].default_value = (0.85, 0.9, 1.0, 1)
+    nt.links.new(vol.outputs['Volume'], _material_output(nt).inputs['Volume'])
+    mesh.materials.append(mat)
+    bpy.context.scene.cycles.volume_max_steps = 256
+    return {'applied': True, 'density_per_m': density, 'mean_free_path_m': round(1.0 / density)}
+
+
 def add_water(terrain, disp: dict) -> dict:
     """A real water surface over the flattened (painted) sea: clear,
     refractive (IOR 1.333) and reflective, with a two-octave wave normal, so
@@ -255,6 +339,24 @@ def add_water(terrain, disp: dict) -> dict:
     nt.links.new(prev.outputs['Normal'], bsdf.inputs['Normal'])
     mesh.materials.append(mat)
     return {'applied': True, 'level_m': round(z, 3)}
+
+
+def _strip_to_raw(png: Path, strip: dict) -> dict:
+    """Re-read this strip's PNG (encoded values, no color transform) and
+    save top-down uint16 RGB rows for the stitcher -- which then needs no
+    16-bit PNG decoder of its own."""
+    import numpy as np
+
+    img = bpy.data.images.load(str(png))
+    img.colorspace_settings.name = 'Non-Color'
+    w, h = img.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    rows = px.reshape(h, w, 4)[::-1, :, :3]
+    raw = Path(strip['raw_path'])
+    np.save(raw, np.round(np.clip(rows, 0.0, 1.0) * 65535.0).astype(np.uint16))
+    bpy.data.images.remove(img)
+    return {'rows': h, 'width': w, 'raw_path': str(raw), 'y0': strip['y0'], 'y1': strip['y1']}
 
 
 def main():
@@ -317,6 +419,9 @@ def main():
         if disp and disp.get('base_grid') and manifest.get('water', True):
             terrain = next(o for o in bpy.context.scene.objects if o.type == 'MESH' and 'C3D_AdaptiveSubdivision' in o.modifiers)
             receipt['water'] = add_water(terrain, disp)
+            receipt['surface_detail'] = add_surface_detail(terrain)
+            if manifest.get('atmosphere_density_per_m'):
+                receipt['atmosphere'] = add_atmosphere(terrain, disp, float(manifest['atmosphere_density_per_m']))
 
         q = manifest['quality']
         scene.render.engine = 'CYCLES'
@@ -354,9 +459,21 @@ def main():
             settings.color_mode = 'RGB'
             settings.color_depth = '16' if int(o['bit_depth']) >= 16 else '8'
         scene.render.filepath = manifest['output_path']
+        strip = manifest.get('strip')
+        if strip:
+            # rows [y0, y1) counted from the top; Blender's border is
+            # fractional and counted from the bottom
+            H = scene.render.resolution_y
+            scene.render.use_border = True
+            scene.render.use_crop_to_border = True
+            scene.render.border_min_x, scene.render.border_max_x = 0.0, 1.0
+            scene.render.border_min_y = 1.0 - strip['y1'] / H
+            scene.render.border_max_y = 1.0 - strip['y0'] / H
 
         started = time.time()
         bpy.ops.render.render(write_still=True)
+        if strip:
+            receipt['strip'] = _strip_to_raw(Path(manifest['output_path']), strip)
         receipt.update({
             'status': 'succeeded', 'render_seconds': round(time.time() - started, 2),
             'device_requested': q['device'], 'device_used': backend, 'samples': scene.cycles.samples,

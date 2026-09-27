@@ -18,7 +18,8 @@ class RenderResolutionTier(str, Enum):
     QHD = "2k"
     UHD_4K = "4k"
     UHD_8K = "8k"
-    UHD_16K = "16k"  # exceeds 8K -- this project's ceiling tier
+    UHD_16K = "16k"  # exceeds 8K
+    UHD_32K = "32k"  # rendered in horizontal strips (app/render/cycles_worker.py)
 
 
 RESOLUTIONS: dict[RenderResolutionTier, tuple[int, int]] = {
@@ -27,6 +28,7 @@ RESOLUTIONS: dict[RenderResolutionTier, tuple[int, int]] = {
     RenderResolutionTier.UHD_4K: (3840, 2160),
     RenderResolutionTier.UHD_8K: (7680, 4320),
     RenderResolutionTier.UHD_16K: (15360, 8640),
+    RenderResolutionTier.UHD_32K: (30720, 17280),
 }
 
 

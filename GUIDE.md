@@ -348,6 +348,29 @@ kept dicing near and behind it to 4096 cuts per quad. Off-screen dicing is
 coarsened ×64, and persistent data is off for stills. Low-camera 1080p on
 the 33.5M-triangle, 16K-textured island with trees now peaks at 10.2 GB.
 
+**32K (strip rendering).** `"resolution_tier": "32k"` (30720×17280, 531M
+pixels). One float frame buffer at that size is 8.5 GB, so any output above
+`strip_pixel_limit` (default 7680×4320, the largest frame proven on 16 GB)
+renders as horizontal strips, one Blender process each. Every strip uses
+the same camera, so dicing and sampling match, and each carries 32 extra
+rows either side for the denoiser, which the stitcher drops. The stitcher
+streams the core rows into one 16-bit PNG and never holds the whole image.
+The live test renders one frame both ways: it matches the single pass
+(mean error < 0.5/255, no seam rows). PNG only for strips.
+
+**Realism layers** (terrain with a base-grid sidecar):
+- real water surface: refractive, IOR 1.333, wave normals, so it
+  reflects the shore and trees
+- render-time surface detail below the texel size: ±12% color variation and
+  bump at ~2 m / 25 cm / 3 cm, so close-ups stop reading as paint
+- aerial perspective: `lighting.atmosphere_density_per_m`, default 1.5e-4
+  (6.7 km mean free path, 0 turns it off)
+- golden-hour sun, and AgX Medium High Contrast
+
+What would add the most realism next is photo-scanned PBR ground
+materials and a real HDRI sky. This environment's network policy blocks
+the free CC0 sources (Poly Haven, ambientCG).
+
 The receipt records the compute device actually used. A requested GPU
 backend (OptiX, HIP, oneAPI, Metal) falls back to CPU if it isn't present,
 and the receipt says so. `samples_override` trades quality for time;

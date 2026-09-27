@@ -321,3 +321,38 @@ def test_render_scatters_see_through_3d_trees_and_leaves_no_stray_files(tmp_path
     assert v["effective_triangles"] > v["unique_tree_triangles"]
     # packed textures are unpacked into the job's own folder, never the CWD
     assert {p.name for p in set(tmp_path.iterdir()) - before} <= {"v.png", "v.png.manifest.json", "v.png.receipt.json"}
+
+
+def test_plan_strips_covers_every_row_once_with_overlap():
+    from app.render.cycles_worker import STRIP_OVERLAP_ROWS, plan_strips
+
+    strips = plan_strips(17280, 30720)
+    assert len(strips) == 16 and strips[0][0] == 0 and strips[-1][1] == 17280
+    assert all(a[1] == b[0] for a, b in zip(strips, strips[1:]))
+    assert strips[1][2] == strips[1][0] - STRIP_OVERLAP_ROWS and strips[0][2] == 0
+    assert plan_strips(1080, 1920) == [(0, 1080, 0, 1080)]
+
+
+@blender
+def test_strip_render_is_pixel_identical_to_a_single_pass(tmp_path):
+    from app.world.terrain import TerrainSpec
+    from app.world.textured_terrain import export_textured_terrain_glb
+    from app.render.cycles_worker import plan_strips
+
+    glb = tmp_path / "s.glb"
+    export_textured_terrain_glb(TerrainSpec(name="s", size_meters=200, resolution_power=4, height_scale_meters=40, seed=2), glb, texture_size=64)
+    job = _job(width=240, height=136, bit_depth=8)
+    job.quality.denoise = False
+    kw = dict(samples_override=2)
+    one = run_cycles_render(job, glb, tmp_path / "one.png", **kw)
+    many = run_cycles_render(job, glb, tmp_path / "many.png", strip_pixel_limit=240 * 40, **kw)
+    assert one.passed and many.passed, (many.receipt, many.stderr_tail)
+    assert len(many.receipt["strips"]) == 4
+    from PIL import Image
+    a = np.asarray(Image.open(tmp_path / "one.png").convert("RGB"), dtype=int)
+    b = np.asarray(Image.open(tmp_path / "many.png").convert("RGB"), dtype=int)
+    d = np.abs(a - b).mean(axis=(1, 2))  # per row; 8-bit output is dithered, so not bit-exact
+    assert a.shape == b.shape and np.abs(a - b).max() <= 3 and d.mean() < 0.5
+    seams = [c0 for c0, *_ in plan_strips(136, 240, 240 * 40)[1:]]
+    assert max(d[y - 1:y + 1].max() for y in seams) <= d.max() and d[seams].mean() < 1.0  # no visible seam
+    assert not list(tmp_path.glob("many.strip*"))
