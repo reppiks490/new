@@ -27,8 +27,8 @@ class CameraSpec(BaseModel):
 
 
 class LightingSpec(BaseModel):
-    sun_elevation_deg: float = Field(default=28.0, ge=-5, le=90)
-    sun_rotation_deg: float = 135.0
+    sun_elevation_deg: float = Field(default=16.0, ge=-5, le=90)
+    sun_rotation_deg: float = 200.0  # low raking light: relief and canopy read in 3D
     sun_strength: float = Field(default=3.0, ge=0)  # tuned on real renders: 0% clipped
     sky_strength: float = Field(default=0.15, ge=0)  # 4.0/0.6 clipped 5.1% of pixels
 
@@ -37,8 +37,8 @@ class VegetationSpec(BaseModel):
     """Instanced 3D trees scattered from the terrain's vegetation sidecar.
     Leaves are individual translucent cards, so canopies have real gaps."""
     enabled: bool = True
-    forest_density_per_m2: float = Field(default=4 / 30, ge=0, le=1)
-    plains_density_per_m2: float = Field(default=4 / 400, ge=0, le=1)
+    forest_density_per_m2: float = Field(default=1 / 30, ge=0, le=1)
+    plains_density_per_m2: float = Field(default=1 / 400, ge=0, le=1)
     seed: int = 7
 
 
@@ -99,6 +99,7 @@ def find_displacement_sidecar(source_model: str | Path) -> dict | None:
         raise ValueError(f"invalid displacement sidecar next to {source_model}")
     return {
         "path": str(png.resolve()), "resolution": int(meta["resolution"]), "min_m": float(meta["min_m"]), "max_m": float(meta["max_m"]),
+        "water_level_m": meta.get("water_level_m"),
         "vegetation_path": str(meta_path.with_name(meta["vegetation"]["image"]).resolve()) if meta.get("vegetation") else None,
         "base_grid": {"heights_path": str(heights.resolve()), "vertices_per_side": int(base["vertices_per_side"]),
                       "size_meters": float(base["size_meters"])},

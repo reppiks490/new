@@ -248,6 +248,8 @@ def export_textured_terrain_glb(
             "heights_file": base_path.name, "vertices_per_side": int(surface[::stride, ::stride].shape[0]),
             "stride": stride, "size_meters": spec.size_meters,
         })
+        if flatten_water:
+            meta["water_level_m"] = float((thresholds or BiomeThresholds()).water_level * spec.height_scale_meters)
         heightmap, _ = terrain_surface(spec, thresholds, flatten_water=flatten_water)
         veg_size = min(texture_size, MAX_VEGETATION_SIZE)
         veg = synthesize_vegetation_density(heightmap, size=veg_size, seed=spec.seed, thresholds=thresholds)

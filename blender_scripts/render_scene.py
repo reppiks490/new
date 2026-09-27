@@ -214,6 +214,49 @@ def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
             'max_subdivisions': int(subdivision['max_subdivisions'])}
 
 
+def add_water(terrain, disp: dict) -> dict:
+    """A real water surface over the flattened (painted) sea: clear,
+    refractive (IOR 1.333) and reflective, with a two-octave wave normal, so
+    the painted depth colors read through it as the bed and the sky and
+    shore reflect. Sits 5 cm above the flattened level to avoid z-fighting."""
+    import numpy as np
+
+    level = disp.get('water_level_m')
+    if level is None:  # older sidecars: the flattened sea is the base grid minimum
+        level = float(np.load(disp['base_grid']['heights_path']).min())
+    size_m = float(disp['base_grid']['size_meters'])
+    mesh = bpy.data.meshes.new('C3D_Water')
+    z = level + 0.05
+    mesh.from_pydata([(0, 0, z), (size_m, 0, z), (size_m, size_m, z), (0, size_m, z)], [], [(0, 1, 2, 3)])
+    obj = bpy.data.objects.new('C3D_Water', mesh)
+    obj.matrix_world = terrain.matrix_world
+    bpy.context.scene.collection.objects.link(obj)
+    mat = bpy.data.materials.new('C3D_Water')
+    nt = mat.node_tree
+    bsdf = nt.nodes.get('Principled BSDF') or nt.nodes.new('ShaderNodeBsdfPrincipled')
+    bsdf.inputs['Base Color'].default_value = (0.75, 0.9, 0.92, 1)
+    bsdf.inputs['Roughness'].default_value = 0.02
+    bsdf.inputs['IOR'].default_value = 1.333
+    bsdf.inputs['Transmission Weight'].default_value = 1.0
+    coord = nt.nodes.new('ShaderNodeTexCoord')
+    bumps, prev = [], None
+    for scale, strength in ((0.08, 0.35), (0.9, 0.12)):  # swell (~12 m) + chop (~1 m)
+        noise = nt.nodes.new('ShaderNodeTexNoise')
+        noise.inputs['Scale'].default_value = scale
+        noise.inputs['Detail'].default_value = 6.0
+        bump = nt.nodes.new('ShaderNodeBump')
+        bump.inputs['Strength'].default_value = strength
+        bump.inputs['Distance'].default_value = 0.2
+        nt.links.new(coord.outputs['Object'], noise.inputs['Vector'])
+        nt.links.new(noise.outputs['Fac'], bump.inputs['Height'])
+        if prev is not None:
+            nt.links.new(prev.outputs['Normal'], bump.inputs['Normal'])
+        prev = bump
+    nt.links.new(prev.outputs['Normal'], bsdf.inputs['Normal'])
+    mesh.materials.append(mat)
+    return {'applied': True, 'level_m': round(z, 3)}
+
+
 def main():
     a = _args()
     manifest = json.loads(Path(a.manifest).read_text())
@@ -267,10 +310,13 @@ def main():
         if veg and disp:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
             from vegetation import scatter_vegetation
-            terrain = next(o for o in bpy.context.scene.objects if o.type == 'MESH' and o.modifiers)
+            terrain = next(o for o in bpy.context.scene.objects if o.type == 'MESH' and 'C3D_AdaptiveSubdivision' in o.modifiers)
             receipt['vegetation'] = scatter_vegetation(terrain, disp, veg, seed=int(veg.get('seed', 7)))
         else:
             receipt['vegetation'] = {'applied': False}
+        if disp and disp.get('base_grid') and manifest.get('water', True):
+            terrain = next(o for o in bpy.context.scene.objects if o.type == 'MESH' and 'C3D_AdaptiveSubdivision' in o.modifiers)
+            receipt['water'] = add_water(terrain, disp)
 
         q = manifest['quality']
         scene.render.engine = 'CYCLES'
@@ -286,6 +332,14 @@ def main():
         scene.render.use_persistent_data = False
         receipt['persistent_data_requested'] = bool(q['use_persistent_data'])
         scene.view_settings.view_transform = 'AgX' if 'AgX' in [v.identifier for v in type(scene.view_settings).bl_rna.properties['view_transform'].enum_items] else 'Filmic'
+        # the look enum is filled dynamically (lists only NONE when read), so assign
+        for look in ('AgX - Medium High Contrast', 'Medium High Contrast'):
+            try:
+                scene.view_settings.look = look
+                break
+            except TypeError:
+                continue
+        receipt['look'] = scene.view_settings.look
 
         o = manifest['output']
         scene.render.resolution_x = int(o['width']) + 2 * int(o['overscan_px'])
