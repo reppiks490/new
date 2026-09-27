@@ -37,8 +37,8 @@ class VegetationSpec(BaseModel):
     """Instanced 3D trees scattered from the terrain's vegetation sidecar.
     Leaves are individual translucent cards, so canopies have real gaps."""
     enabled: bool = True
-    forest_density_per_m2: float = Field(default=1 / 30, ge=0, le=1)
-    plains_density_per_m2: float = Field(default=1 / 400, ge=0, le=1)
+    forest_density_per_m2: float = Field(default=4 / 30, ge=0, le=1)
+    plains_density_per_m2: float = Field(default=4 / 400, ge=0, le=1)
     seed: int = 7
 
 

@@ -331,9 +331,10 @@ the same biome weights as the ground textures. The renderer scatters
 procedural conifers and broadleaf trees from it with geometry-node
 instancing, and places each one on the displaced surface. Leaves are
 individual translucent cards, so canopies have real gaps and light
-passes through them. Measured on a 2 km island: 62,902 trees, ~210M
-instanced triangles, +0.3 GB. Tune with `"vegetation": {"forest_density_per_m2":
-0.033, "plains_density_per_m2": 0.0025, "seed": 7}` or turn it off with
+passes through them. Each species has 12 distinct meshes. Measured on a
+2 km island: 250,873 trees, ~3.3 billion instanced triangles (314K unique),
++0.7 GB. Tune with `"vegetation": {"forest_density_per_m2": 0.133,
+"plains_density_per_m2": 0.01, "seed": 7}` or turn it off with
 `{"enabled": false}`.
 
 **Memory on big terrain.** Terrain now goes up to `resolution_power` 12

@@ -17,6 +17,12 @@ import bpy
 import numpy as np
 
 
+# 4x leaves at half the edge length: same canopy coverage, finer silhouette
+# and more, smaller gaps. Instanced, so this costs unique geometry only.
+LEAF_DETAIL = 4
+VARIANTS = 12  # distinct meshes per species; repetition is invisible at 16K
+
+
 def _leaf_material(name: str, base: tuple[float, float, float]):
     mat = bpy.data.materials.new(name)
     nt = mat.node_tree
@@ -91,10 +97,10 @@ def build_conifer(name, seed, bark, leaves):
         for k in range(7):
             a = 2 * math.pi * (k / 7 + rng.uniform(-0.05, 0.05)) + i * 0.7
             d = np.array([math.cos(a), math.sin(a), -0.25])
-            for s in np.linspace(0.15, 1.0, 9):
+            for s in np.linspace(0.15, 1.0, 9 * LEAF_DETAIL):
                 p = np.array([0, 0, zf]) + d * reach * s + rng.normal(scale=0.012, size=3)
                 if rng.random() < 0.85:  # gaps: the canopy stays see-through
-                    _leaf(bm, p, 0.045, rng)
+                    _leaf(bm, p, 0.045 / LEAF_DETAIL ** 0.5, rng)
     mesh = bpy.data.meshes.new(name)
     bm.to_mesh(mesh)
     bm.free()
@@ -120,10 +126,10 @@ def build_broadleaf(name, seed, bark, leaves):
         tips.append(tip)
     tips.append(np.array([0, 0, 0.9]))
     for tip in tips:
-        for _ in range(420):
+        for _ in range(420 * LEAF_DETAIL):
             offset = rng.normal(size=3) * np.array([0.13, 0.13, 0.1])
             if np.linalg.norm(offset / np.array([0.13, 0.13, 0.1])) < 2.2:
-                _leaf(bm, tip + offset, 0.05, rng)
+                _leaf(bm, tip + offset, 0.05 / LEAF_DETAIL ** 0.5, rng)
     mesh = bpy.data.meshes.new(name)
     bm.to_mesh(mesh)
     bm.free()
@@ -230,8 +236,8 @@ def _scatter_group(name, terrain, veg_img, disp, channel, density, collection, h
 def scatter_vegetation(terrain, disp: dict, veg: dict, seed: int = 7) -> dict:
     veg_img = bpy.data.images.load(veg['path'])
     veg_img.colorspace_settings.name = 'Non-Color'
-    conifers, t1 = _tree_collection('conifer', 3, seed)
-    broadleaves, t2 = _tree_collection('broadleaf', 3, seed)
+    conifers, t1 = _tree_collection('conifer', VARIANTS, seed)
+    broadleaves, t2 = _tree_collection('broadleaf', VARIANTS, seed)
     holder_mesh = bpy.data.meshes.new('C3D_Vegetation')
     holder = bpy.data.objects.new('C3D_Vegetation', holder_mesh)
     bpy.context.scene.collection.objects.link(holder)
@@ -255,6 +261,6 @@ def scatter_vegetation(terrain, disp: dict, veg: dict, seed: int = 7) -> dict:
     mod.node_group = join_tree
     depsgraph = bpy.context.evaluated_depsgraph_get()
     instances = sum(1 for inst in depsgraph.object_instances if inst.is_instance and inst.parent and inst.parent.name == holder.name)
-    tris_per_variant = (t1 + t2) / 6
+    tris_per_variant = (t1 + t2) / (2 * VARIANTS)
     return {'instances': instances, 'unique_tree_triangles': t1 + t2,
             'effective_triangles': int(instances * tris_per_variant)}
