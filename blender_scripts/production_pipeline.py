@@ -61,8 +61,17 @@ def _export(target: dict):
     return str(path)
 
 
+def _start_clean_scene():
+    # Blender's startup scene carries a default cube/camera/light that would
+    # otherwise be exported (and baked) alongside the real asset. A .blend
+    # passed on the command line is the intended scene and is kept.
+    if not bpy.data.filepath:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
+
 def main():
     a=_args(); mp=Path(a.manifest).resolve(); manifest=json.loads(mp.read_text())
+    _start_clean_scene()
     receipt={'schema':'character3d-blender-production-receipt-v1','blender_version':bpy.app.version_string,'stages':[],'status':'running'}
     out=Path(manifest['workspace'])/'blender_production_receipt.json'; out.parent.mkdir(parents=True,exist_ok=True)
     try:

@@ -1052,6 +1052,48 @@ def render_output_verify(req: RenderOutputVerifyRequest):
     return verify_render_output(spec, req.output_path)
 
 
+class RenderExecuteRequest(BaseModel):
+    source_model: str
+    output_path: str
+    vram_gb: float
+    ram_gb: float
+    gpu_vendor: str = "nvidia"
+    quality_mode: str = "hero"
+    resolution_tier: RenderResolutionTier = RenderResolutionTier.UHD_8K
+    overscan_px: int = 0
+    bit_depth: int = 16
+    samples_override: int | None = None
+    camera: dict = {}
+    lighting: dict = {}
+
+
+@app.post("/v1/render/execute")
+def render_execute(req: RenderExecuteRequest):
+    from app.render.cycles_worker import CameraSpec, LightingSpec, run_cycles_render
+
+    try:
+        job = compile_render_job(
+            vram_gb=req.vram_gb, ram_gb=req.ram_gb, gpu_vendor=req.gpu_vendor, quality_mode=req.quality_mode,
+            resolution_tier=req.resolution_tier, overscan_px=req.overscan_px, bit_depth=req.bit_depth,
+        )
+        result = run_cycles_render(
+            job, req.source_model, req.output_path, samples_override=req.samples_override,
+            camera=CameraSpec(**req.camera), lighting=LightingSpec(**req.lighting),
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return {
+        "passed": result.passed,
+        "job": job.model_dump(mode="json"),
+        "receipt": result.receipt,
+        "verification": result.verification.model_dump(),
+    }
+
+
 class TopologyRequest(BaseModel):
     path: str
 

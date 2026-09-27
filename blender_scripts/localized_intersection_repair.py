@@ -62,8 +62,17 @@ def _repair(obj, face_indices, rings):
     return len(selected), len(created)
 
 
+def _start_clean_scene():
+    # Blender's startup scene carries a default cube/camera/light that would
+    # otherwise be exported (and baked) alongside the real asset. A .blend
+    # passed on the command line is the intended scene and is kept.
+    if not bpy.data.filepath:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
+
 def main():
     a=_args(); contract=json.loads(Path(a.contract).read_text()); receipt={'schema':'character3d-localized-repair-receipt-v1','status':'running','source_mesh':contract['source_mesh'],'blender_version':bpy.app.version_string}
+    _start_clean_scene()
     out=Path(a.contract).with_name('localized_repair_receipt.json')
     try:
         if contract.get('blockers'): raise RuntimeError('; '.join(contract['blockers']))

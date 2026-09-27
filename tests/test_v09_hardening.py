@@ -65,7 +65,7 @@ def test_animated_groom_aggregates_failed_frames(tmp_path: Path):
 
 def test_usdskel_static_checks_joint_arrays(tmp_path: Path):
     p=tmp_path/'rig.usda'
-    p.write_text('''#usda 1.0\ndef SkelRoot "Character" {\n def Skeleton "Skeleton" {\n  uniform token[] joints = ["root", "root/spine"]\n  uniform matrix4d[] bindTransforms = [(1), (1)]\n  uniform matrix4d[] restTransforms = [(1), (1)]\n }\n rel skel:skeleton = </Character/Skeleton>\n int[] primvars:skel:jointIndices = [0,1]\n}\n''')
+    p.write_text('''#usda 1.0\ndef SkelRoot "Character" (\n prepend apiSchemas = ["SkelBindingAPI"]\n) {\n def Skeleton "Skeleton" {\n  uniform token[] joints = ["root", "root/spine"]\n  uniform matrix4d[] bindTransforms = [((1,0,0,0),(0,1,0,0),(0,0,1,0),(0,0,0,1)), ((1,0,0,0),(0,1,0,0),(0,0,1,0),(0,0,0,1))]\n  uniform matrix4d[] restTransforms = [((1,0,0,0),(0,1,0,0),(0,0,1,0),(0,0,0,1)), ((1,0,0,0),(0,1,0,0),(0,0,1,0),(0,0,0,1))]\n }\n rel skel:skeleton = </Character/Skeleton>\n int[] primvars:skel:jointIndices = [0,1]\n}\n''')
     r=validate_usdskel(p)
     assert r.parsed and r.skeletons_with_joints==1 and r.influence_prim_count>=1 and r.passed and r.production_ready
 

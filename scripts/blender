@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""`blender` command-line shim over the official `bpy` module (pip install bpy).
+
+The bpy wheel is Blender itself -- same engine, Cycles, importers/exporters --
+built as a Python library, installable where the Blender binary download is
+not. This implements the subset of Blender's CLI the workers use:
+
+    blender --version
+    blender --background [--disable-autoexec|--enable-autoexec] [file.blend]
+            --python script.py [--python-exit-code N] -- worker args...
+
+`sys.argv` is presented to the script exactly as real Blender does (the full
+command line, worker args after `--`). Unlike stock Blender, a script
+exception exits non-zero by default (1) -- a failed stage never looks like a
+success. Point the project at it with BLENDER_BIN=/path/to/scripts/blender or
+by putting it on PATH.
+"""
+from __future__ import annotations
+
+import os
+import runpy
+import sys
+import traceback
+
+# bpy pins numpy<2 while this project requires numpy>=2, so -- like real
+# Blender with its bundled Python -- bpy lives in its own interpreter.
+# BLENDER_BPY_PYTHON names it (default: /opt/blender-bpy/bin/python).
+_BPY_PYTHON = os.environ.get("BLENDER_BPY_PYTHON", "/opt/blender-bpy/bin/python")
+# (venv interpreters symlink to the system binary, so compare by marker, not path)
+if os.environ.get("_BLENDER_SHIM_REEXEC") != "1":
+    if not os.path.exists(_BPY_PYTHON):
+        sys.exit(f"blender shim: bpy interpreter not found at {_BPY_PYTHON} (set BLENDER_BPY_PYTHON)")
+    os.environ["_BLENDER_SHIM_REEXEC"] = "1"
+    os.execv(_BPY_PYTHON, [_BPY_PYTHON, os.path.abspath(__file__), *sys.argv[1:]])
+
+
+def main(argv: list[str]) -> int:
+    if "--" in argv:
+        split = argv.index("--")
+        own, passthrough = argv[:split], argv[split:]
+    else:
+        own, passthrough = argv, []
+
+    blend_file = None
+    script = None
+    exit_code_on_error = 1
+    autoexec = False
+    i = 0
+    while i < len(own):
+        arg = own[i]
+        if arg in ("--version", "-v"):
+            import bpy
+
+            print(f"Blender {bpy.app.version_string} (bpy module)")
+            return 0
+        if arg in ("--background", "-b"):
+            pass
+        elif arg in ("--disable-autoexec", "-Y"):
+            autoexec = False
+        elif arg in ("--enable-autoexec", "-y"):
+            autoexec = True
+        elif arg in ("--python", "-P"):
+            i += 1
+            script = own[i]
+        elif arg == "--python-exit-code":
+            i += 1
+            exit_code_on_error = int(own[i])
+        elif arg.endswith(".blend") and not arg.startswith("-"):
+            blend_file = arg
+        else:
+            print(f"blender shim: unsupported argument {arg!r}", file=sys.stderr)
+            return 2
+        i += 1
+
+    import bpy
+
+    if blend_file:
+        bpy.ops.wm.open_mainfile(filepath=blend_file, load_ui=False, use_scripts=autoexec)
+    if script is None:
+        return 0
+    sys.argv = [sys.argv[0], *argv]
+    try:
+        runpy.run_path(script, run_name="__main__")
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        return code
+    except BaseException:
+        traceback.print_exc()
+        return exit_code_on_error
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -60,7 +60,7 @@ def test_groom_collision_detects_inside_points(tmp_path: Path):
 
 
 def test_usdskel_static_validator(tmp_path: Path):
-    p=tmp_path/'rig.usda'; p.write_text('#usda 1.0\ndef SkelRoot "Character" {\n def Skeleton "Skeleton" {}\n rel skel:skeleton = </Character/Skeleton>\n}\n')
+    p=tmp_path/'rig.usda'; p.write_text('#usda 1.0\ndef SkelRoot "Character" (\n prepend apiSchemas = ["SkelBindingAPI"]\n) {\n def Skeleton "Skeleton" {}\n rel skel:skeleton = </Character/Skeleton>\n}\n')
     r=validate_usdskel(p)
     assert r.parsed and r.passed and r.skeleton_count==1
 

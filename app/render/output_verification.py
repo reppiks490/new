@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -7,6 +8,34 @@ from pydantic import BaseModel, Field
 from app.providers.provenance import sha256_file
 from app.qa.textures import inspect_texture
 from app.render.output_resolution import RenderOutputSpec
+
+
+EXR_MAGIC = 20000630
+
+
+def exr_dimensions(path: str | Path) -> tuple[int, int]:
+    """Width/height of a scanline or tiled OpenEXR from its header's
+    required `dataWindow` (box2i: xMin, yMin, xMax, yMax, inclusive). PIL
+    cannot read EXR, which is the hero/extreme render format."""
+    with open(path, "rb") as f:
+        head = f.read(8)
+        if len(head) < 8 or struct.unpack("<i", head[:4])[0] != EXR_MAGIC:
+            raise ValueError("not an OpenEXR file")
+        if struct.unpack("<I", head[4:8])[0] & 0x1000:
+            raise ValueError("multi-part OpenEXR is not supported by this reader")
+        while True:
+            name = b""
+            while (c := f.read(1)) not in (b"\0", b""):
+                name += c
+            if not name:
+                raise ValueError("OpenEXR header has no dataWindow attribute")
+            while f.read(1) not in (b"\0", b""):
+                pass
+            size = struct.unpack("<i", f.read(4))[0]
+            value = f.read(size)
+            if name == b"dataWindow":
+                x0, y0, x1, y1 = struct.unpack("<4i", value)
+                return x1 - x0 + 1, y1 - y0 + 1
 
 
 class RenderOutputVerification(BaseModel):
@@ -48,8 +77,13 @@ def verify_render_output(spec: RenderOutputSpec, path: str | Path) -> RenderOutp
         blockers.append("File exists but is zero bytes.")
     else:
         try:
-            texture_report = inspect_texture(p)
-            width, height = texture_report.width, texture_report.height
+            with open(p, "rb") as fh:
+                magic = fh.read(4)
+            if magic == struct.pack("<i", EXR_MAGIC):
+                width, height = exr_dimensions(p)
+            else:
+                texture_report = inspect_texture(p)
+                width, height = texture_report.width, texture_report.height
             meets = width >= spec.full_width and height >= spec.full_height
             if not meets:
                 blockers.append(

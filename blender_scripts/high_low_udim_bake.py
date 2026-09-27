@@ -60,8 +60,17 @@ def bake_selected_to_active(highs, low, channel: str, image, workspace: Path, ma
     return {'channel':channel,'executed':True,'filepath':image.filepath_raw}
 
 
+def _start_clean_scene():
+    # Blender's startup scene carries a default cube/camera/light that would
+    # otherwise be exported (and baked) alongside the real asset. A .blend
+    # passed on the command line is the intended scene and is kept.
+    if not bpy.data.filepath:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
+
 def main():
     a=args(); contract=json.loads(Path(a.contract).read_text()); workspace=Path(a.workspace); receipt={'schema':'character3d-high-low-bake-receipt-v1','status':'running','channels':[],'blender_version':bpy.app.version_string}
+    _start_clean_scene()
     out=workspace/'high_low_bake_receipt.json'; out.parent.mkdir(parents=True,exist_ok=True)
     try:
         if contract.get('blockers'): raise RuntimeError('bake contract has blockers: '+ '; '.join(contract['blockers']))

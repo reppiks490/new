@@ -34,8 +34,21 @@ def _static_array(text: str, attr_name: str) -> list[str]:
     quoted = re.findall(r'"([^"]+)"', body)
     if quoted:
         return quoted
-    # Matrix arrays and numeric arrays: count top-level parenthesized matrices/tokens conservatively.
-    mats = re.findall(r"\([^\n]*?\)", body)
+    # Matrix arrays: one element per TOP-LEVEL parenthesized group -- a
+    # matrix4d is ((r0),(r1),(r2),(r3)), so matching innermost parens would
+    # count every row as its own matrix.
+    mats: list[str] = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(body):
+        if ch == '(':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ')' and depth:
+            depth -= 1
+            if depth == 0:
+                mats.append(body[start:i + 1])
     if mats:
         return mats
     return [x.strip() for x in body.split(',') if x.strip()]
@@ -96,8 +109,16 @@ def validate_usdskel(path: str | Path) -> UsdSkelValidationReport:
     if not p.is_file():
         raise FileNotFoundError(p)
     try:
-        from pxr import Usd, UsdSkel  # type: ignore
-        stage = Usd.Stage.Open(str(p))
+        from pxr import Tf, Usd, UsdSkel  # type: ignore
+        try:
+            stage = Usd.Stage.Open(str(p))
+        except Tf.ErrorException as exc:
+            # Authoritative parse failure (e.g. malformed matrix4d values) is
+            # a validation result, not a crash.
+            first = str(exc).strip().splitlines()
+            detail = next((ln.strip() for ln in first if ln.strip()), 'unknown parse error')
+            return UsdSkelValidationReport(path=str(p), backend='pxr', parsed=False, passed=False, authoritative=True,
+                                           blockers=[f'OpenUSD failed to parse the file: {detail}'])
         if not stage:
             return UsdSkelValidationReport(path=str(p), backend='pxr', parsed=False, passed=False, blockers=['USD stage failed to open.'])
         roots = skeletons = anims = bindings = anim_sources = with_joints = matching = influence_prims = invalid_joint_paths = 0
@@ -163,7 +184,15 @@ def validate_usdskel(path: str | Path) -> UsdSkelValidationReport:
         blockers: list[str] = []
         if roots == 0: blockers.append('No SkelRoot prim found.')
         if skeletons == 0: blockers.append('No Skeleton prim found.')
-        if bindings == 0: blockers.append('No authored skeleton bindings found.')
+        if bindings == 0:
+            unapplied = [str(pr.GetPath()) for pr in stage.Traverse()
+                         if pr.GetRelationship('skel:skeleton') and pr.GetRelationship('skel:skeleton').HasAuthoredTargets()
+                         and not pr.HasAPI(UsdSkel.BindingAPI)]
+            if unapplied:
+                blockers.append('skel:skeleton is authored without SkelBindingAPI applied (UsdSkel ignores such bindings) on: '
+                                + ', '.join(unapplied) + ' -- add prepend apiSchemas = ["SkelBindingAPI"].')
+            else:
+                blockers.append('No authored skeleton bindings found.')
         production_issues=[]
         if skeletons and with_joints < skeletons: production_issues.append('One or more Skeleton prims have no joints array.')
         if skeletons and matching < skeletons: production_issues.append('One or more Skeleton prims have mismatched joints/bindTransforms/restTransforms lengths.')
