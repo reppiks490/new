@@ -25,7 +25,8 @@ from PIL import Image
 from scipy import ndimage
 
 import app.qa.textures  # noqa: F401  (raises PIL's pixel guard to cover 16K textures)
-from app.core.axes import export_mesh_from_zup
+from app.core.axes import ZUP_TO_YUP, export_mesh_from_zup
+from app.exports.glb_writer import write_textured_glb
 from app.world.biome_texture_synthesis import MIN_TEXTURE_SIZE, StreamingPNGWriter, export_biome_texture_maps
 from app.world.biomes import BiomeThresholds
 from app.world.terrain import TerrainSpec, diamond_square_heightmap, heightmap_to_mesh, terrain_uvs
@@ -143,6 +144,30 @@ def _build(spec, *, texture_size, thresholds, flatten_water, maps_dir: Path, loa
     return mesh
 
 
+def _write_glb_streaming(spec, out: Path, *, texture_size, thresholds, flatten_water, maps_dir: Path) -> tuple[int, int]:
+    """Maps stream to PNG files, then the GLB streams those bytes in
+    unchanged (app/exports/glb_writer.py): memory stays at about the
+    geometry, never a decoded 16K image."""
+    heightmap, surface = terrain_surface(spec, thresholds, flatten_water=flatten_water)
+    mesh = heightmap_to_mesh(surface, size_meters=spec.size_meters, height_scale_meters=spec.height_scale_meters)
+    paths = export_biome_texture_maps(
+        heightmap, texture_size=texture_size, seed=spec.seed, thresholds=thresholds,
+        basecolor_path=maps_dir / "basecolor.png", roughness_path=maps_dir / "roughness.png",
+        normal_path=maps_dir / "normal.png", metallic_roughness_path=maps_dir / "metallic_roughness.png",
+    )
+    rot = ZUP_TO_YUP[:3, :3].T  # to glTF's Y-up
+    uv = terrain_uvs(heightmap.shape[0])
+    uv_gltf = np.stack([uv[:, 0], 1.0 - uv[:, 1]], axis=1)  # glTF UV origin is top-left
+    write_textured_glb(
+        out,
+        positions=mesh.vertices @ rot, normals=mesh.vertex_normals @ rot, texcoords=uv_gltf, indices=mesh.faces,
+        base_color_png=paths["basecolor_path"], normal_png=paths["normal_path"],
+        metallic_roughness_png=paths["metallic_roughness_path"],
+        material_name=f"{spec.name}_terrain", mesh_name=spec.name,
+    )
+    return len(mesh.vertices), len(mesh.faces)
+
+
 def build_textured_terrain(
     spec: TerrainSpec,
     *,
@@ -172,14 +197,21 @@ def export_textured_terrain_glb(
     out = Path(output_path)
     if out.suffix.lower() not in (".glb", ".gltf"):
         raise ValueError("textured terrain output must be .glb or .gltf")
+    if not MIN_TEXTURE_SIZE <= texture_size <= MAX_EMBEDDED_TEXTURE_SIZE:
+        raise ValueError(f"texture_size must be between {MIN_TEXTURE_SIZE} and {MAX_EMBEDDED_TEXTURE_SIZE} for an embedded-texture GLB")
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out.parent) as d:
-        mesh = _build(spec, texture_size=texture_size, thresholds=thresholds, flatten_water=flatten_water,
-                      maps_dir=Path(d), load_into_memory=False)
-        export_mesh_from_zup(mesh, out)
-        result = {"output_path": str(out), "vertex_count": len(mesh.vertices), "face_count": len(mesh.faces),
+        if out.suffix.lower() == ".gltf":
+            mesh = _build(spec, texture_size=texture_size, thresholds=thresholds, flatten_water=flatten_water,
+                          maps_dir=Path(d), load_into_memory=False)
+            export_mesh_from_zup(mesh, out)
+            counts = len(mesh.vertices), len(mesh.faces)
+            del mesh
+        else:
+            counts = _write_glb_streaming(spec, out, texture_size=texture_size, thresholds=thresholds,
+                                          flatten_water=flatten_water, maps_dir=Path(d))
+        result = {"output_path": str(out), "vertex_count": counts[0], "face_count": counts[1],
                   "texture_size": texture_size, "displacement": None}
-        del mesh
 
     if displacement:
         _, surface = terrain_surface(spec, thresholds, flatten_water=flatten_water)

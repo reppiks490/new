@@ -132,9 +132,12 @@ Writes a real, deterministic, biome-colored terrain mesh to
 grid dimensions, tile size, world seed) plus `tile_x`/`tile_z`/`lod` and
 writes that one tile's mesh to `output_path`.
 
-**Fully textured terrain in one file** — geometry, UVs, and embedded
+**Fully textured terrain in one file**: geometry, UVs, and embedded
 baseColor / metallicRoughness / normal maps, ready for any glTF viewer or
-engine (texture up to 8192):
+engine (textures up to 16384). It also writes `<name>.displacement.png`
+and `<name>.displacement.json` next to the GLB, which the Cycles renderer
+uses automatically (see section 6). Pass `"displacement": false` to skip
+them:
 
 ```bash
 curl -X POST http://localhost:8000/v1/world/terrain/generate-textured \
@@ -306,6 +309,18 @@ curl -X POST http://localhost:8000/v1/render/execute \
     "resolution_tier": "8k"
   }'
 ```
+
+**16K and geometry detail.** If a `<model>.displacement.json` sidecar sits
+next to `source_model` (textured terrain writes one), the render uses
+Cycles adaptive subdivision plus true displacement. The mesh is diced to
+about `dicing_rate_px` pixels on screen and pushed onto a smooth cubic
+surface, so ridgelines and outlines stay smooth at 8K/16K instead of
+showing the mesh's triangles. The dicing rate comes from the quality preset
+(hero 0.75 px) but is raised just enough to keep the micropolygon count
+under `micropolygon_budget` (default 25M, sized for about 16 GB of RAM).
+At 16K that gives about 2 px. On a bigger machine, raise the budget or set
+`dicing_rate_px` directly. `"use_displacement": false` turns this off. The
+receipt records the rate requested, the rate used, and why.
 
 The receipt records the compute device actually used. A requested GPU
 backend (OptiX, HIP, oneAPI, Metal) falls back to CPU if it isn't present,
