@@ -375,4 +375,6 @@ def test_character_lookdev_assigns_roles_and_renders(tmp_path):
     assert r["status"] == "succeeded" and (tmp_path / "h.png").is_file()
     roles = set(r["roles"].values())
     assert {"skin", "cornea", "eye", "cloth"} <= roles
-    assert r["rig"]["lights"] == ["key", "fill", "rim"]
+    assert r["rig"]["lights"] == ["key", "fill", "rim", "bg"]
+    assert r["face_landmarks"]["scale"] > 0  # eyes found -> landmarks computed
+    assert r["groom"]["lashes"] > 0 and r["groom"]["brow_strands"] >= 0

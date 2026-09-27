@@ -60,8 +60,9 @@ def skin_albedo(melanin: float, hemoglobin: float) -> tuple[float, float, float]
     hb_abs = (0.05, 0.60, 0.45)    # oxy-hemoglobin: strong green, weak red
     base = (0.85, 0.72, 0.62)      # bloodless, melanin-free dermis
     out = []
+    mel_od = 2.5 * melanin + 4.0 * melanin ** 2  # optical depth: fair skin barely absorbs, dark skin a lot
     for b, m, h in zip(base, mel_abs, hb_abs):
-        out.append(b * math.exp(-6.0 * melanin * m) * math.exp(-1.2 * hemoglobin * h))
+        out.append(b * math.exp(-mel_od * m) * math.exp(-1.2 * hemoglobin * h))
     return tuple(out)
 
 
@@ -117,7 +118,113 @@ def _remap(nt, sock, lo, hi):
     return m.outputs['Result']
 
 
-def apply_skin(mat, cfg: dict, unit_scale: float):
+def face_landmarks(skin_obj, eye_objs, unit_scale: float) -> dict | None:
+    """Eye centre/separation, nose tip and mouth line from the mesh itself.
+    Head faces -Y. The mouth is the most recessed point of the midline
+    profile 2.2-4.2 cm (scaled) below the nose tip -- between the lip
+    bulges -- which held on MakeHuman's base and its targets."""
+    import numpy as np
+
+    if not eye_objs:
+        return None
+    u = 1.0 / unit_scale
+    eyes = np.array([list(e.matrix_world.translation) for e in eye_objs])
+    e = eyes.mean(0)
+    sep = float(np.linalg.norm(eyes[0] - eyes[-1])) or 0.062 * u
+    hs = sep / (0.062 * u)
+    mw = np.array(skin_obj.matrix_world)
+    co = np.empty(len(skin_obj.data.vertices) * 3); skin_obj.data.vertices.foreach_get('co', co)
+    co = co.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+    mid = co[np.abs(co[:, 0] - e[0]) < 0.004 * u * hs]
+    step = 0.002 * u * hs
+    zs = np.arange(e[2] - 0.12 * u * hs, e[2] + 0.005 * u * hs, step)
+    prof = np.array([mid[(mid[:, 2] >= z) & (mid[:, 2] < z + step), 1].min() if ((mid[:, 2] >= z) & (mid[:, 2] < z + step)).any() else np.nan for z in zs])
+    band = (zs > e[2] - 0.07 * u * hs) & (zs < e[2] - 0.015 * u * hs) & ~np.isnan(prof)
+    if not band.any():
+        return None
+    ni = np.where(band)[0][np.nanargmin(prof[band])]
+    nose_z, nose_y = zs[ni] + step / 2, prof[ni]
+    mb = (zs < nose_z - 0.022 * u * hs) & (zs > nose_z - 0.042 * u * hs) & ~np.isnan(prof)
+    if mb.any():
+        mi = np.where(mb)[0][np.nanargmax(prof[mb])]
+        mouth_z, mouth_y = zs[mi] + step / 2, prof[mi]
+    else:
+        mouth_z, mouth_y = nose_z - 0.032 * u * hs, nose_y + 0.01 * u * hs
+    return {'eye_centre': e.tolist(), 'eyes': eyes.tolist(), 'scale': hs, 'nose': [e[0], nose_y, nose_z],
+            'mouth': [e[0], mouth_y, mouth_z]}
+
+
+def _ellipsoid_mask(nt, coord_out, center, radii, soft):
+    """1 inside the ellipsoid, smooth falloff over the outer `soft` fraction."""
+    N, L = nt.nodes, nt.links
+    sub = N.new('ShaderNodeVectorMath'); sub.operation = 'SUBTRACT'; sub.inputs[1].default_value = center
+    div = N.new('ShaderNodeVectorMath'); div.operation = 'DIVIDE'; div.inputs[1].default_value = radii
+    ln = N.new('ShaderNodeVectorMath'); ln.operation = 'LENGTH'
+    m = N.new('ShaderNodeMapRange'); m.interpolation_type = 'SMOOTHSTEP'
+    m.inputs['From Min'].default_value, m.inputs['From Max'].default_value = 1.0, 1.0 - soft
+    L.new(coord_out, sub.inputs[0]); L.new(sub.outputs[0], div.inputs[0]); L.new(div.outputs[0], ln.inputs[0])
+    L.new(ln.outputs['Value'], m.inputs['Value'])
+    return m.outputs['Result']
+
+
+def _max(nt, a, b):
+    m = nt.nodes.new('ShaderNodeMath'); m.operation = 'MAXIMUM'
+    nt.links.new(a, m.inputs[0]); nt.links.new(b, m.inputs[1])
+    return m.outputs[0]
+
+
+def _mix_rgb(nt, fac, a, b, blend='MIX'):
+    m = nt.nodes.new('ShaderNodeMix'); m.data_type = 'RGBA'; m.blend_type = blend
+    for sock, val in ((m.inputs['Factor'], fac), (m.inputs[6], a), (m.inputs[7], b)):
+        if isinstance(val, tuple):
+            sock.default_value = val
+        elif isinstance(val, float):
+            sock.default_value = val
+        else:
+            nt.links.new(val, sock)
+    return m.outputs[2]
+
+
+def _regions(nt, coord_out, face: dict, to_local, cfg: dict, base_color, roughness):
+    """Regional skin color from landmarks, in object space so edges stay
+    crisp at any resolution: vermilion lips (redder, glossier), flush on
+    nose, cheeks and ears (thin, vascular), darker periorbital sockets."""
+    import numpy as np
+
+    hs = face['scale']
+    u = 1.0 / cfg.get('_unit_scale', 1.0)
+    L = lambda p: tuple(to_local(p))
+    e = np.array(face['eye_centre']); nose = np.array(face['nose']); mouth = np.array(face['mouth'])
+    k = u * hs
+    mel, hb = cfg.get('melanin', 0.25), cfg.get('hemoglobin', 0.5)
+    flush_col = (*skin_albedo(mel, min(1.0, hb * 2.2)), 1)
+    lip_col = tuple(c * f for c, f in zip(skin_albedo(min(1.0, mel + 0.1), 1.0), (0.95, 0.72, 0.78))) + (1,)
+    flush = _ellipsoid_mask(nt, coord_out, L(nose + np.array([0, 0.004, 0]) * k), (0.02 * k, 0.03 * k, 0.022 * k), 0.8)
+    for sx in (-1, 1):
+        cheek = _ellipsoid_mask(nt, coord_out, L(e + np.array([0.042 * sx, -0.004, -0.032]) * k), (0.026 * k, 0.03 * k, 0.024 * k), 0.9)
+        ear = _ellipsoid_mask(nt, coord_out, L(e + np.array([0.074 * sx, 0.085, -0.015]) * k), (0.022 * k, 0.035 * k, 0.035 * k), 0.6)
+        flush = _max(nt, flush, _max(nt, cheek, ear))
+    fl = nt.nodes.new('ShaderNodeMath'); fl.operation = 'MULTIPLY'; fl.inputs[1].default_value = cfg.get('flush', 0.55)
+    nt.links.new(flush, fl.inputs[0])
+    col = _mix_rgb(nt, fl.outputs[0], base_color, flush_col)
+    lips = _ellipsoid_mask(nt, coord_out, L(mouth + np.array([0, 0.004, 0.001]) * k), (0.025 * k, 0.014 * k, 0.0115 * k), 0.3)
+    col = _mix_rgb(nt, lips, col, lip_col)
+    sock = None
+    for eye in face['eyes']:
+        m_ = _ellipsoid_mask(nt, coord_out, L(np.array(eye)), (0.026 * k, 0.022 * k, 0.021 * k), 0.7)
+        sock = m_ if sock is None else _max(nt, sock, m_)
+    sf = nt.nodes.new('ShaderNodeMath'); sf.operation = 'MULTIPLY'; sf.inputs[1].default_value = 0.35
+    nt.links.new(sock, sf.inputs[0])
+    col = _mix_rgb(nt, sf.outputs[0], col, (0.78, 0.66, 0.7, 1), blend='MULTIPLY')
+    rough = None
+    if roughness is not None:
+        mf = nt.nodes.new('ShaderNodeMix'); mf.data_type = 'FLOAT'  # lips are moist: glossier
+        nt.links.new(lips, mf.inputs['Factor']); nt.links.new(roughness, mf.inputs[2]); mf.inputs[3].default_value = 0.3
+        rough = mf.outputs[0]
+    return col, rough, lips
+
+
+def apply_skin(mat, cfg: dict, unit_scale: float, face: dict | None = None, to_local=None):
     """Real skin is never one color or one gloss. On top of the chromophore
     albedo: blood-flush blotches (~4 cm), melanin mottling (~5 mm, freckle
     scale), roughness that varies 0.38-0.58 so highlights break up, a thin
@@ -141,7 +248,23 @@ def apply_skin(mat, cfg: dict, unit_scale: float):
         L.new(_noise(nt, coord, 200.0 / u, 3.0), mf.inputs['Value'])
         L.new(mf.outputs['Result'], mottle.inputs['Factor'])
         L.new(blood.outputs[2], mottle.inputs[6]); mottle.inputs[7].default_value = (*tan, 1)
-        L.new(mottle.outputs[2], b.inputs['Base Color'])
+        # hair covers the scalp; the skin under it is tinted toward the hair so
+        # gaps between strands don't show bright, rim-lit skin
+        scalp = N.new('ShaderNodeAttribute'); scalp.attribute_name = 'C3D_Scalp'
+        sc = N.new('ShaderNodeMath'); sc.operation = 'MULTIPLY'; sc.inputs[1].default_value = 0.8
+        L.new(scalp.outputs['Fac'], sc.inputs[0])
+        base_col = _mix_rgb(nt, sc.outputs[0], mottle.outputs[2], (0.05, 0.035, 0.025, 1))
+        rough_sock = _remap(nt, _noise(nt, coord, 60.0 / u, 5.0), 0.38, 0.58)
+        # crease darkening: occlusion within ~8 mm (nostrils, lip corners,
+        # lid folds, ear) -- the contact shading CG skin usually lacks
+        ao = N.new('ShaderNodeAmbientOcclusion'); ao.inputs['Distance'].default_value = 0.008 * u
+        ao.only_local = True; ao.samples = 8
+        aof = _remap(nt, ao.outputs['AO'], 0.6, 1.0)
+        base_col = _mix_rgb(nt, 1.0, base_col, aof, blend='MULTIPLY')
+        if face is not None and to_local is not None:
+            base_col, rough_sock, _ = _regions(nt, coord.outputs['Object'], face, to_local, {**cfg, '_unit_scale': unit_scale}, base_col, rough_sock)
+        L.new(base_col, b.inputs['Base Color'])
+        L.new(rough_sock, b.inputs['Roughness'])
     b.subsurface_method = 'RANDOM_WALK_SKIN'
     b.inputs['Subsurface Weight'].default_value = 1.0
     # mean free path per channel: skin ~ (3.7, 1.4, 0.7) mm
@@ -149,7 +272,7 @@ def apply_skin(mat, cfg: dict, unit_scale: float):
     b.inputs['Subsurface Scale'].default_value = 0.0037 * u
     b.inputs['Subsurface IOR'].default_value = 1.4
     if not b.inputs['Roughness'].links:
-        L.new(_remap(nt, _noise(nt, coord, 60.0 / u, 5.0), 0.38, 0.58), b.inputs['Roughness'])
+        L.new(_remap(nt, _noise(nt, coord, 60.0 / u, 5.0), 0.38, 0.58), b.inputs['Roughness'])  # textured skin keeps its own color
     b.inputs['Coat Weight'].default_value = 0.04       # thin sebum film
     b.inputs['Coat Roughness'].default_value = 0.3
     b.inputs['Coat IOR'].default_value = 1.45
@@ -246,7 +369,7 @@ def apply_hair(mat, cfg: dict):
     h = nt.nodes.new('ShaderNodeBsdfHairPrincipled')
     h.parametrization = 'MELANIN'
     h.inputs['Melanin'].default_value = cfg.get('hair_melanin', 0.8)
-    h.inputs['Melanin Redness'].default_value = cfg.get('hair_redness', 0.2)
+    h.inputs['Melanin Redness'].default_value = cfg.get('hair_redness', 0.1)
     h.inputs['Roughness'].default_value = 0.25
     h.inputs['Radial Roughness'].default_value = 0.35
     h.inputs['Coat'].default_value = 0.05
@@ -268,13 +391,13 @@ def apply_cloth(mat, cfg: dict, unit_scale: float):
         L.new(var.outputs[2], b.inputs['Base Color'])
     b.inputs['Sheen Weight'].default_value = 0.3
     b.inputs['Sheen Roughness'].default_value = 0.35
-    b.inputs['Sheen Tint'].default_value = (0.6, 0.65, 0.8, 1)
+    b.inputs['Sheen Tint'].default_value = (1.0, 1.0, 1.0, 1)
     b.inputs['Roughness'].default_value = 0.85
-    wave = N.new('ShaderNodeTexWave'); wave.inputs['Scale'].default_value = 900.0 / u
+    wave = N.new('ShaderNodeTexWave'); wave.inputs['Scale'].default_value = 450.0 / u
     wave.wave_type = 'BANDS'; wave.bands_direction = 'DIAGONAL'
     wave.inputs['Distortion'].default_value = 2.0
     L.new(coord.outputs['Object'], wave.inputs['Vector'])
-    bump = N.new('ShaderNodeBump'); bump.inputs['Strength'].default_value = 0.35
+    bump = N.new('ShaderNodeBump'); bump.inputs['Strength'].default_value = 0.2
     bump.inputs['Distance'].default_value = 0.0004 * u
     L.new(wave.outputs['Fac'], bump.inputs['Height'])
     L.new(bump.outputs['Normal'], b.inputs['Normal'])
@@ -345,6 +468,8 @@ def add_groom(skin_obj, eye_objs, cfg: dict, unit_scale: float) -> dict:
     made = {}
     mat = bpy.data.materials.new('C3D_Hair')
     apply_hair(mat, cfg)
+    fine = bpy.data.materials.new('C3D_BrowLash')  # brows/lashes read darker, less red
+    apply_hair(fine, {**cfg, 'hair_melanin': min(1.0, cfg.get('hair_melanin', 0.8) + 0.12), 'hair_redness': cfg.get('hair_redness', 0.2) * 0.5})
 
     style = cfg.get('hair', {})
     if style.get('enabled', True):
@@ -353,12 +478,18 @@ def add_groom(skin_obj, eye_objs, cfg: dict, unit_scale: float) -> dict:
             behind_temple = p[:, 1] > eye_c[1] + 0.035 * u * hs
             above_ear = p[:, 2] > eye_c[2] - (0.02 if style.get('length_m', 0.14) > 0.08 else -0.01) * u * hs
             return ((p[:, 2] > hairline_z) & (p[:, 1] > eye_c[1] - 0.02 * u * hs)) | (behind_temple & above_ear)
-        n = int(style.get('strands', 60000))
+        n = int(style.get('strands', 110000))  # ~2 hairs/mm^2 like a real scalp
         roots, nrm = _surface_samples(skin_obj, scalp, n, rng)
+        mw = np.array(skin_obj.matrix_world)
+        vco = np.empty(len(skin_obj.data.vertices) * 3); skin_obj.data.vertices.foreach_get('co', vco)
+        vco = vco.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+        attr = skin_obj.data.attributes.get('C3D_Scalp') or skin_obj.data.attributes.new('C3D_Scalp', 'FLOAT', 'POINT')
+        attr.data.foreach_set('value', scalp(vco).astype(np.float32))
         k = 14
-        length = style.get('length_m', 0.14) * u * hs * rng.uniform(0.75, 1.15, n)
+        length = style.get('length_m', 0.14) * u * hs * rng.uniform(0.55, 1.25, n) ** 1.3  # uneven ends: no helmet edge
         part_x = eye_c[0] + style.get('part_offset_m', 0.025) * u * hs
-        side = np.sign(roots[:, 0] - part_x)[:, None] * np.array([1.0, 0.0, 0.0])
+        # smooth across the part: strands right at it go back, not up
+        side = np.tanh((roots[:, 0] - part_x) / (0.012 * u * hs))[:, None] * np.array([1.0, 0.0, 0.0])
         # 0 at the hairline front .. 1 behind the ears
         front = np.clip((roots[:, 1] - (eye_c[1] + 0.01 * u * hs)) / (0.09 * u * hs), 0.0, 1.0)[:, None]
         back = np.array([0.0, 1.0, 0.0]) * (1.6 - 1.25 * front)
@@ -367,12 +498,13 @@ def add_groom(skin_obj, eye_objs, cfg: dict, unit_scale: float) -> dict:
         f = 60.0 / u
         wave_phase = np.sin(roots[:, 0] * f * 1.7) + np.cos(roots[:, 1] * f * 1.3) + np.sin(roots[:, 2] * f)
         radius0 = np.linalg.norm((roots - head_c) / np.array([1.0, 1.1, 1.15]), axis=1)
+        lift = (0.7 * (1.0 - 0.75 * np.clip(nrm[:, 2], 0.0, 1.0)))[:, None]  # crown roots lie down
         strands = np.empty((n, k, 3))
         p = roots + nrm * 0.0005 * u
         strands[:, 0] = p
         for i in range(1, k):
             t = i / (k - 1)
-            d = nrm * (1 - t) ** 2 * 1.2 + (side * 0.9 + back) * (1 - t) + down * (0.3 + 1.4 * t)
+            d = nrm * lift * (1 - t) ** 3 + (side * 0.9 + back) * (1 - t) + down * (0.3 + 1.4 * t)
             d += np.stack([np.sin(wave_phase + t * 7.0), np.cos(wave_phase * 1.3 + t * 6.0), np.zeros(n)], 1) * style.get('wave', 0.25)
             d /= np.linalg.norm(d, axis=1, keepdims=True)
             p = p + d * (length / (k - 1))[:, None]
@@ -403,7 +535,7 @@ def add_groom(skin_obj, eye_objs, cfg: dict, unit_scale: float) -> dict:
             dx = (p[:, 0] - eye[0]) * s
             dz = p[:, 2] - (eye[2] + 0.017 * u * hs + 0.006 * u * hs * np.clip(dx / (0.02 * u * hs), -1, 1) - 0.004 * u * hs * np.clip(dx / (0.02 * u * hs), 0, 1) ** 2)
             return (np.abs(dz) < 0.0045 * u * hs) & (dx > -0.022 * u * hs) & (dx < 0.028 * u * hs) & (p[:, 1] < eye[1] + 0.012 * u * hs)
-        n = int(cfg.get('brow_strands', 1200))
+        n = int(cfg.get('brow_strands', 1800))
         roots, nrm = _surface_samples(skin_obj, brow, n, rng)
         if len(roots):
             k = 5
@@ -413,7 +545,7 @@ def add_groom(skin_obj, eye_objs, cfg: dict, unit_scale: float) -> dict:
                 t = i / (k - 1)
                 d = lateral / np.linalg.norm(lateral) * (0.009 * u * hs * t) * rng.uniform(0.7, 1.2, n)[:, None]
                 strands[:, i] = roots + nrm * (0.0012 * u * hs * np.sin(t * np.pi / 2)) + d
-            _hair_object('C3D_Brow', strands, 0.000025 * u, 0.000008 * u, mat)
+            _hair_object('C3D_Brow', strands, 0.000035 * u, 0.00001 * u, fine)
             made['brow_strands'] = made.get('brow_strands', 0) + n
 
         # eyelashes along the upper lid arc, curling up and out
@@ -428,7 +560,7 @@ def add_groom(skin_obj, eye_objs, cfg: dict, unit_scale: float) -> dict:
         for i in range(k):
             t = i / (k - 1)
             strands[:, i] = base + out * (ln * t)[:, None] + np.array([0, 0, 1.0]) * (ln * 0.6 * t ** 2)[:, None]
-        _hair_object('C3D_Lashes', strands, 0.00006 * u, 0.00001 * u, mat)
+        _hair_object('C3D_Lashes', strands, 0.00006 * u, 0.00001 * u, fine)
         made['lashes'] = made.get('lashes', 0) + m
     return made
 
@@ -488,9 +620,10 @@ def portrait_rig(lo, hi, cfg: dict) -> dict:
         cam_data.dof.aperture_fstop = cfg.get('fstop', 8.0)
     lights = []
     for name, (a_deg, elev_deg, energy_w, size_f, color) in {
-        'key': (-45, 25, 28.0, 1.4, (1.0, 0.96, 0.9)),
-        'fill': (50, 5, 5.0, 2.5, (0.9, 0.95, 1.0)),
-        'rim': (160, 30, 55.0, 0.6, (1.0, 0.97, 0.94)),
+        # ~1:8 key:fill -- modelling light, not flat; rim separates hair
+        'key': (-50, 38, 26.0, 1.6, (1.0, 0.95, 0.88)),
+        'fill': (55, 0, 4.0, 3.0, (0.88, 0.94, 1.0)),
+        'rim': (140, 15, 20.0, 0.5, (1.0, 0.97, 0.94)),
     }.items():
         ld = bpy.data.lights.new(f'C3D_{name}', 'AREA')
         ld.shape = 'DISK'
@@ -505,6 +638,31 @@ def portrait_rig(lo, hi, cfg: dict) -> dict:
         lo_.rotation_euler = (target - lo_.location).to_track_quat('-Z', 'Y').to_euler()
         scene.collection.objects.link(lo_)
         lights.append(name)
+    # seamless backdrop behind the subject with its own light: a soft
+    # falloff glow instead of a flat void
+    bd = bpy.data.meshes.new('C3D_Backdrop')
+    w = head_h * 12
+    c = target + Vector((0, head_h * 6.5, 0))
+    bd.from_pydata([c + Vector((-w, 0, -w)), c + Vector((w, 0, -w)), c + Vector((w, 0, w)), c + Vector((-w, 0, w))], [], [(0, 1, 2, 3)])
+    bdo = bpy.data.objects.new('C3D_Backdrop', bd)
+    bm_ = bpy.data.materials.new('C3D_Backdrop')
+    bsdf = bm_.node_tree.nodes.get('Principled BSDF')
+    bsdf.inputs['Base Color'].default_value = cfg.get('backdrop', (0.09, 0.1, 0.11, 1))
+    bsdf.inputs['Roughness'].default_value = 1.0
+    bd.materials.append(bm_)
+    scene.collection.objects.link(bdo)
+    bl = bpy.data.lights.new('C3D_bg', 'SPOT')
+    bl.spot_size = math.radians(70)
+    bl.spot_blend = 1.0
+    bl.shadow_soft_size = head_h
+    rb = head_h * 3.0
+    bl.energy = 40.0 * (rb / 0.6) ** 2
+    blo = bpy.data.objects.new('C3D_bg', bl)
+    blo.location = target + Vector((head_h * 0.8, head_h * 3.5, -head_h * 1.5))
+    aim = c + Vector((-head_h * 0.5, 0, head_h * 0.8))
+    blo.rotation_euler = (aim - blo.location).to_track_quat('-Z', 'Y').to_euler()
+    scene.collection.objects.link(blo)
+    lights.append('bg')
     world = bpy.data.worlds.new('C3D_Studio')
     world.use_nodes = True
     bg = world.node_tree.nodes.get('Background')
@@ -529,11 +687,23 @@ def main():
         cfg = manifest.get('lookdev', {})
         overrides = manifest.get('roles', {})
         roles = {}
-        for mat in {s.material for o in objs for s in o.material_slots if s.material}:
-            role = _role(mat.name, overrides)
-            roles[mat.name] = role
+        mats = {s.material for o in objs for s in o.material_slots if s.material}
+        for mat in mats:
+            roles[mat.name] = _role(mat.name, overrides)
+        def objs_with(role):
+            return [o for o in objs if o.type == 'MESH' and any(
+                s.material and roles.get(s.material.name) == role for s in o.material_slots)]
+        face, to_local = None, None
+        if objs_with('skin') and objs_with('eye'):
+            head = max(objs_with('skin'), key=lambda o: len(o.data.polygons))
+            face = manifest.get('face_landmarks') or face_landmarks(head, objs_with('eye'), unit_scale)
+            inv = head.matrix_world.inverted()
+            to_local = lambda p, inv=inv: inv @ Vector(p)
+            receipt['face_landmarks'] = face
+        for mat in mats:
+            role = roles[mat.name]
             if role == 'skin':
-                apply_skin(mat, cfg, unit_scale)
+                apply_skin(mat, cfg, unit_scale, face, to_local)
             elif role == 'cornea':
                 apply_cornea(mat)
             elif role == 'eye':
@@ -587,6 +757,7 @@ def main():
         scene.cycles.transmission_bounces = 16
         scene.cycles.transparent_max_bounces = 32
         scene.view_settings.view_transform = 'AgX'
+        scene.view_settings.exposure = float(manifest.get('exposure', -1.3))
         try:
             scene.view_settings.look = 'AgX - Medium High Contrast'
         except TypeError:
