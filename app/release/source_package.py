@@ -105,7 +105,11 @@ def build_deterministic_zip(root: str | Path, output_path: str | Path) -> Path:
             info = zipfile.ZipInfo(rel, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3
-            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            # Normalized but not flattened: an executable in the tree (e.g.
+            # scripts/blender, the Blender CLI shim) stays executable, or the
+            # extracted release ships a launcher that cannot be run.
+            mode = 0o755 if src.stat().st_mode & 0o111 else 0o644
+            info.external_attr = (stat.S_IFREG | mode) << 16
             info.flag_bits |= 0x800
             zf.writestr(info, src.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
     return output

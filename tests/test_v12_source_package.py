@@ -75,3 +75,29 @@ def test_zip_still_includes_release_manifest_json_itself(tmp_path: Path):
     with zipfile.ZipFile(out) as zf:
         names = zf.namelist()
     assert "release_manifest.json" in names
+
+
+def test_deterministic_zip_keeps_executables_executable(tmp_path):
+    import os
+    import stat
+    import zipfile
+
+    from app.release.source_package import build_deterministic_zip
+
+    root = tmp_path / "src"
+    (root / "scripts").mkdir(parents=True)
+    tool = root / "scripts" / "tool"
+    tool.write_text("#!/bin/sh\necho hi\n")
+    os.chmod(tool, 0o755)
+    (root / "README.md").write_text("x")
+    out = build_deterministic_zip(root, tmp_path / "r.zip")
+    with zipfile.ZipFile(out) as zf:
+        modes = {i.filename: (i.external_attr >> 16) & 0o777 for i in zf.infolist()}
+    assert modes["scripts/tool"] == 0o755
+    assert modes["README.md"] == 0o644
+    extracted = tmp_path / "x"
+    with zipfile.ZipFile(out) as zf:
+        for info in zf.infolist():
+            zf.extract(info, extracted)
+            os.chmod(extracted / info.filename, (info.external_attr >> 16) & 0o777)
+    assert os.stat(extracted / "scripts" / "tool").st_mode & stat.S_IXUSR
