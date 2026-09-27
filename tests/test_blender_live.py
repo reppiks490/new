@@ -356,3 +356,23 @@ def test_strip_render_is_pixel_identical_to_a_single_pass(tmp_path):
     seams = [c0 for c0, *_ in plan_strips(136, 240, 240 * 40)[1:]]
     assert max(d[y - 1:y + 1].max() for y in seams) <= d.max() and d[seams].mean() < 1.0  # no visible seam
     assert not list(tmp_path.glob("many.strip*"))
+
+
+@blender
+def test_character_lookdev_assigns_roles_and_renders(tmp_path):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    glb = tmp_path / "head.glb"
+    subprocess.run([find_blender(), "--background", "--python", str(root / "tests/fixtures/make_standin_head.py"), "--", str(glb)],
+                   check=True, capture_output=True)
+    m = {"source_model": str(glb), "output_path": str(tmp_path / "h.png"), "receipt_path": str(tmp_path / "r.json"),
+         "resolution": [160, 200], "quality": {"samples": 4, "denoise": False}}
+    (tmp_path / "m.json").write_text(json.dumps(m))
+    subprocess.run([find_blender(), "--background", "--disable-autoexec", "--python", str(root / "blender_scripts/character_lookdev.py"),
+                    "--", "--manifest", str(tmp_path / "m.json")], check=True, capture_output=True)
+    r = json.loads((tmp_path / "r.json").read_text())
+    assert r["status"] == "succeeded" and (tmp_path / "h.png").is_file()
+    roles = set(r["roles"].values())
+    assert {"skin", "cornea", "eye", "cloth"} <= roles
+    assert r["rig"]["lights"] == ["key", "fill", "rim"]
