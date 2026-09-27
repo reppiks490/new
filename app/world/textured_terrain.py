@@ -50,14 +50,32 @@ def terrain_surface(spec: TerrainSpec, thresholds: BiomeThresholds | None = None
     return heightmap, surface
 
 
-def displacement_residual(surface: np.ndarray, size: int, *, band_rows: int = 512) -> np.ndarray:
-    """(size, size) float32 in the heightmap's normalized height units:
-    cubic B-spline surface minus the exported mesh's own linear triangle
-    interpolation, sampled at texel centres with the same UV mapping as the
-    texture maps (texel row r, col c <-> heightmap coords ((r+0.5)/size,
-    (c+0.5)/size) * (n-1)). Triangles follow heightmap_to_mesh's split:
-    (r,c),(r,c+1),(r+1,c) and (r,c+1),(r+1,c+1),(r+1,c)."""
+MAX_RENDER_BASE_CELLS = 256
+
+
+def render_base_stride(n: int) -> int:
+    """Stride that subsamples an n x n heightmap to at most 257 x 257
+    vertices for the render-time base grid (exact integer subsampling)."""
+    stride = 1
+    while (n - 1) // stride > MAX_RENDER_BASE_CELLS or (n - 1) % stride:
+        stride += 1
+    return stride
+
+
+def displacement_residual(surface: np.ndarray, size: int, *, base_stride: int = 1, band_rows: int = 512) -> np.ndarray:
+    """(size, size) float32 in the heightmap's normalized height units: the
+    C2 cubic B-spline surface through ALL heightmap samples minus the
+    bilinear patches of a base grid made of every base_stride-th sample
+    (exactly what Cycles' simple subdivision of a quad produces). Sampled at
+    texel centres with the texture maps' UV mapping (texel row r, col c <->
+    heightmap coords ((r+0.5)/size, (c+0.5)/size) * (n-1)). Zero at every
+    base-grid vertex; carries all finer terrain detail plus the curvature
+    the flat patches lack."""
     n = surface.shape[0]
+    if (n - 1) % base_stride:
+        raise ValueError("base_stride must divide n - 1")
+    base = surface[::base_stride, ::base_stride]
+    nb = base.shape[0]
     coeffs = ndimage.spline_filter(surface.astype(np.float64), order=3, mode="nearest")
     cols = (np.arange(size) + 0.5) / size * (n - 1)
     out = np.empty((size, size), dtype=np.float32)
@@ -65,23 +83,19 @@ def displacement_residual(surface: np.ndarray, size: int, *, band_rows: int = 51
         rows = (np.arange(r0, min(size, r0 + band_rows)) + 0.5) / size * (n - 1)
         gy, gx = np.meshgrid(rows, cols, indexing="ij")
         cubic = ndimage.map_coordinates(coeffs, [gy, gx], order=3, mode="nearest", prefilter=False)
-        iy = np.minimum(np.floor(gy).astype(np.int64), n - 2)
-        ix = np.minimum(np.floor(gx).astype(np.int64), n - 2)
-        fy, fx = gy - iy, gx - ix
-        h00, h01 = surface[iy, ix], surface[iy, ix + 1]
-        h10, h11 = surface[iy + 1, ix], surface[iy + 1, ix + 1]
-        linear = np.where(
-            fx + fy <= 1.0,
-            h00 + fx * (h01 - h00) + fy * (h10 - h00),
-            h11 + (1.0 - fx) * (h10 - h11) + (1.0 - fy) * (h01 - h11),
-        )
-        out[r0:r0 + len(rows)] = cubic - linear
+        by, bx = gy / base_stride, gx / base_stride
+        iy = np.minimum(np.floor(by).astype(np.int64), nb - 2)
+        ix = np.minimum(np.floor(bx).astype(np.int64), nb - 2)
+        fy, fx = by - iy, bx - ix
+        bilinear = (base[iy, ix] * (1 - fx) * (1 - fy) + base[iy, ix + 1] * fx * (1 - fy)
+                    + base[iy + 1, ix] * (1 - fx) * fy + base[iy + 1, ix + 1] * fx * fy)
+        out[r0:r0 + len(rows)] = cubic - bilinear
     return out
 
 
-def write_displacement_sidecar(residual_m: np.ndarray, png_path: Path, json_path: Path) -> dict:
-    """16-bit grayscale PNG (linear, exact to (max-min)/65535 m) plus the
-    JSON that maps it back to meters."""
+def write_displacement_sidecar(residual_m: np.ndarray, png_path: Path, json_path: Path, *, base_grid: dict) -> dict:
+    """16-bit grayscale PNG (linear, exact to (max-min)/65535 m), the base
+    grid heights (.npy, meters) and the JSON tying them together."""
     lo, hi = float(residual_m.min()), float(residual_m.max())
     span = hi - lo
     size = residual_m.shape[0]
@@ -103,8 +117,11 @@ def write_displacement_sidecar(residual_m: np.ndarray, png_path: Path, json_path
         "max_m": hi,
         "resolution": size,
         "uv_set": 0,
-        "kind": "vertical_residual_to_exported_mesh",
-        "note": "height = min_m + (value/65535)*(max_m-min_m) meters along the up axis; zero at every mesh vertex.",
+        "kind": "terrain_base_grid",
+        "base_grid": base_grid,
+        "note": ("Render by building a quad grid of base_grid heights over the model's footprint (UVs spanning 0-1), "
+                 "subdividing it (bilinear) and displacing it up by min_m + (value/65535)*(max_m-min_m) meters; "
+                 "the result is the smooth surface through every heightmap sample."),
     }
     json_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
@@ -113,6 +130,11 @@ def write_displacement_sidecar(residual_m: np.ndarray, png_path: Path, json_path
 def displacement_sidecar_paths(glb_path: str | Path) -> tuple[Path, Path]:
     p = Path(glb_path)
     return p.with_name(p.stem + ".displacement.png"), p.with_name(p.stem + ".displacement.json")
+
+
+def displacement_base_path(glb_path: str | Path) -> Path:
+    p = Path(glb_path)
+    return p.with_name(p.stem + ".displacement_base.npy")
 
 
 def _build(spec, *, texture_size, thresholds, flatten_water, maps_dir: Path, load_into_memory: bool) -> trimesh.Trimesh:
@@ -216,9 +238,15 @@ def export_textured_terrain_glb(
     if displacement:
         _, surface = terrain_surface(spec, thresholds, flatten_water=flatten_water)
         size = min(texture_size, MAX_DISPLACEMENT_SIZE)
-        residual_m = displacement_residual(surface, size) * np.float32(spec.height_scale_meters)
+        stride = render_base_stride(surface.shape[0])
+        residual_m = displacement_residual(surface, size, base_stride=stride) * np.float32(spec.height_scale_meters)
         png_path, json_path = displacement_sidecar_paths(out)
-        meta = write_displacement_sidecar(residual_m, png_path, json_path)
+        base_path = displacement_base_path(out)
+        np.save(base_path, (surface[::stride, ::stride] * spec.height_scale_meters).astype(np.float32))
+        meta = write_displacement_sidecar(residual_m, png_path, json_path, base_grid={
+            "heights_file": base_path.name, "vertices_per_side": int(surface[::stride, ::stride].shape[0]),
+            "stride": stride, "size_meters": spec.size_meters,
+        })
         result["displacement"] = {"image_path": str(png_path), "metadata_path": str(json_path),
                                   "min_m": meta["min_m"], "max_m": meta["max_m"], "resolution": size}
     return result

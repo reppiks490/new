@@ -46,6 +46,27 @@ def _import_model(path: Path):
     return meshes
 
 
+def unpack_images_to_files(directory: Path) -> int:
+    """Packed images (everything a .glb embeds) reach Cycles only through
+    Blender's own decoded copy, so each texture sits in memory twice.
+    Written back out as the same bytes and referenced as files, Cycles reads
+    them directly and Blender never decodes them: measured on a GLB with
+    three 16K maps, peak memory 8.1 GB -> 5.8 GB."""
+    directory.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for i, img in enumerate(bpy.data.images):
+        if img.packed_file is None:
+            continue
+        ext = '.' + (img.file_format or 'PNG').lower().replace('jpeg', 'jpg')
+        target = directory / f'packed_{i:03d}{ext}'
+        target.write_bytes(img.packed_file.data)
+        img.filepath = str(target)
+        img.unpack(method='USE_ORIGINAL')
+        img.buffers_free()
+        count += 1
+    return count
+
+
 def _world_bounds(objects):
     lo = Vector((math.inf,) * 3)
     hi = Vector((-math.inf,) * 3)
@@ -105,6 +126,44 @@ def _material_output(nt):
     return (active or outputs or [nt.nodes.new('ShaderNodeOutputMaterial')])[0]
 
 
+def replace_with_base_grid(obj, base: dict):
+    """Swap an imported dense terrain mesh for the sidecar's coarse quad
+    grid (same footprint, UVs and materials). Geometry detail then comes
+    from displacement diced to the output resolution, not from millions of
+    base faces -- each of which costs Cycles a subdivision patch."""
+    import numpy as np
+
+    heights = np.load(base['heights_path']).astype(np.float64)
+    nb, size_m = int(base['vertices_per_side']), float(base['size_meters'])
+    if heights.shape != (nb, nb):
+        raise RuntimeError('base grid heights do not match vertices_per_side')
+    local = np.empty(len(obj.data.vertices) * 3)
+    obj.data.vertices.foreach_get('co', local)
+    local = local.reshape(-1, 3)
+    if not (np.allclose(local[:, :2].min(0), 0.0, atol=1e-3 * size_m) and np.allclose(local[:, :2].max(0), size_m, atol=1e-3 * size_m)):
+        raise RuntimeError('imported terrain footprint does not match the displacement sidecar')
+    xs = np.linspace(0.0, size_m, nb)
+    gx, gy = np.meshgrid(xs, xs, indexing='xy')
+    verts = np.stack([gx.ravel(), gy.ravel(), heights.ravel()], axis=1)
+    r, c = np.meshgrid(np.arange(nb - 1), np.arange(nb - 1), indexing='ij')
+    i0 = (r * nb + c).ravel()
+    quads = np.stack([i0, i0 + 1, i0 + nb + 1, i0 + nb], axis=1)  # counter-clockwise seen from +Z
+    mesh = bpy.data.meshes.new('C3D_RenderBase')
+    mesh.from_pydata(verts.tolist(), [], quads.tolist())
+    uv_name = obj.data.uv_layers.active.name if obj.data.uv_layers else 'UVMap'
+    uv_layer = mesh.uv_layers.new(name=uv_name)
+    t = np.linspace(0.0, 1.0, nb)
+    per_vertex = np.stack([np.tile(t, nb), 1.0 - np.repeat(t, nb)], axis=1)  # u = col, v = 1 - row
+    uv_layer.data.foreach_set('uv', per_vertex[quads.ravel()].ravel())
+    mesh.shade_smooth()
+    for mat in obj.data.materials:
+        mesh.materials.append(mat)
+    dense = obj.data
+    obj.data = mesh
+    bpy.data.meshes.remove(dense)
+    return {'base_faces': len(quads), 'vertices_per_side': nb}
+
+
 def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
     """Cycles adaptive subdivision (dices to ~dicing_rate_px on screen) plus
     true displacement from the exported residual map, so geometry detail
@@ -115,6 +174,11 @@ def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
     scene = bpy.context.scene
     scene.cycles.dicing_rate = 1.0  # a multiplier on the per-object pixel size set below
     scene.cycles.max_subdivisions = int(subdivision['max_subdivisions'])
+    base_info = None
+    if disp.get('base_grid'):
+        if len(meshes) != 1:
+            raise RuntimeError('a terrain base-grid sidecar needs exactly one imported mesh')
+        base_info = replace_with_base_grid(meshes[0], disp['base_grid'])
     materials = set()
     for obj in meshes:
         mod = obj.modifiers.new('C3D_AdaptiveSubdivision', 'SUBSURF')
@@ -142,7 +206,7 @@ def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
         mat.displacement_method = 'DISPLACEMENT'  # the normal map still carries the micro-relief
         mat.max_vertex_displacement = max(abs(disp['min_m']), abs(disp['max_m'])) * 1.01
     return {'applied': True, 'image': disp['path'], 'range_m': [disp['min_m'], disp['max_m']],
-            'materials': len(materials), 'dicing_rate_px': float(subdivision['dicing_rate_px']),
+            'materials': len(materials), 'dicing_rate_px': float(subdivision['dicing_rate_px']), 'base_grid': base_info,
             'max_subdivisions': int(subdivision['max_subdivisions'])}
 
 
@@ -156,6 +220,7 @@ def main():
         bpy.ops.wm.read_factory_settings(use_empty=True)
         scene = bpy.context.scene
         meshes = _import_model(Path(manifest['source_model']))
+        receipt['unpacked_images'] = unpack_images_to_files(Path(manifest['output_path'] + '.textures'))
         lo, hi = _world_bounds(meshes)
         center = (lo + hi) / 2
         size = hi - lo
@@ -225,6 +290,8 @@ def main():
         raise
     finally:
         out.write_text(json.dumps(receipt, indent=2), encoding='utf-8')
+        import shutil
+        shutil.rmtree(manifest['output_path'] + '.textures', ignore_errors=True)
 
 
 if __name__ == '__main__':

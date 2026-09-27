@@ -68,9 +68,16 @@ def find_displacement_sidecar(source_model: str | Path) -> dict | None:
     if not meta_path.is_file():
         return None
     meta = json.loads(meta_path.read_text())
-    if meta.get("schema") != DISPLACEMENT_SCHEMA or not png.is_file():
+    base = meta.get("base_grid") or {}
+    heights = meta_path.with_name(base.get("heights_file", ""))
+    if (meta.get("schema") != DISPLACEMENT_SCHEMA or meta.get("kind") != "terrain_base_grid"
+            or not png.is_file() or not base or not heights.is_file()):
         raise ValueError(f"invalid displacement sidecar next to {source_model}")
-    return {"path": str(png.resolve()), "min_m": float(meta["min_m"]), "max_m": float(meta["max_m"])}
+    return {
+        "path": str(png.resolve()), "min_m": float(meta["min_m"]), "max_m": float(meta["max_m"]),
+        "base_grid": {"heights_path": str(heights.resolve()), "vertices_per_side": int(base["vertices_per_side"]),
+                      "size_meters": float(base["size_meters"])},
+    }
 
 
 def compile_cycles_render_manifest(

@@ -92,29 +92,41 @@ def test_default_terrain_is_not_vertex_scale_noise():
     assert lap < 0.03
 
 
-def test_displacement_residual_is_zero_at_vertices_and_cubic_minus_triangle_between():
+def test_displacement_residual_is_cubic_surface_minus_bilinear_base_patches():
     from scipy import ndimage
 
     from app.world.textured_terrain import displacement_residual
 
     rng = np.random.default_rng(3)
-    surface = rng.random((9, 9))
-    n = 9
-    size = 8 * (n - 1)  # texel centres never land exactly on vertices; sample the formula directly too
-    res = displacement_residual(surface, size)
+    n, stride, size = 9, 2, 64
+    surface = rng.random((n, n))
+    res = displacement_residual(surface, size, base_stride=stride)
     assert res.shape == (size, size) and res.dtype == np.float32
     coeffs = ndimage.spline_filter(surface, order=3, mode="nearest")
-    # at the vertices the cubic spline interpolates the samples -> residual 0
-    at_vertices = ndimage.map_coordinates(coeffs, np.mgrid[0:n, 0:n].reshape(2, -1).astype(float), order=3, mode="nearest", prefilter=False)
-    assert np.allclose(at_vertices, surface.reshape(-1), atol=1e-9)
-    # an interior texel in the upper-left triangle of cell (2, 3)
-    r, c = 2 * 8 + 1, 3 * 8 + 2
+    # the cubic spline interpolates every sample, and the bilinear base equals
+    # the samples at base vertices, so the rendered surface passes through them
+    at_samples = ndimage.map_coordinates(coeffs, np.mgrid[0:n, 0:n].reshape(2, -1).astype(float), order=3, mode="nearest", prefilter=False)
+    assert np.allclose(at_samples, surface.reshape(-1), atol=1e-9)
+    r, c = 21, 38
     gy, gx = (r + 0.5) / size * (n - 1), (c + 0.5) / size * (n - 1)
-    fy, fx = gy - 2, gx - 3
-    assert fx + fy <= 1
-    linear = surface[2, 3] + fx * (surface[2, 4] - surface[2, 3]) + fy * (surface[3, 3] - surface[2, 3])
+    base = surface[::stride, ::stride]
+    by, bx = gy / stride, gx / stride
+    iy, ix = int(by), int(bx)
+    fy, fx = by - iy, bx - ix
+    bilinear = (base[iy, ix] * (1 - fx) * (1 - fy) + base[iy, ix + 1] * fx * (1 - fy)
+                + base[iy + 1, ix] * (1 - fx) * fy + base[iy + 1, ix + 1] * fx * fy)
     cubic = ndimage.map_coordinates(coeffs, [[gy], [gx]], order=3, mode="nearest", prefilter=False)[0]
-    assert res[r, c] == pytest.approx(cubic - linear, abs=1e-6)
+    assert res[r, c] == pytest.approx(cubic - bilinear, abs=1e-6)
+    with pytest.raises(ValueError):
+        displacement_residual(surface, size, base_stride=3)
+
+
+def test_render_base_stride_caps_the_base_grid_at_257():
+    from app.world.textured_terrain import render_base_stride
+
+    for n in (9, 257, 513, 1025):
+        stride = render_base_stride(n)
+        assert (n - 1) % stride == 0 and (n - 1) // stride + 1 <= 257
 
 
 def test_glb_export_writes_a_displacement_sidecar_that_round_trips(tmp_path):
@@ -122,17 +134,22 @@ def test_glb_export_writes_a_displacement_sidecar_that_round_trips(tmp_path):
 
     from PIL import Image
 
-    from app.world.textured_terrain import displacement_residual, terrain_surface
+    from app.world.textured_terrain import displacement_residual, render_base_stride, terrain_surface
 
     out = tmp_path / "vale.glb"
     result = export_textured_terrain_glb(SPEC, out, texture_size=64)
     meta = json.loads((tmp_path / "vale.displacement.json").read_text())
     assert result["displacement"]["resolution"] == 64 and meta["encoding"] == "png16_linear"
+    assert meta["kind"] == "terrain_base_grid"
+    heights = np.load(tmp_path / meta["base_grid"]["heights_file"])
+    assert heights.shape == (meta["base_grid"]["vertices_per_side"],) * 2
     with Image.open(tmp_path / "vale.displacement.png") as im:
         q = np.asarray(im).astype(np.float64)
     decoded = meta["min_m"] + q / 65535.0 * (meta["max_m"] - meta["min_m"])
     _, surface = terrain_surface(SPEC)
-    expected = displacement_residual(surface, 64) * SPEC.height_scale_meters
+    stride = render_base_stride(surface.shape[0])
+    assert np.allclose(heights, surface[::stride, ::stride] * SPEC.height_scale_meters, atol=1e-4)
+    expected = displacement_residual(surface, 64, base_stride=stride) * SPEC.height_scale_meters
     step = (meta["max_m"] - meta["min_m"]) / 65535.0
     assert np.abs(decoded - expected).max() <= step
     assert meta["max_m"] > 0 > meta["min_m"]  # the cubic surface bulges both ways from the triangles
