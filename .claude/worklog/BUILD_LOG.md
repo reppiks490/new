@@ -1267,3 +1267,68 @@ curl example run over HTTP with zero server errors. Renders sent to the user.
 Still true and unchanged: no Blender/OpenUSD in this environment (stages
 remain contract-only here), no live provider credentials exercised, and
 explicit sexual content generation remains permanently out of scope.
+
+## Session 24: Blender and OpenUSD installed and run live
+
+User: "Install and utilize blender and openusd and continue working", then
+"ultra mode".
+
+**Install.** OpenUSD: `usd-core` 0.26.8 (pip). Blender: the official binary
+host (download.blender.org) is blocked by this environment's network
+policy, so Blender 5.0.1 comes from the official `bpy` wheel -- the same
+engine (Cycles, importers/exporters) built as a module. `bpy` pins
+numpy<2 and the app needs numpy>=2, so, like real Blender's bundled
+Python, it lives in its own venv (/opt/blender-bpy) behind
+`scripts/blender`, a CLI shim implementing the flags the workers use
+(`--background`, autoexec flags, `.blend`, `--python`,
+`--python-exit-code`, `--version`, `--` passthrough; script errors exit
+non-zero). Readiness: blender live, openusd_pxr live. Dockerfile ships both
+(it previously didn't even copy blender_scripts/); CI installs Blender on
+the 3.11 leg and GitHub's runner ran the live tests (0 skipped).
+
+**Every Blender worker had never executed. Running them found:**
+
+- production_pipeline / bake / repair imported into Blender's startup
+  scene: every export carried the default 2 m cube (GLB 1001 m wide).
+- character_pipeline crashed on Blender 5.0 (`BLENDER_EEVEE_NEXT` exists
+  only in 4.2-4.x) and wrote no receipt on failure.
+- High->low bake produced garbage while reporting success: fixed 2 cm ray
+  reach and no cage extrusion -> ~75% of texels missed (Blender writes flat
+  normals/black AO on a miss); could not bake past UDIM 1001 (`tiles.new()`
+  allocates no buffer, verified; `tile_fill` via context override does);
+  receipt held a `<UDIM>` template, not paths; 16-bit channels baked into
+  8-bit buffers; verification could never pass (PIL can't read EXR; it
+  demanded channels no worker can bake). Now: BVH-measured signed high/low
+  deviation drives cage extrusion + ray distance, an EMIT hit-mask bake
+  measures the real per-tile miss rate (0.43% on the terrain pair), UV tile
+  coverage is computed, float Non-Color buffers, real per-tile paths;
+  verification reads EXR headers and blocks on misses/empty/outside tiles.
+- Self-intersection detector: only excluded index-edge-adjacent pairs, so
+  corner neighbours and seam-split edges were "intersections": the OLD code
+  reported 2000 (truncated) pairs on a clean terrain grid and 1890 on a
+  clean seam-split sphere. Now welds by position with exact shared-vertex /
+  shared-edge tests (fold-overs, duplicates, crossings still caught).
+- Repair applied trimesh triangle indices to Blender polygons: on a quad
+  mesh the wrong faces were deleted (38 -> 384 pairs). Now detects in
+  Blender's own index space via BVH self-overlap.
+- Repair's holes_fill capped the mesh's original open borders (coplanar
+  double geometry, invisible to BVH checks) yet silently skipped long hole
+  loops, leaving closed meshes open. Now fills only cut holes, per loop with
+  contextual_create; closed shells verified watertight after repair.
+- `MeshQAReport.watertight` never welded, so seam-split closed meshes read
+  as open; acceptance now blocks a repair that opens a closed mesh.
+- OpenUSD authoritative validation: pxr parse errors crashed the validator
+  (now blockers); the static fallback counted each matrix4d row as a
+  matrix; two test fixtures were invalid USD (1-element matrices,
+  SkelBindingAPI not applied -- UsdSkel ignores such bindings).
+
+**New: real Cycles rendering.** `blender_scripts/render_scene.py` +
+`app/render/cycles_worker.py` + `POST /v1/render/execute`: compiled
+RenderJobSpec -> Cycles, PNG or EXR (new OpenEXR header reader for
+verification), receipt records the device actually used. Lighting defaults
+tuned on real renders (old values clipped 5.1% of pixels; now 0%). Proven at
+8K: 7680x4320, 64 samples, 524K-triangle terrain with embedded 8K PBR
+textures, 1487 s on 4 CPU cores, resolution verified, image inspected.
+
+Tests: 385 -> 408, all `-W error`, including 12 live Blender tests (real
+renders, bakes, repairs, exports) that skip only when Blender is absent.

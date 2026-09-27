@@ -313,6 +313,20 @@ and the receipt says so. `samples_override` trades quality for time;
 `camera` and `lighting` take azimuth/elevation/focal length and sun
 angle/strength.
 
+**High→low baking** (normal + AO, any UDIM set, 2K/4K/8K EXR): leave
+`ray_distance` / `cage_extrusion` unset. The worker measures how far your
+high-poly actually sits from the low-poly and sets the ray reach from that.
+Its receipt reports the measured deviation, the reach it used, which UDIM
+tiles your UVs occupy, and a hit-mask miss rate per tile. Verification
+rejects a bake with more than 2% missed texels, empty contracted tiles, or
+UVs outside the contract. Displacement, curvature and thickness have no
+native Cycles high→low bake and are reported as not executed, not faked.
+
+**Self-intersection repair** detects intersecting faces inside Blender's own
+index space (quads and ngons included), fills only the holes it cuts, and
+never caps a mesh's original open borders. Acceptance rejects a repair
+that leaves a closed mesh open.
+
 ## 7. Where to look next
 
 - `README.md` — full capability list, version history (v1.0 through v1.3)
