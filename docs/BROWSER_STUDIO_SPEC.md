@@ -79,6 +79,69 @@ Show unavailable tools with a specific dependency explanation. An unavailable
 provider must not produce a fabricated result or be silently replaced by a
 different paid service. Show live, estimated, and unvalidated results distinctly.
 
+## Creation inputs — prompt, text, and images
+
+Provide three visible creation entry points sharing the same asynchronous job,
+asset ingestion, preview, and export workflow. Prompt-to-3D and text-to-3D are
+two input experiences for text-conditioned generation, not claims of separate
+underlying AI models.
+
+1. Guided prompt-to-3D: compose a description from subject, style, proportions,
+   clothing, materials, pose, and intended use. Display the final editable text
+   before submission. Do not invent semantic image descriptions from the current
+   pixel-statistics analyzer or silently rewrite the user's intent.
+2. Text-to-3D: accept a free-form description with supported geometry, texture,
+   and output controls. Use configured text-capable Tripo or Meshy adapters.
+   Validate provider-specific limits without silent truncation. The current
+   Tripo request builder limits text to 1,024 characters; verify that limit and
+   the provider's current API contract before live release.
+3. Image-to-3D: upload a reference image, inspect its preview, optionally crop,
+   and choose a configured image-capable provider. Reuse Hi3D local-file upload
+   and add validated upload/reference handling for Tripo and Meshy. A caller's
+   local filesystem path is not a browser upload implementation.
+
+For Meshy, existing image request builders do not by themselves establish a
+complete image upload/submission/polling/ingestion workflow. Implement and test
+that path explicitly. Likewise, Tripo's `input_ref` needs a verified
+provider-accepted image reference or upload, not an arbitrary browser URL.
+Where a provider must fetch a URL, use bounded-lifetime signed image access or
+the provider's upload facility. Show that the reference is sent to the selected
+external provider before the user submits it. Remove reference access after the
+required lifetime; do not expose an unrestricted upload directory.
+
+Use server-validated PNG/JPEG/WebP inputs with byte, pixel, and dimension caps,
+decoded format checking, orientation handling, and metadata removal. Keep the
+original image private and preserve processing provenance. Unsupported alpha,
+background removal, or multiview inputs must be described accurately. Enable
+multi-image generation only where the actual adapter supports it and its input
+ordering/count requirements have been verified.
+
+All paths show provider readiness, chosen settings, known cost information, and
+the explicit Generate action before any paid request. Persist a submission ID
+and remote task ID, poll with bounded backoff, distinguish timeout from remote
+failure, and recover jobs without resubmitting already accepted paid tasks.
+Show the actual provider stage/progress rather than a fabricated countdown.
+
+Pipeline: validate inputs → submit → poll → ingest verified output → inspect
+mesh/materials → create project asset → show interactive preview and downloads.
+Optional repair, rigging, topology conversion, and texture refinement are
+separate tracked stages, with their own supported limits and costs.
+
+A generated mesh is not automatically compatible with every detailed body
+control. Show its rig/region/UV report and offer supported retopology or binding
+steps. Do not label a raw generated mesh as fully fitted to the wardrobe or
+supported morph base without completing the needed conversion and checks.
+
+Generation targets include characters, props, and environments where supported.
+Local terrain generation remains usable without provider keys. No keys means
+text/image AI generation shows an actionable unavailable state, never a
+procedural substitute falsely presented as the requested AI-generated asset.
+
+Verification includes malformed uploads, prompt limits, unavailable credentials,
+provider rejection, terminal failure, interrupted polling, duplicate requests,
+asset-download failure, successful preview/download, and reopened exported files.
+Live end-to-end claims require actual provider output with execution evidence.
+
 ## Body deformation
 
 Ship a supported neutral-pose base with authored region weights, UVs, skeleton,
