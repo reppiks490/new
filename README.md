@@ -1,4 +1,54 @@
-# Character3D Masterbuild v1.3
+# Character3D Masterbuild — browser studio
+
+The new **Forma** browser studio runs the CC0 MakeHuman base mesh with 242
+distinct shape controls: 228 authored target pairs and 14 localized sculpt
+controls. Breast and glute customization has a dedicated first panel, with
+size, projection, width, fullness, lift, contour, and independent side edits.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+uvicorn app.studio.server:app --host 127.0.0.1 --port 8000
+```
+
+Open **http://127.0.0.1:8000**. The studio includes live 3D editing, symmetry,
+undo/redo, project files and browser saves, 360 procedural surface garment
+recipes, colors and static attachments, seeded terrain, GLB import/export,
+and preview image downloads. The packaged Three.js code and character data are
+local assets; core editing does not require an AI provider or a network connection
+after the page assets have loaded.
+
+The frontend can also be hosted independently. A hosted browser workspace does
+not include a Python or Blender worker. Text/prompt generation (Tripo, Meshy)
+and image-upload generation (Hi3D) use the separately connected worker and its
+server-side provider credentials. Those live services have not been verified
+with paid credentials in this environment.
+
+For remote worker access, set `CHARACTER3D_STUDIO_TOKEN` to a strong secret and
+`CHARACTER3D_STUDIO_ORIGINS` to the exact allowed browser origin. Use HTTPS.
+Enter the worker URL and token through **System → Connect worker**; the token
+is held only in the tab's memory. Without a token, the studio API accepts local
+clients only. The legacy pipeline app remains separately available as
+`app.main:app`; do not expose its filesystem-path endpoints directly to the web.
+
+The current character is **static, not rigged**. Garments are surface shells,
+not cloth simulation. Extreme combinations need inspection and are not verified
+for animation. Tattoos, local sculpt brushes, hair grooming, prosthetics, and
+Blender browser job controls remain on the roadmap. Browser GLB exports include
+the visible geometry and static attachments; editable settings use project JSON.
+Imported GLBs are exported as GLB rather than saved as procedural projects.
+
+Mesh/target asset provenance and licenses are in `app/studio/web/data/`.
+The MakeHuman build script validates source CC0 declarations, preserves SHA-256
+hashes, and rejects duplicate control IDs. Three.js is vendored under its MIT
+license. Run new regression checks with:
+
+```bash
+python -m pytest tests/test_studio.py tests/test_studio_curves.py -q
+```
+
+## Existing production pipeline
 
 Local-first, prompt-driven high-fidelity 3D character, scene, and world production framework with provider routing across Tripo3D, Meshy, and Hi3D/Hitem3D plus a canonical Blender/USD finishing pipeline.
 

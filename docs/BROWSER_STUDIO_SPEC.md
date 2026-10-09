@@ -188,6 +188,15 @@ Global, regional, and local editing complement each other rather than competing.
 
 ### Parameter families
 
+Breast and glute customization is a priority, per the user's latest direction.
+Give overall size controls prominent placement and provide separate supported
+shape operations: projection, width, upper/lower fullness, lift, spacing where
+applicable, contour firmness/roundness, and independent left/right size. Distinguish
+authored targets from derived local sculpt deltas, and contour shape from physical
+soft-tissue simulation. Keep the character visibly clothed during routine preview.
+Combining global and side-specific controls is additive and requires fit inspection.
+Do not represent extreme combinations as validated for animation or cloth physics.
+
 | Family | Required supported edits |
 | --- | --- |
 | Overall proportions | Stature, head/body ratio, torso/leg ratio, upper/lower body balance, shoulder/pelvis relationship, bilateral or independent sides |
