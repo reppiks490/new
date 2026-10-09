@@ -1,5 +1,9 @@
 # Paused at the user's request — 2026-10-09
 
+**Resumed later on 2026-10-09 at the user's request.** See
+[Dropbox model checkpoint](DROPBOX_MODEL_CHECKPOINT_2026-10-09.md) for the current
+source imports, verification, and next work. The text below is the earlier pause.
+
 The user rejected the visual quality and explicitly asked to pause and save.
 This checkpoint is unfinished work, not an accepted design, release, or claim
 that the supplied reference quality has been reached. Do not resume feature

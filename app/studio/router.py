@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from app.studio import storage
+from app.studio.model_library import get_model, list_models
 from app.studio.character import build_character
 from app.studio.parameters import CharacterState, human_data
 from app.studio.wardrobe import catalog
@@ -36,6 +37,19 @@ def controls():
 @router.get('/wardrobe')
 def wardrobe():
     return catalog()
+
+
+@router.get('/models')
+def models():
+    return list_models()
+
+
+@router.get('/models/{identifier}')
+def model(identifier: str):
+    try:
+        return get_model(identifier)
+    except KeyError:
+        raise HTTPException(404, 'Model not found')
 
 
 class ProjectRequest(BaseModel):

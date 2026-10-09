@@ -6,6 +6,47 @@ import {applySkinColor,skinMaterial,fabricMaterial,finishGarment,eyeMaterial,add
 import {skinTexture,avatarAsset,addFittedAsset,visibleBodyIndices} from './avatar-assets.js';
 import {smoothSurface} from './subdivide.js';
 
+export const MAX_GLB_BYTES=150*1024*1024;
+
+function validateGLB(buffer){
+  if(!(buffer instanceof ArrayBuffer)||buffer.byteLength<20||buffer.byteLength>MAX_GLB_BYTES)throw Error('Use a GLB file up to 150 MiB');
+  const header=new DataView(buffer);
+  if(header.getUint32(0,true)!==0x46546c67||header.getUint32(4,true)!==2||header.getUint32(8,true)!==buffer.byteLength)throw Error('Use a valid GLB 2.0 file');
+  let offset=12,doc=null,binaryBytes=0;
+  while(offset<buffer.byteLength){
+    if(offset+8>buffer.byteLength)throw Error('Incomplete GLB chunk');
+    const length=header.getUint32(offset,true),type=header.getUint32(offset+4,true);
+    if(length%4||offset+8+length>buffer.byteLength)throw Error('Invalid GLB chunk bounds');
+    if(offset===12){
+      if(type!==0x4e4f534a||length>16*1024*1024)throw Error('Invalid or oversized GLB metadata');
+      doc=JSON.parse(new TextDecoder().decode(new Uint8Array(buffer,offset+8,length)));
+    }else if(type===0x004e4942)binaryBytes+=length;
+    offset+=8+length;
+  }
+  if(!doc||doc.asset?.version!=='2.0')throw Error('Use a valid GLB 2.0 asset');
+  for(const entry of [...(doc.images||[]),...(doc.buffers||[])])if(entry.uri&&!entry.uri.startsWith('data:'))throw Error('GLB external references are not supported');
+  let totalBytes=0;
+  for(const b of doc.buffers||[]){
+    if(!Number.isSafeInteger(b.byteLength)||b.byteLength<0)throw Error('Invalid GLB buffer size');
+    totalBytes+=b.byteLength;
+    if(!b.uri&&b.byteLength>binaryBytes)throw Error('GLB buffer exceeds embedded binary data');
+  }
+  if(totalBytes>MAX_GLB_BYTES)throw Error('Decoded GLB buffers exceed 150 MiB');
+  for(const b of doc.bufferViews||[]){
+    const size=doc.buffers?.[b.buffer]?.byteLength,start=b.byteOffset??0;
+    if(!Number.isSafeInteger(start)||start<0||!Number.isSafeInteger(b.byteLength)||b.byteLength<0||size===undefined||start+b.byteLength>size)throw Error('GLB buffer view is out of bounds');
+  }
+  for(const accessor of doc.accessors||[])if(!Number.isSafeInteger(accessor.count)||accessor.count<0||accessor.count>20000000)throw Error('Unsupported GLB accessor size');
+}
+
+function disposeObject(object){
+  const geometries=new Set(),materials=new Set(),textures=new Set();
+  object?.traverse(o=>{if(o.geometry)geometries.add(o.geometry);for(const m of [].concat(o.material||[]))materials.add(m);});
+  for(const m of materials){for(const value of Object.values(m))if(value?.isTexture&&!value.userData.sharedAvatarTexture)textures.add(value);m.dispose();}
+  for(const g of geometries)g.dispose();
+  for(const t of textures){t.dispose();t.source?.data?.close?.();}
+}
+
 export class StudioView {
   constructor(canvas, onStats) {
     this.scene = new THREE.Scene();
@@ -22,6 +63,7 @@ export class StudioView {
     const pmrem=new THREE.PMREMGenerator(this.renderer);this.environmentMap=pmrem.fromScene(environment,.06);this.scene.environment=this.environmentMap.texture;this.scene.environmentIntensity=.4;pmrem.dispose();
     environment.traverse(o=>{o.geometry?.dispose();o.material?.dispose();});
     this.controls = new OrbitControls(this.camera, canvas);
+    this.controls.addEventListener('change',()=>this.invalidate());
     this.controls.enableDamping = !matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.controls.target.set(0, .9, 0);
     this.camera.position.set(2.4, 1.35, 4);
@@ -36,7 +78,7 @@ export class StudioView {
     this.grid.material.transparent=true;this.grid.material.opacity=.24;this.scene.add(this.grid);
     this.onStats=onStats;
     this.observer = new ResizeObserver(()=>this.resize());this.observer.observe(canvas.parentElement);
-    this.resize();this.renderer.setAnimationLoop(()=>{this.controls.update();this.renderer.render(this.scene,this.camera);});
+    this.resize();this.renderer.setAnimationLoop(()=>{this.controls.update();if(this.needsRender){this.needsRender=false;this.renderer.render(this.scene,this.camera);}});
     canvas.addEventListener('keydown',e=>{
       if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','-','=','f','F'].includes(e.key))return;
       e.preventDefault();if(e.key.toLowerCase()==='f')return this.frame();
@@ -47,9 +89,11 @@ export class StudioView {
       s.makeSafe();this.camera.position.copy(this.controls.target).add(new THREE.Vector3().setFromSpherical(s));this.controls.update();
     });
   }
-  resize(){const {width,height}=this.renderer.domElement.parentElement.getBoundingClientRect();this.renderer.setSize(width,height,false);this.camera.aspect=width/Math.max(1,height);this.camera.updateProjectionMatrix();}
+  invalidate(){this.needsRender=true;}
+  resize(){const {width,height}=this.renderer.domElement.parentElement.getBoundingClientRect();this.renderer.setSize(width,height,false);this.camera.aspect=width/Math.max(1,height);this.camera.updateProjectionMatrix();this.invalidate();}
   replace(object, reframe=false){
-    if(this.object){this.scene.remove(this.object);this.object.traverse(o=>{o.geometry?.dispose();for(const m of [].concat(o.material||[])){for(const v of Object.values(m))if(v?.isTexture&&!v.userData.sharedAvatarTexture)v.dispose();m.dispose();}});}
+    if(this.object){this.scene.remove(this.object);disposeObject(this.object);}
+    this.animations=[];this.morphControls=[];
     this.object=object;this.scene.add(object);
     this.setWire(this.wire||false);
     let triangles=0;object.traverse(o=>{if(o.isMesh){triangles+=(o.geometry.index?.count||o.geometry.attributes.position.count)/3;o.castShadow=true;o.receiveShadow=true;}});
@@ -60,15 +104,41 @@ export class StudioView {
   frame(){if(!this.object)return;const box=new THREE.Box3().setFromObject(this.object),center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3()),d=Math.max(size.x,size.y,size.z)*1.9;this.controls.target.copy(center);this.camera.position.copy(center).add(new THREE.Vector3(d*.28,d*.12,d));this.camera.far=Math.max(100,d*100);this.camera.updateProjectionMatrix();this.controls.update();this.grid.scale.setScalar(Math.max(1,size.x/4));this.grid.position.y=box.min.y-.006;this.floor.position.y=box.min.y-.008;}
   portrait(){if(!this.object)return;const box=new THREE.Box3().setFromObject(this.object),h=box.max.y-box.min.y,center=new THREE.Vector3((box.min.x+box.max.x)/2,box.max.y-h*.105,(box.min.z+box.max.z)/2);this.controls.target.copy(center);this.camera.position.copy(center).add(new THREE.Vector3(h*.08,h*.01,h*.55));this.controls.update();}
   angle(direction){if(!this.object)return;const center=this.controls.target,d=this.camera.position.distanceTo(center);this.camera.position.copy(center).add(new THREE.Vector3(...direction).multiplyScalar(d));this.controls.update();}
-  setWire(value){this.wire=value;this.object?.traverse(o=>{for(const m of [].concat(o.material||[]))m.wireframe=value;});}
-  async export(){if(!this.object)throw Error('No model to export');return new GLTFExporter().parseAsync(this.object,{binary:true});}
+  setWire(value){this.wire=value;this.object?.traverse(o=>{for(const m of [].concat(o.material||[]))m.wireframe=value;});this.invalidate();}
+  async export(){if(!this.object)throw Error('No model to export');return new GLTFExporter().parseAsync(this.object,{binary:true,animations:this.animations||[]});}
   async import(buffer){
-    const view=new DataView(buffer);if(buffer.byteLength<20||view.getUint32(0,true)!==0x46546c67||view.getUint32(4,true)!==2||view.getUint32(8,true)!==buffer.byteLength)throw Error('Use a valid GLB 2.0 file');
-    const len=view.getUint32(12,true);if(20+len>buffer.byteLength||view.getUint32(16,true)!==0x4e4f534a)throw Error('Invalid GLB metadata');
-    const doc=JSON.parse(new TextDecoder().decode(new Uint8Array(buffer,20,len)));
-    for(const entry of [...(doc.images||[]),...(doc.buffers||[])])if(entry.uri&&!entry.uri.startsWith('data:'))throw Error('GLB external references are not supported');
-    const gltf=await new GLTFLoader().parseAsync(buffer,'');this.replace(gltf.scene,true);
+    validateGLB(buffer);
+    const gltf=await new GLTFLoader().parseAsync(buffer,'');
+    try{
+      let meshes=0;
+      gltf.scene.traverse(o=>{
+        if(!o.isMesh)return;meshes++;
+        const positions=o.geometry.attributes.position;
+        if(!positions||!positions.count)throw Error('Model contains an empty mesh');
+        for(let i=0;i<positions.count;i++)for(const value of [positions.getX(i),positions.getY(i),positions.getZ(i)])if(!Number.isFinite(value)||Math.abs(value)>1e6)throw Error('Model contains invalid or unsupported vertex coordinates');
+      });
+      const bounds=new THREE.Box3().setFromObject(gltf.scene),size=bounds.getSize(new THREE.Vector3());
+      if(!meshes||bounds.isEmpty()||![...bounds.min.toArray(),...bounds.max.toArray()].every(Number.isFinite)||Math.max(size.x,size.y,size.z)>1e6||Math.max(size.x,size.y,size.z)<1e-6)throw Error('Model has invalid or unsupported scene bounds');
+      this.replace(gltf.scene,true);this.animations=gltf.animations||[];
+      let meshIndex=0;
+      gltf.scene.traverse(o=>{
+        if(!o.isMesh)return;
+        const id=meshIndex++,names=Object.entries(o.morphTargetDictionary||{});
+        for(let index=0;index<(o.morphTargetInfluences?.length||0);index++){
+          const value=o.morphTargetInfluences[index];
+          if(!Number.isFinite(value)||Math.abs(value)>10)continue;
+          const label=names.find(([,i])=>i===index)?.[0]||`Target ${index+1}`;
+          this.morphControls.push({id:`m${id}:${index}`,label,mesh:o.name||`Mesh ${id+1}`,object:o,index,initial:value,min:Math.min(0,value),max:Math.max(1,value)});
+        }
+      });
+      return {animations:this.animations.length,morphs:this.morphControls.length};
+    }catch(error){if(this.object!==gltf.scene)disposeObject(gltf.scene);throw error;}
   }
+  getMorphControls(){return (this.morphControls||[]).map(({object,index,...control})=>({...control,value:object.morphTargetInfluences[index]}));}
+  morphValues(){return Object.fromEntries(this.getMorphControls().map(c=>[c.id,c.value]));}
+  setMorph(id,value){const c=this.morphControls?.find(item=>item.id===id);if(!c||!Number.isFinite(value)||value<c.min||value>c.max)throw Error('Invalid source morph setting');c.object.morphTargetInfluences[c.index]=value;this.invalidate();}
+  applyMorphValues(values){for(const [id,value] of Object.entries(values)){const c=this.morphControls?.find(item=>item.id===id);if(!c||!Number.isFinite(value)||value<c.min||value>c.max)throw Error('Project morphs do not match this source model');}for(const [id,value] of Object.entries(values))this.setMorph(id,value);}
+  resetMorphs(){for(const c of this.morphControls||[])c.object.morphTargetInfluences[c.index]=c.initial;this.invalidate();}
   snapshot(){this.renderer.render(this.scene,this.camera);return this.renderer.domElement.toDataURL('image/png');}
 }
 
