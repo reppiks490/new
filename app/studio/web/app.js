@@ -30,6 +30,47 @@ function formatBytes(bytes){return Number.isFinite(bytes)?`${(bytes/1024/1024).t
 function validModelId(id){return typeof id==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(id);}
 function sourceCredit(value){return typeof value==='string'?value:value?JSON.stringify(value):'No creator credit supplied';}
 function updateConnectionStatus(){$('backend-status').textContent=capabilities?.backend?'Worker connected':librarySource==='bundled'?'Browser mode · bundled library':'Browser mode · no worker';}
+const editTargets=[
+  {keys:['breast','bust'],test:s=>/\b(projection|project)\b/.test(s)?'breast-projection':/\b(width|wider|narrower)\b/.test(s)?'breast-width':/\b(upper|top)\b/.test(s)?'breast-upper-fullness':/\b(lower|bottom)\b/.test(s)?'breast-lower-fullness':'breast-size'},
+  {keys:['butt','glute','rear'],test:s=>/\b(projection|project)\b/.test(s)?'glute-projection':/\b(width|wider|narrower)\b/.test(s)?'glute-width':/\b(lift|higher)\b/.test(s)?'glute-lift':/\b(round|rounder)\b/.test(s)?'glute-roundness':'buttocks-volume'},
+  {keys:['hip'],test:s=>/\b(depth|deeper)\b/.test(s)?'hip-scale-depth':'hip-scale-horiz'},
+  {keys:['chest','pectoral'],test:()=> 'torso-muscle-pectoral'},
+  {keys:['stomach','abdomen','belly'],test:()=> 'stomach-tone'},
+];
+function parsePromptParts(prompt,available){
+  if(typeof prompt!=='string'||prompt.length>2000)throw Error('Keep the edit prompt under 2,000 characters.');
+  const parts=prompt.toLowerCase().split(/\s+(?:and|then)\s+|[,;\n]+/).map(s=>s.trim()).filter(Boolean),edits=[];
+  for(const part of parts){
+    const target=editTargets.find(item=>item.keys.some(key=>new RegExp(`\\b${key}s?\\b`).test(part)));
+    let entry;
+    if(target){const id=target.test(part);entry=available.find(c=>c.id===id)||available.find(c=>`${c.label} ${c.mesh||''}`.toLowerCase().includes(target.keys[0]));}
+    else entry=available.map(c=>({c,words:String(c.label||'').toLowerCase().split(/[\s_.:/-]+/).filter(w=>w.length>2)}).filter(x=>x.words.some(w=>new RegExp(`\\b${w}\\b`).test(part))).sort((a,b)=>Math.max(...b.words.map(w=>w.length))-Math.max(...a.words.map(w=>w.length)))[0]?.c;
+    if(!entry)continue;
+    const amountMatch=part.match(/([+-]?\d+(?:\.\d+)?)\s*%?/),worded=/\b(slightly|subtly|a little)\b/.test(part)?15:/\b(much|drastically|a lot|significantly)\b/.test(part)?75:40;
+    let amount=amountMatch?Number(amountMatch[1]):worded;
+    if(/\b(smaller|reduce|reduc|decrease|less|shrink|narrower)\b/.test(part)&&amount>0)amount=-amount;
+    const isSet=/\b(set|make|to)\b/.test(part)&&/\bto\b/.test(part);
+    edits.push({entry,value:isSet?amount:entry.value+amount,label:entry.label});
+  }
+  return edits;
+}
+function applyBodyPrompt(){
+  try{
+    const edits=parsePromptParts($('body-edit-prompt').value,data.controls.map(c=>({...c,value:Number(state.controls[c.id]||0)})));
+    if(!edits.length)throw Error('I could not match that prompt to a supported body control. Try “increase breast size by 40% and glute size by 30%.”');
+    remember();
+    for(const edit of edits)state.controls[edit.entry.id]=Math.max(state.extreme?-150:-100,Math.min(state.extreme?150:100,edit.value));
+    renderCharacter();showBody();status(`Applied prompt to ${edits.map(e=>e.label).join(', ')}.`);
+  }catch(error){status(error.message);}
+}
+function applySourcePrompt(){
+  try{
+    const edits=parsePromptParts($('body-edit-prompt').value,view.getMorphControls());
+    if(!edits.length)throw Error('This model has no matching authored shape target. Open Body → Edit an adult base to use the full proportion controls.');
+    for(const edit of edits)view.setMorph(edit.entry.id,Math.max(edit.entry.min,Math.min(edit.entry.max,edit.value)));
+    showImportedControls();status(`Applied source prompt to ${edits.map(e=>e.label).join(', ')}.`);
+  }catch(error){status(error.message);}
+}
 function showModels(){
   const sorted=[...(modelLibrary||[])].sort((a,b)=>Number(/street[ _-]*fighter/i.test(b.name+' '+b.source_filename))-Number(/street[ _-]*fighter/i.test(a.name+' '+a.source_filename))||String(a.name).localeCompare(String(b.name)));
   $('inspector').innerHTML=heading('Your model library','Source models with their original materials, textures, rigs, and authored shape targets.')+
@@ -82,15 +123,20 @@ async function loadLibraryModel(id,project=null){
     status('Preparing original materials and geometry…');await view.import(buffer);kind='model';activeModel=model;morphSearch='';enableModelActions();
     $('view-label').textContent=model.name;$('mode-badge').textContent='Original source model';$('project-name').value=project?.name||model.name;
     if(project)view.applyMorphValues(project.morphs);
-    status(`${model.name} opened. Source materials and ${view.animations.length} animation clips retained.`);
+    tab='body';await renderPanel();
+    status(`${model.name} opened. Body editing options are shown; source materials and ${view.animations.length} animation clips retained.`);
   }finally{modelLoading=false;if(tab==='models')showModels();else if(tab==='body')showImportedControls();}
 }
 function showImportedControls(){
   const controls=view.getMorphControls(),filtered=controls.filter(c=>(c.label+' '+c.mesh).toLowerCase().includes(morphSearch.toLowerCase()));
-  $('inspector').innerHTML=heading('Source shape targets','Only shape targets already authored in this model are available.')+
+  $('inspector').innerHTML=heading('Edit this model','Prompt edits use shape targets already inside this file; the source mesh is preserved.')+
+    (controls.length?`<label for="body-edit-prompt">Prompt to edit</label><textarea id="body-edit-prompt" maxlength="2000" placeholder="Change a feature that has a matching source shape key"></textarea><button class="wide primary" id="apply-edit-prompt">Apply prompt to source</button>`:'')+
     (controls.length?`<input id="source-morph-search" class="search" type="search" aria-label="Search source shape targets" placeholder="Search source shape targets" value="${esc(morphSearch)}"><button id="reset-source-morphs" class="wide">Restore source values</button><p class="hint">${filtered.length} of ${controls.length} targets. Clothing follows only when the source includes matching deformation.</p><div id="source-morph-list">${filtered.map(c=>`<div class="slider-row"><div class="slider-title"><label for="source-${c.id}">${esc(c.label)}</label><input type="number" data-source-number="${c.id}" min="${c.min}" max="${c.max}" step="0.01" value="${c.value}" aria-label="${esc(c.label)} numeric value"></div><input id="source-${c.id}" data-source-morph="${c.id}" type="range" min="${c.min}" max="${c.max}" step="0.01" value="${c.value}"><p class="control-description">${esc(c.mesh)}</p></div>`).join('')}</div>`:'<div class="notice">This model contains no editable source shape targets. Its original geometry, materials, and rig are preserved.</div>')+
-    `<p class="hint">${view.animations?.length||0} embedded animation clips retained. No animation plays automatically.</p><button class="wide" id="return-base">Load supported character base</button>`;
-  $('return-base').onclick=loadSupportedBase;
+    (!controls.length?'<div class="notice">This file has no authored body shape keys, so its imported geometry cannot be reshaped here. The editable adult character base below has dedicated body controls and prompt edits.</div><button class="wide primary" id="edit-adult-base">Open the editable adult character base</button>':'')+
+    `<p class="hint">${view.animations?.length||0} embedded animation clips retained. No animation plays automatically.</p>${controls.length?'<button class="wide" id="return-base">Load supported character base</button>':''}`;
+  if(controls.length)$('apply-edit-prompt').onclick=applySourcePrompt;
+  if($('edit-adult-base'))$('edit-adult-base').onclick=loadSupportedBase;
+  if($('return-base'))$('return-base').onclick=loadSupportedBase;
   if(!controls.length)return;
   $('source-morph-search').oninput=e=>{const start=e.target.selectionStart;morphSearch=e.target.value;showImportedControls();$('source-morph-search').focus();$('source-morph-search').setSelectionRange(start,start);};
   $('reset-source-morphs').onclick=()=>{view.resetMorphs();showImportedControls();status('Original source morph values restored.');};
@@ -112,8 +158,9 @@ function controlList(){
 function showBody(){
   if(kind==='model'||kind==='import'){showImportedControls();return;}
   if(kind!=='character'){ $('inspector').innerHTML=heading('Body studio','Load the supported character base to edit its authored controls.')+'<button class="wide primary" id="return-base">Load supported base</button>'; $('return-base').onclick=loadSupportedBase;return;}
-  $('inspector').innerHTML=heading('Body studio',`Dedicated breast and glute sculpting, plus ${data.controls.length} shape controls across the body.`)+
-    `<div class="focus-regions"><button id="focus-breasts">Breasts</button><button id="focus-glutes">Glutes</button><button id="focus-both">Both</button></div><label>Adult base<select id="base"><option value="female">Feminine adult base</option><option value="male">Masculine adult base</option></select></label><div class="inline-tools"><button id="undo" ${history.length?'':'disabled'}>Undo</button><button id="redo" ${future.length?'':'disabled'}>Redo</button><button id="reset-group">Reset region</button><button id="reset-all">Reset all</button></div><label class="check"><input type="checkbox" id="link" ${linked?'checked':''}>Link left and right</label><label class="check"><input type="checkbox" id="extreme" ${state.extreme?'checked':''}>Extended range · experimental</label><p class="hint">Standard targets: −100 to +100%. Extended targets: ±150%. Extreme combinations need mesh and garment inspection.</p><input class="search" id="control-search" type="search" placeholder="Search all body controls" aria-label="Search body controls" value="${esc(search)}"><label>Region<select id="region">${Object.entries(groups).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><div class="section-line"><h2>Shape controls</h2><span id="control-count"></span></div><div id="control-list"></div><p class="hint">CC0 authored targets + localized sculpt deltas · static character. Bone retargeting and animation correctives are not included.</p>`;
+  $('inspector').innerHTML=heading('Body studio',`Prompt edits and ${data.controls.length} proportion controls for this editable adult base.`)+
+    `<label for="body-edit-prompt">Prompt to edit</label><textarea id="body-edit-prompt" maxlength="2000" placeholder="Increase breast size by 40% and glute size by 30%"></textarea><button id="apply-edit-prompt" class="wide primary">Apply body prompt</button><p class="hint">Prompt percentages set or adjust the authored controls below; changes appear immediately in the preview.</p><div class="focus-regions"><button id="focus-breasts">Breasts</button><button id="focus-glutes">Glutes</button><button id="focus-both">Both</button></div><label>Adult base<select id="base"><option value="female">Feminine adult base</option><option value="male">Masculine adult base</option></select></label><div class="inline-tools"><button id="undo" ${history.length?'':'disabled'}>Undo</button><button id="redo" ${future.length?'':'disabled'}>Redo</button><button id="reset-group">Reset region</button><button id="reset-all">Reset all</button></div><label class="check"><input type="checkbox" id="link" ${linked?'checked':''}>Link left and right</label><label class="check"><input type="checkbox" id="extreme" ${state.extreme?'checked':''}>Extended range · experimental</label><p class="hint">Standard targets: −100 to +100%. Extended targets: ±150%. Extreme combinations need mesh and garment inspection.</p><input class="search" id="control-search" type="search" placeholder="Search all body controls" aria-label="Search body controls" value="${esc(search)}"><label>Region<select id="region">${Object.entries(groups).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><div class="section-line"><h2>Shape controls</h2><span id="control-count"></span></div><div id="control-list"></div><p class="hint">CC0 authored targets + localized sculpt deltas · static character. Bone retargeting and animation correctives are not included.</p>`;
+  $('apply-edit-prompt').onclick=applyBodyPrompt;
   for(const [id,value] of [['focus-breasts','breast'],['focus-glutes','buttocks'],['focus-both','curves']])$(id).onclick=()=>{group=value;search='';$('control-search').value='';$('region').value=group;controlList();};
   $('base').value=state.base;$('base').onchange=e=>{remember();state.base=e.target.value;renderCharacter();};
   $('region').value=group;$('region').onchange=e=>{group=e.target.value;controlList();};
