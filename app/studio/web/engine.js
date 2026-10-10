@@ -49,6 +49,8 @@ function disposeObject(object){
 
 export class StudioView {
   constructor(canvas, onStats) {
+    this.canvas=canvas;this.sculptSelection=null;this.sculptOperations=[];
+    this.raycaster=new THREE.Raycaster();this.pointer=new THREE.Vector2();
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(38, 1, .01, 10000);
     this.renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true, preserveDrawingBuffer:true});
@@ -93,7 +95,7 @@ export class StudioView {
   resize(){const {width,height}=this.renderer.domElement.parentElement.getBoundingClientRect();this.renderer.setSize(width,height,false);this.camera.aspect=width/Math.max(1,height);this.camera.updateProjectionMatrix();this.invalidate();}
   replace(object, reframe=false){
     if(this.object){this.scene.remove(this.object);disposeObject(this.object);}
-    this.animations=[];this.morphControls=[];
+    this.animations=[];this.morphControls=[];this.sculptSelection=null;this.sculptOperations=[];
     this.object=object;this.scene.add(object);
     this.setWire(this.wire||false);
     let triangles=0;object.traverse(o=>{if(o.isMesh){triangles+=(o.geometry.index?.count||o.geometry.attributes.position.count)/3;o.castShadow=true;o.receiveShadow=true;}});
@@ -123,7 +125,7 @@ export class StudioView {
       let meshIndex=0;
       gltf.scene.traverse(o=>{
         if(!o.isMesh)return;
-        const id=meshIndex++,names=Object.entries(o.morphTargetDictionary||{});
+        const id=meshIndex++;o.userData.formaMeshIndex=id;const names=Object.entries(o.morphTargetDictionary||{});
         for(let index=0;index<(o.morphTargetInfluences?.length||0);index++){
           const value=o.morphTargetInfluences[index];
           if(!Number.isFinite(value)||Math.abs(value)>10)continue;
@@ -135,6 +137,56 @@ export class StudioView {
     }catch(error){if(this.object!==gltf.scene)disposeObject(gltf.scene);throw error;}
   }
   getMorphControls(){return (this.morphControls||[]).map(({object,index,...control})=>({...control,value:object.morphTargetInfluences[index]}));}
+  pickSurface(clientX,clientY){
+    if(!this.object)throw Error('Open a model before sculpting');
+    const rect=this.canvas.getBoundingClientRect();this.pointer.set((clientX-rect.left)/rect.width*2-1,-(clientY-rect.top)/rect.height*2+1);
+    this.raycaster.setFromCamera(this.pointer,this.camera);
+    const hit=this.raycaster.intersectObject(this.object,true).find(item=>item.object.isMesh&&item.face&&Number.isInteger(item.object.userData.formaMeshIndex)&&!item.object.geometry.morphAttributes?.position?.length);
+    if(!hit)throw Error('Click a visible mesh without source shape keys.');
+    const mesh=hit.object,geometry=mesh.geometry;
+    if(geometry.morphAttributes?.position?.length)throw Error('This mesh already has shape keys. Use its source controls, or pick a separate mesh without them.');
+    if(!geometry.boundingBox)geometry.computeBoundingBox();
+    const size=geometry.boundingBox.getSize(new THREE.Vector3()),maxDimension=Math.max(size.x,size.y,size.z);
+    if(!Number.isFinite(maxDimension)||maxDimension<=0)throw Error('This mesh has no usable sculpt bounds.');
+    this.sculptSelection={mesh,meshIndex:mesh.userData.formaMeshIndex,center:mesh.worldToLocal(hit.point.clone()),normal:hit.face.normal.clone().normalize(),maxDimension};
+    return {mesh:mesh.name||`Mesh ${this.sculptSelection.meshIndex+1}`,maxDimension};
+  }
+  sculptFromPrompt(prompt,radiusFraction=.12){
+    if(!this.sculptSelection)throw Error('Pick an area on the model first.');
+    if(typeof prompt!=='string'||prompt.length>500)throw Error('Keep the sculpt prompt under 500 characters.');
+    const amountMatch=prompt.match(/([+-]?\d+(?:\.\d+)?)\s*%?/),worded=/\b(slightly|subtly|a little)\b/i.test(prompt)?15:/\b(much|drastically|a lot|significantly)\b/i.test(prompt)?60:30;
+    let amount=amountMatch?Number(amountMatch[1]):worded;
+    if(/\b(smaller|reduce|reduc|decrease|less|shrink|flatten)\b/i.test(prompt)&&amount>0)amount=-amount;
+    amount=Math.max(-100,Math.min(100,amount));
+    if(!Number.isFinite(radiusFraction)||radiusFraction<.04||radiusFraction>.35)throw Error('Sculpt radius must be between 4% and 35% of the selected mesh.');
+    const selection=this.sculptSelection,operation={meshIndex:selection.meshIndex,center:selection.center.toArray(),normal:selection.normal.toArray(),radius:selection.maxDimension*radiusFraction,amount:selection.maxDimension*radiusFraction*amount/100,label:`Sculpt ${this.sculptOperations.length+1}`};
+    return this.applySculptOperation(operation);
+  }
+  applySculptOperation(operation){
+    if(!this.object||!operation||!Number.isInteger(operation.meshIndex)||!Array.isArray(operation.center)||operation.center.length!==3||!Array.isArray(operation.normal)||operation.normal.length!==3||!Number.isFinite(operation.radius)||operation.radius<=0||!Number.isFinite(operation.amount)||Math.abs(operation.amount)>1e6)throw Error('Invalid sculpt operation.');
+    if(this.sculptOperations.length>=100)throw Error('A model project can contain at most 100 sculpt edits.');
+    const meshes=[];this.object.traverse(o=>{if(o.isMesh)meshes.push(o);});const mesh=meshes[operation.meshIndex];
+    if(!mesh)throw Error('The sculpted mesh is not present in this source model.');
+    let geometry=mesh.geometry;
+    if(geometry.morphAttributes?.position?.length&&!mesh.userData.formaSculptGeometry)throw Error('Sculpt edits must target a mesh without source shape keys.');
+    if(!mesh.userData.formaSculptGeometry){mesh.geometry=geometry=geometry.clone();mesh.userData.formaSculptGeometry=true;}
+    const positions=geometry.attributes.position,delta=new Float32Array(positions.count*3),center=new THREE.Vector3(...operation.center),normal=new THREE.Vector3(...operation.normal).normalize(),r=operation.radius;
+    let affected=0;
+    for(let i=0;i<positions.count;i++){
+      const dx=positions.getX(i)-center.x,dy=positions.getY(i)-center.y,dz=positions.getZ(i)-center.z,distance=Math.hypot(dx,dy,dz);
+      if(distance>=r)continue;
+      const t=distance/r,weight=1-t*t*(3-2*t),offset=operation.amount*weight;
+      delta[i*3]=normal.x*offset;delta[i*3+1]=normal.y*offset;delta[i*3+2]=normal.z*offset;affected++;
+    }
+    if(!affected)throw Error('The selected brush radius did not reach any vertices. Increase its radius and pick again.');
+    const attributes=geometry.morphAttributes.position||(geometry.morphAttributes.position=[]),index=attributes.length,shape=new THREE.Float32BufferAttribute(delta,3);shape.name=operation.label||`Sculpt ${this.sculptOperations.length+1}`;attributes.push(shape);geometry.morphTargetsRelative=true;
+    const previous=mesh.morphTargetInfluences?.slice()||[];mesh.updateMorphTargets();for(let i=0;i<previous.length;i++)mesh.morphTargetInfluences[i]=previous[i];mesh.morphTargetInfluences[index]=1;
+    const meshIndex=operation.meshIndex,id=`m${meshIndex}:${index}`;
+    this.morphControls.push({id,label:shape.name,mesh:mesh.name||`Mesh ${meshIndex+1}`,object:mesh,index,initial:0,min:0,max:1});
+    this.sculptOperations.push({meshIndex,center:[...operation.center],normal:[...operation.normal],radius:operation.radius,amount:operation.amount,label:shape.name});
+    this.invalidate();return {id,label:shape.name,affected_vertices:affected};
+  }
+  getSculptOperations(){return this.sculptOperations.map(operation=>({...operation,center:[...operation.center],normal:[...operation.normal]}));}
   morphValues(){return Object.fromEntries(this.getMorphControls().map(c=>[c.id,c.value]));}
   setMorph(id,value){const c=this.morphControls?.find(item=>item.id===id);if(!c||!Number.isFinite(value)||value<c.min||value>c.max)throw Error('Invalid source morph setting');c.object.morphTargetInfluences[c.index]=value;this.invalidate();}
   applyMorphValues(values){for(const [id,value] of Object.entries(values)){const c=this.morphControls?.find(item=>item.id===id);if(!c||!Number.isFinite(value)||value<c.min||value>c.max)throw Error('Project morphs do not match this source model');}for(const [id,value] of Object.entries(values))this.setMorph(id,value);}

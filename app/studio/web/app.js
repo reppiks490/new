@@ -6,9 +6,15 @@ const $=id=>document.getElementById(id), esc=value=>String(value).replace(/[&<>"
 const defaults=()=>({base:'female',controls:{},extreme:false,skin:'#b77f60',cloth:'#253d65',iris:'#527c83',outfit:'female_casualsuit01',hair:'long01',shoes:'shoes01',skinTexture:true,attachments:[]});
 let state=defaults(), data,catalog,tab='models',kind='empty',group='curves',search='',category='fashion',wardrobePage=0,mature=false,linked=true;
 let backend='',token='',capabilities=null,reference=null,uploadedImage=null,updateTimer,history=[],future=[],jobs=[],terrain={seed:7,size:200,height:35,resolution:6};
-let baseAssetsPromise,modelLibrary=null,librarySource=null,libraryError='',libraryLoading=false,modelLoading=false,activeModel=null,morphSearch='';
+let baseAssetsPromise,modelLibrary=null,librarySource=null,libraryError='',libraryLoading=false,modelLoading=false,activeModel=null,morphSearch='',sculptPicking=false;
 const groups={curves:'Breasts & glutes',breast:'Breasts',armslegs:'Arms, legs, hands & feet',head:'Head',eyes:'Eyes',nose:'Nose',mouth:'Mouth',ears:'Ears',cheek:'Cheeks',chin:'Chin & jaw',forehead:'Forehead',eyebrows:'Brows',neck:'Neck',torso:'Torso',hip:'Hips',pelvis:'Pelvis',stomach:'Abdomen',buttocks:'Glutes'};
 const view=new StudioView($('canvas'),text=>$('mesh-stats').textContent=text);
+function stopSculptPicking(){sculptPicking=false;$('canvas').classList.remove('sculpt-picking');}
+$('canvas').addEventListener('click',event=>{
+  if(!sculptPicking)return;
+  try{const target=view.pickSurface(event.clientX,event.clientY);stopSculptPicking();if(tab==='body')showImportedControls();status(`Picked ${target.mesh}. Use a sculpt prompt to inflate or shrink this surface area.`);}
+  catch(error){status(error.message);}
+});
 function status(text){$('status').textContent=text;}
 function remember(){history.push(structuredClone(state));if(history.length>80)history.shift();future=[];if($('undo'))$('undo').disabled=false;}
 function hasModel(){return Boolean(view.object);}
@@ -71,6 +77,10 @@ function applySourcePrompt(){
     showImportedControls();status(`Applied source prompt to ${edits.map(e=>e.label).join(', ')}.`);
   }catch(error){status(error.message);}
 }
+function applySculptPrompt(){
+  try{const result=view.sculptFromPrompt($('sculpt-prompt').value,Number($('sculpt-radius').value)/100);showImportedControls();status(`Applied localized sculpt: ${result.affected_vertices.toLocaleString()} vertices changed. Export GLB to keep the edit.`);}
+  catch(error){status(error.message);}
+}
 function showModels(){
   const sorted=[...(modelLibrary||[])].sort((a,b)=>Number(/street[ _-]*fighter/i.test(b.name+' '+b.source_filename))-Number(/street[ _-]*fighter/i.test(a.name+' '+a.source_filename))||String(a.name).localeCompare(String(b.name)));
   $('inspector').innerHTML=heading('Your model library','Source models with their original materials, textures, rigs, and authored shape targets.')+
@@ -122,7 +132,7 @@ async function loadLibraryModel(id,project=null){
     if(digest!==model.sha256.toLowerCase())throw Error('Downloaded model does not match its registered source hash');
     status('Preparing original materials and geometry…');await view.import(buffer);kind='model';activeModel=model;morphSearch='';enableModelActions();
     $('view-label').textContent=model.name;$('mode-badge').textContent='Original source model';$('project-name').value=project?.name||model.name;
-    if(project)view.applyMorphValues(project.morphs);
+    if(project){for(const operation of project.sculpt_ops||[])view.applySculptOperation(operation);view.applyMorphValues(project.morphs);}
     tab='body';await renderPanel();
     status(`${model.name} opened. Body editing options are shown; source materials and ${view.animations.length} animation clips retained.`);
   }finally{modelLoading=false;if(tab==='models')showModels();else if(tab==='body')showImportedControls();}
@@ -130,11 +140,15 @@ async function loadLibraryModel(id,project=null){
 function showImportedControls(){
   const controls=view.getMorphControls(),filtered=controls.filter(c=>(c.label+' '+c.mesh).toLowerCase().includes(morphSearch.toLowerCase()));
   $('inspector').innerHTML=heading('Edit this model','Prompt edits use shape targets already inside this file; the source mesh is preserved.')+
+    `<h2>Direct surface sculpt</h2><p class="hint">Pick a point on the model, then inflate or shrink that mesh area. Separate clothing meshes need their own pass.</p><button id="pick-sculpt-area" class="wide" aria-pressed="${sculptPicking}">${sculptPicking?'Click a model area…':'Pick an area in the 3D view'}</button><p class="hint">${view.sculptSelection?`Selected mesh: ${esc(view.sculptSelection.mesh.name||`Mesh ${view.sculptSelection.meshIndex+1}`)}`:'No surface area selected.'}</p><label for="sculpt-radius">Sculpt radius · <span id="sculpt-radius-label">12%</span> of mesh</label><input id="sculpt-radius" type="range" min="4" max="35" step="1" value="12"><label for="sculpt-prompt">Prompt for selected area</label><textarea id="sculpt-prompt" maxlength="500" placeholder="Make this area fuller by 30%"></textarea><button id="apply-sculpt-prompt" class="wide primary" ${view.sculptSelection?'':'disabled'}>Apply localized sculpt</button><p class="hint">Each edit becomes a shape key, so it can be adjusted below and is saved in model projects.</p>`+
     (controls.length?`<label for="body-edit-prompt">Prompt to edit</label><textarea id="body-edit-prompt" maxlength="2000" placeholder="Change a feature that has a matching source shape key"></textarea><button class="wide primary" id="apply-edit-prompt">Apply prompt to source</button>`:'')+
     (controls.length?`<input id="source-morph-search" class="search" type="search" aria-label="Search source shape targets" placeholder="Search source shape targets" value="${esc(morphSearch)}"><button id="reset-source-morphs" class="wide">Restore source values</button><p class="hint">${filtered.length} of ${controls.length} targets. Clothing follows only when the source includes matching deformation.</p><div id="source-morph-list">${filtered.map(c=>`<div class="slider-row"><div class="slider-title"><label for="source-${c.id}">${esc(c.label)}</label><input type="number" data-source-number="${c.id}" min="${c.min}" max="${c.max}" step="0.01" value="${c.value}" aria-label="${esc(c.label)} numeric value"></div><input id="source-${c.id}" data-source-morph="${c.id}" type="range" min="${c.min}" max="${c.max}" step="0.01" value="${c.value}"><p class="control-description">${esc(c.mesh)}</p></div>`).join('')}</div>`:'<div class="notice">This model contains no editable source shape targets. Its original geometry, materials, and rig are preserved.</div>')+
     (!controls.length?'<div class="notice">This file has no authored body shape keys, so its imported geometry cannot be reshaped here. The editable adult character base below has dedicated body controls and prompt edits.</div><button class="wide primary" id="edit-adult-base">Open the editable adult character base</button>':'')+
     `<p class="hint">${view.animations?.length||0} embedded animation clips retained. No animation plays automatically.</p>${controls.length?'<button class="wide" id="return-base">Load supported character base</button>':''}`;
   if(controls.length)$('apply-edit-prompt').onclick=applySourcePrompt;
+  $('pick-sculpt-area').onclick=()=>{sculptPicking=!sculptPicking;$('canvas').classList.toggle('sculpt-picking',sculptPicking);$('pick-sculpt-area').setAttribute('aria-pressed',String(sculptPicking));$('pick-sculpt-area').textContent=sculptPicking?'Click a model area…':'Pick an area in the 3D view';status(sculptPicking?'Click a visible mesh area in the preview.':'Surface picking canceled.');};
+  $('sculpt-radius').oninput=e=>{$('sculpt-radius-label').textContent=`${e.target.value}%`;};
+  $('apply-sculpt-prompt').onclick=applySculptPrompt;
   if($('edit-adult-base'))$('edit-adult-base').onclick=loadSupportedBase;
   if($('return-base'))$('return-base').onclick=loadSupportedBase;
   if(!controls.length)return;
@@ -252,14 +266,15 @@ async function connect(){
 function localProjects(){try{const entries=JSON.parse(localStorage.getItem('forma-projects')||'[]');return Array.isArray(entries)?entries.filter(p=>p&&typeof p.id==='string'&&typeof p.created==='string'):[];}catch{return [];}}
 function projectData(){
   const project={id:crypto.randomUUID(),schema_version:1,name:$('project-name').value.trim()||'Untitled',kind,created:new Date().toISOString()};
-  if(kind==='model'&&activeModel)return {...project,schema_version:2,source_id:activeModel.id,source_sha256:activeModel.sha256,morphs:view.morphValues()};
+  if(kind==='model'&&activeModel)return {...project,schema_version:3,source_id:activeModel.id,source_sha256:activeModel.sha256,morphs:view.morphValues(),sculpt_ops:view.getSculptOperations()};
   return {...project,character:structuredClone(state),terrain};
 }
 function validateProject(p){
   if(!p||typeof p!=='object'||typeof p.name!=='string'||p.name.length>120)throw Error('Invalid project metadata');
   if(p.kind==='model'){
-    if(p.schema_version!==2||!validModelId(p.source_id)||!/^[0-9a-f]{64}$/i.test(p.source_sha256||''))throw Error('Invalid model project source');
+    if(![2,3].includes(p.schema_version)||!validModelId(p.source_id)||!/^[0-9a-f]{64}$/i.test(p.source_sha256||''))throw Error('Invalid model project source');
     if(!p.morphs||Array.isArray(p.morphs)||typeof p.morphs!=='object'||Object.keys(p.morphs).length>10000||Object.entries(p.morphs).some(([id,value])=>!/^m\d+:\d+$/.test(id)||!Number.isFinite(value)||Math.abs(value)>10))throw Error('Invalid source morph settings');
+    if(p.schema_version===3&&(!Array.isArray(p.sculpt_ops)||p.sculpt_ops.length>100||p.sculpt_ops.some(op=>!op||!Number.isInteger(op.meshIndex)||op.meshIndex<0||op.meshIndex>10000||![op.center,op.normal].every(v=>Array.isArray(v)&&v.length===3&&v.every(n=>Number.isFinite(n)&&Math.abs(n)<=1e6))||Math.hypot(...op.normal)<=0||!Number.isFinite(op.radius)||op.radius<=0||op.radius>1e6||!Number.isFinite(op.amount)||Math.abs(op.amount)>1e6||typeof op.label!=='string'||op.label.length>64)))throw Error('Invalid saved sculpt operations');
     return p;
   }
   if(!['character','terrain'].includes(p.kind))throw Error('Save local or generated imports with Export GLB. Library models support editable project files.');
@@ -296,6 +311,7 @@ function showStatus(){
   $('system-connect').onclick=()=>{$('backend-url').value=backend||location.origin;$('connection-dialog').showModal();};
 }
 async function renderPanel(){
+  if(tab!=='body')stopSculptPicking();
   document.querySelectorAll('[data-tab]').forEach(button=>button.classList.toggle('selected',button.dataset.tab===tab));
   try{
     if(['body','wardrobe','details'].includes(tab)&&kind==='empty'){
