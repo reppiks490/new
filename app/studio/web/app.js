@@ -100,7 +100,7 @@ async function refreshModels(){
   libraryLoading=true;libraryError='';if(tab==='models')showModels();
   try{
     try{const result=await api('/models');if(!Array.isArray(result))throw Error('Worker returned an invalid model inventory');modelLibrary=result.filter(m=>m&&validModelId(m.id));librarySource='worker';}
-    catch(error){if(backend)throw error;modelLibrary=await loadBundledLibrary({origin:location.origin,maxBytes:MAX_GLB_BYTES});librarySource='bundled';}
+    catch(error){if(backend)throw error;modelLibrary=await loadBundledLibrary({origin:location.href,maxBytes:MAX_GLB_BYTES});librarySource='bundled';}
   }catch(error){modelLibrary=null;librarySource=null;libraryError=`Model library unavailable: ${error.message}. Connect your worker and try again.`;}
   finally{libraryLoading=false;updateConnectionStatus();if(tab==='models')showModels();}
 }
@@ -129,7 +129,7 @@ async function loadLibraryModel(id,project=null){
     if(model.preview_allowed===false)throw Error('This source is awaiting review before preview.');
     if(!/^[0-9a-f]{64}$/i.test(model.sha256||''))throw Error('Model source has no valid integrity hash');
     if(project&&project.source_sha256!==model.sha256)throw Error('The source model has changed since this project was saved. Reopen the current model separately.');
-    const buffer=bundled?await downloadBundledModel(model,{origin:location.origin,maxBytes:MAX_GLB_BYTES,onProgress:bytes=>status(`Downloading bundled model · ${formatBytes(bytes)}`)}):await downloadModel(model.asset_url);
+    const buffer=bundled?await downloadBundledModel(model,{origin:location.href,maxBytes:MAX_GLB_BYTES,onProgress:bytes=>status(`Downloading bundled model · ${formatBytes(bytes)}`)}):await downloadModel(model.asset_url);
     const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',buffer)),n=>n.toString(16).padStart(2,'0')).join('');
     if(digest!==model.sha256.toLowerCase())throw Error('Downloaded model does not match its registered source hash');
     status('Preparing original materials and geometry…');await view.import(buffer);kind='model';activeModel=model;morphSearch='';enableModelActions();
