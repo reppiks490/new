@@ -25,6 +25,10 @@ def capabilities():
     return {'backend': True, 'runtime': detect_runtime_readiness().model_dump(mode='json'),
             'auth_required': bool(os.getenv('CHARACTER3D_STUDIO_TOKEN')),
             'character': {'controls': len(human_data()['controls']), 'license': 'CC0-1.0', 'rigged': False},
+            'body_editing': {'prompt_review': True, 'supported_base_regions': ['waist'],
+                             'protected_regions': ['hips', 'glutes'], 'maximum_width_percent': 15,
+                             'supported_operations': ['reduce_width'],
+                             'imported_model_prompt_edits': 'unavailable until per-model mappings pass validation'},
             'wardrobe': {'count': len(catalog()), 'construction': 'procedural surface shells'},
             'generation': {'text': ['tripo', 'meshy'], 'image_upload': ['hi3d']}}
 
@@ -50,6 +54,21 @@ def model(identifier: str):
         return get_model(identifier)
     except KeyError:
         raise HTTPException(404, 'Model not found')
+
+
+@router.get('/models/{identifier}/capabilities')
+def model_capabilities(identifier: str):
+    try:
+        metadata = get_model(identifier)
+    except KeyError:
+        raise HTTPException(404, 'Model not found')
+    keys = ('id', 'name', 'source_filename', 'sha256', 'bytes', 'mesh_count',
+            'primitive_count', 'triangle_count', 'mesh_summaries', 'material_count',
+            'image_count', 'uv_set_count', 'uv_sets', 'skin_count',
+            'skin_joint_counts', 'joint_attribute_sets', 'node_count',
+            'animation_count', 'animation_names', 'morph_target_count',
+            'morph_target_names', 'editing', 'coordinate_scale', 'readiness')
+    return {key: metadata[key] for key in keys if key in metadata}
 
 
 class ProjectRequest(BaseModel):

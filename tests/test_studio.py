@@ -83,12 +83,30 @@ def test_project_reload_preserves_settings(client):
     assert client.post('/api/studio/projects', json={**payload,'schema_version':2}).status_code == 422
 
 
+def test_waist_edit_is_saved_and_exported_as_geometry(client):
+    edit={'region':'waist','operation':'reduce_width','amount_pct':8,
+          'protected_regions':['hips','glutes']}
+    payload={'name':'Constrained waist edit','character':{'body_edits':[edit]}}
+    saved=client.post('/api/studio/projects',json=payload)
+    assert saved.status_code==200
+    loaded=client.get('/api/studio/projects/'+saved.json()['id'])
+    assert loaded.json()['character']['body_edits']==[edit]
+    exported=client.post('/api/studio/characters/export',json={'body_edits':[edit]})
+    assert exported.status_code==200
+    import trimesh
+    mesh=trimesh.load(io.BytesIO(client.get(exported.json()['url']).content),file_type='glb',force='scene').geometry['body']
+    original=np.asarray(human_data()['positions'])
+    assert not np.array_equal(mesh.vertices,original)
+
+
 def test_private_api_requires_token_and_rejects_untrusted_origins(client, monkeypatch):
     monkeypatch.setenv('CHARACTER3D_STUDIO_TOKEN','test-secret')
     assert client.get('/api/studio/capabilities').status_code == 401
     headers={'Authorization':'Bearer test-secret'}
     response = client.get('/api/studio/capabilities', headers=headers)
     assert response.status_code == 200 and 'test-secret' not in response.text
+    assert response.json()['body_editing']['supported_base_regions'] == ['waist']
+    assert response.json()['body_editing']['protected_regions'] == ['hips', 'glutes']
     assert client.post('/api/studio/projects', json={'name':'test','character':{}},
                        headers={**headers,'Origin':'https://untrusted.example'}).status_code == 403
     assert client.get('/').status_code == 200

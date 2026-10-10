@@ -1,7 +1,7 @@
 # Beyond-Tripo Browser 3D Studio — Product and Quality Specification
 
-**Status:** Draft for owner review. Product goal accepted; implementation details
-and staged plan require review before feature code is written.
+**Status:** Product specification and execution plans approved; implementation
+is in progress.
 
 **Last updated:** 2026-10-10
 
@@ -151,19 +151,45 @@ third-party model service without permission and licensing review.
 
 ## Known current defect
 
-`app/studio/web/app.js` currently splits body prompts on `and` and then picks a
-target and default percentage independently for each resulting fragment. The
-prompt `slim her waist without reducing glute and hip size` can therefore miss
-the waist, reduce glute volume by the parser's default 40%, and increase hip
-width by 40%. The parser has no protected-region representation. Imported
-Street Fighter GLBs have no source morphs, and the current localized sculpt
-accepts only a picked surface point plus a coarse fuller/smaller prompt. This is
-not precise semantic body editing and must not be described as such.
+`app/studio/web/app.js` previously split body prompts on `and` and independently
+guessed a target and default percentage. The prompt `slim her waist without
+reducing glute and hip size` could miss the waist, reduce glute volume by 40%,
+and increase hip width by 40%. The editor now parses that prompt into a plan
+targeting the waist and protecting glutes and hips, and requests an omitted
+amount. The supported CC0 base can preview and accept one bounded waist-width
+operation with tested zero movement across authored hip and glute support
+vertices. Imported Street Fighter GLBs still have no source morphs, and
+localized sculpt remains a coarse picked-surface operation; neither is precise
+semantic body editing.
 
 The Blender files are not currently imported by the browser model library,
 which registers self-contained GLBs. Converting a `.blend` is not considered
 lossless until shape keys, UVs, materials, vertex groups, skeletons, and a
 representative pose survive conversion and are verified on the reopened GLB.
+
+## Implementation evidence (2026-10-10)
+
+- `app/studio/web/edit-intent.js` returns a structured intent with canonical
+  targets, operation, protected regions, explicit amount and unit, ambiguity,
+  and conflict status. The key waist prompt no longer splits its protected
+  conjunction or invents a 40% amount.
+- `app/studio/web/data/body_region_masks.json` defines the current supported
+  CC0 base mask from authored target support. The bounded waist-width reduction
+  excludes vertices touched by authored hip and glute controls. Browser and
+  Python paths measure protected-vertex deltas; tests require exactly zero.
+  Cumulative width reduction is capped at 15% after triangle-orientation checks.
+  Waist widening remains disabled because this topology showed triangle
+  reversals at larger expansion values.
+- Browser flow separates plan review, temporary geometry preview,
+  accept/cancel, undo, project save, and GLB export. Accepted edits persist in
+  project state and export as geometry with the fitted surface garment.
+- Imported GLBs expose mesh/triangle counts, UV sets, skin/joint attributes,
+  source morph names, coordinate bounds when available, and explicit `unmapped`
+  semantic morph status. Prompt application to imports remains unavailable
+  until model-specific masks pass equivalent preservation tests.
+- This is one source-specific operation, not a generalized sculpt system or
+  proof of visual parity. Retopology, generation, texturing, Blender project
+  conversion, and render jobs remain in the approved roadmap.
 
 ## Staged delivery and gates
 

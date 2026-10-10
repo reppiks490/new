@@ -31,6 +31,7 @@ def glb_file(tmp_path, mutate=None, filename='character.glb'):
         return index
 
     position = accessor(struct.pack('<9f', 0, 0, 0, 1, 0, 0, 0, 1, 0), 5126, 'VEC3', 3)
+    uv = accessor(struct.pack('<6f', 0, 0, 1, 0, 0, 1), 5126, 'VEC2', 3)
     indices = accessor(struct.pack('<3H', 0, 1, 2), 5123, 'SCALAR', 3)
     morph = accessor(struct.pack('<9f', *([0.1] * 9)), 5126, 'VEC3', 3)
     joints = accessor(bytes(12), 5121, 'VEC4', 3)
@@ -42,7 +43,7 @@ def glb_file(tmp_path, mutate=None, filename='character.glb'):
         'scene': 0, 'scenes': [{'nodes': [0, 1]}],
         'nodes': [{'mesh': 0, 'skin': 0}, {'name': 'Root joint'}],
         'meshes': [{'name': 'Figure', 'extras': {'targetNames': ['Expression']}, 'weights': [0],
-                    'primitives': [{'attributes': {'POSITION': position, 'JOINTS_0': joints, 'WEIGHTS_0': weights},
+                    'primitives': [{'attributes': {'POSITION': position, 'TEXCOORD_0': uv, 'JOINTS_0': joints, 'WEIGHTS_0': weights},
                                     'indices': indices, 'material': 0, 'targets': [{'POSITION': morph}]}]}],
         'materials': [{'name': 'Cloth', 'pbrMetallicRoughness': {'roughnessFactor': 0.8}}],
         'skins': [{'joints': [1], 'skeleton': 1}],
@@ -79,8 +80,33 @@ def test_registration_preserves_original_binary_rig_morphs_animation_and_materia
     assert model['source_credit'] == 'Example artist'
     assert model['license_status'] == 'user-provided; unverified'
     assert model['readiness']['rendering'] == 'unverified'
+    assert model['editing']['semantic_regions'] == []
+    assert model['editing']['source_morphs'][0] == {
+        'mesh_index': 0, 'name': 'Expression', 'mapping_status': 'unmapped'
+    }
+    assert model['uv_set_count'] == 1
+    assert model['uv_sets'] == ['TEXCOORD_0']
+    assert model['joint_attribute_sets'] == ['JOINTS_0']
+    assert model['skin_joint_counts'] == [1]
     source.write_bytes(b'changed after registration')
     assert saved.read_bytes() == original
+
+
+def test_static_model_without_morphs_does_not_claim_semantic_editing(tmp_path):
+    def make_static(doc):
+        primitive=doc['meshes'][0]['primitives'][0]
+        primitive.pop('targets')
+        primitive['attributes'].pop('JOINTS_0')
+        primitive['attributes'].pop('WEIGHTS_0')
+        doc['meshes'][0].pop('extras')
+        doc['nodes'][0].pop('skin')
+        doc['skins']=[]
+        doc['animations']=[]
+    model=model_library.register_model(glb_file(tmp_path, make_static))
+    assert model['skin_count']==0 and model['animation_count']==0 and model['morph_target_count']==0
+    assert model['editing']['semantic_regions']==[]
+    assert model['editing']['source_morphs']==[]
+    assert model['readiness']['morphs']=='absent'
 
 
 def test_identical_bytes_are_idempotent_and_persist_across_metadata_reads(tmp_path):
@@ -159,10 +185,15 @@ def test_model_endpoints_are_private_and_expose_metadata_without_local_paths(tmp
         assert str(tmp_path) not in response.text
         assert 'private-workspace' not in response.text
         assert client.get('/api/studio/models/' + result['id']).json() == result
+        report = client.get('/api/studio/models/' + result['id'] + '/capabilities')
+        assert report.status_code == 200
+        assert report.json()['editing']['semantic_regions'] == []
+        assert report.json()['editing']['source_morphs'][0]['mapping_status'] == 'unmapped'
         assert client.get('/api/studio/models/not-an-id').status_code == 404
         assert client.get(result['asset_url']).content == source.read_bytes()
         assert client.post('/api/studio/models', json={'path': str(source)}).status_code == 405
         monkeypatch.setenv('CHARACTER3D_STUDIO_TOKEN', 'private-test-token')
         assert client.get('/api/studio/models').status_code == 401
+        assert client.get('/api/studio/models/' + result['id'] + '/capabilities').status_code == 401
         assert client.get(result['asset_url']).status_code == 401
         assert client.get('/api/studio/models', headers={'Authorization': 'Bearer private-test-token'}).status_code == 200

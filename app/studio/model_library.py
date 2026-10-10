@@ -121,23 +121,39 @@ def inspect_model(path: str | Path) -> dict:
         if not meshes:
             raise ValueError('Model has no meshes')
         primitive_count = triangle_count = morph_count = 0
-        morph_names = []
+        morph_names, source_morphs = [], []
+        uv_sets, joint_sets, position_bounds = set(), set(), []
+        mesh_summaries = []
         for mi, mesh in enumerate(meshes):
             target_names = (mesh.get('extras') or {}).get('targetNames', [])
-            mesh_morph_count = 0
+            mesh_morph_count = mesh_vertex_count = mesh_triangle_count = 0
             for primitive in mesh.get('primitives', []):
                 primitive_count += 1
-                position = primitive.get('attributes', {}).get('POSITION')
+                attributes = primitive.get('attributes', {})
+                position = attributes.get('POSITION')
                 if position is None or accessors[position]['count'] <= 0:
                     raise ValueError('Model primitive has no nonempty POSITION accessor')
                 accessor = accessors[primitive.get('indices', position)]
                 count, mode = accessor['count'], primitive.get('mode', 4)
-                triangle_count += count // 3 if mode == 4 else max(count - 2, 0) if mode in {5, 6} else 0
+                triangles = count // 3 if mode == 4 else max(count - 2, 0) if mode in {5, 6} else 0
+                triangle_count += triangles
+                mesh_triangle_count += triangles
+                mesh_vertex_count = max(mesh_vertex_count, accessors[position]['count'])
+                bounds = accessors[position].get('min'), accessors[position].get('max')
+                if all(isinstance(v, list) and len(v) == 3 for v in bounds):
+                    position_bounds.append(bounds)
+                uv_sets.update(key for key in attributes if re.fullmatch(r'TEXCOORD_\d+', key))
+                joint_sets.update(key for key in attributes if re.fullmatch(r'JOINTS_\d+', key))
                 mesh_morph_count = max(mesh_morph_count, len(primitive.get('targets', [])))
             morph_count += mesh_morph_count
             for ti in range(mesh_morph_count):
                 label = _text(target_names[ti]) if ti < len(target_names) else ''
-                morph_names.append(label or f'Mesh {mi + 1} · target {ti + 1}')
+                label = label or f'Mesh {mi + 1} · target {ti + 1}'
+                morph_names.append(label)
+                source_morphs.append({'mesh_index': mi, 'name': label, 'mapping_status': 'unmapped'})
+            mesh_summaries.append({'mesh_index': mi, 'name': _text(mesh.get('name')) or f'Mesh {mi + 1}',
+                                   'vertex_count': mesh_vertex_count, 'triangle_count': mesh_triangle_count,
+                                   'morph_target_count': mesh_morph_count})
         if not primitive_count:
             raise ValueError('Model has no mesh primitives')
         animations = doc.get('animations', [])
@@ -152,6 +168,16 @@ def inspect_model(path: str | Path) -> dict:
             'animation_count': len(animations),
             'animation_names': [_text(a.get('name')) or f'Animation {i + 1}' for i, a in enumerate(animations)],
             'morph_target_count': morph_count, 'morph_target_names': morph_names,
+            'mesh_summaries': mesh_summaries, 'uv_set_count': len(uv_sets),
+            'uv_sets': sorted(uv_sets), 'joint_attribute_sets': sorted(joint_sets),
+            'skin_joint_counts': [len(skin.get('joints', [])) for skin in doc.get('skins', [])],
+            'node_count': len(doc.get('nodes', [])),
+            'coordinate_scale': {'unit': 'meter (glTF convention)',
+                                 'bounds': ([min(v[0][axis] for v in position_bounds) for axis in range(3)],
+                                            [max(v[1][axis] for v in position_bounds) for axis in range(3)])
+                                 if position_bounds else None},
+            'editing': {'semantic_regions': [], 'source_morphs': source_morphs,
+                        'vertex_groups': 'not represented by glTF; joint attributes reported separately'},
             'source_credit': _text(credit, 2000) or None,
             'license_status': 'user-provided; unverified',
             'readiness': {

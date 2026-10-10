@@ -5,6 +5,7 @@ import {GLTFExporter} from './vendor/GLTFExporter.js';
 import {applySkinColor,skinMaterial,fabricMaterial,finishGarment,eyeMaterial,addBrows,detailedIris} from './lookdev.js';
 import {skinTexture,avatarAsset,addFittedAsset,visibleBodyIndices} from './avatar-assets.js';
 import {smoothSurface} from './subdivide.js';
+import {applyBodyEdits} from './body-edits.js';
 
 export const MAX_GLB_BYTES=150*1024*1024;
 
@@ -202,6 +203,8 @@ export function characterGeometry(data,state,catalog){
   const positions=new Float32Array(data.positions.flat());
   for(const target of data.bases[state.base])for(const [i,x,y,z] of target){positions[i*3]+=x/3;positions[i*3+1]+=y/3;positions[i*3+2]+=z/3;}
   for(const control of data.controls){const value=state.controls[control.id]||0;if(!value)continue;for(const [i,x,y,z] of control[value>0?'positive':'negative']){positions[i*3]+=x*Math.abs(value)/100;positions[i*3+1]+=y*Math.abs(value)/100;positions[i*3+2]+=z*Math.abs(value)/100;}}
+  let bodyEditReports=[];
+  if(state.body_edits?.length){if(!data.region_masks)throw Error('Region maps are unavailable for this character base.');const result=applyBodyEdits(positions,data,data.region_masks,state.body_edits);positions.set(result.positions);bodyEditReports=result.reports;}
   const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(positions,3));geometry.setIndex(data.indices);geometry.computeVertexNormals();
   const hair=avatarAsset(state.hair),authoredOutfit=avatarAsset(state.outfit),shoes=avatarAsset(state.shoes),lashes=avatarAsset('eyelashes01');
   const texture=state.skinTexture===false?null:skinTexture(state.base);
@@ -255,7 +258,7 @@ export function characterGeometry(data,state,catalog){
   if(attachments.includes('tail')){const curve=new THREE.CatmullRomCurve3([new THREE.Vector3(0,minY+h*.48,-h*.055),new THREE.Vector3(0,minY+h*.32,-h*.23),new THREE.Vector3(.08,minY+h*.2,-h*.34)]);const m=new THREE.Mesh(new THREE.TubeGeometry(curve,25,h*.012,10,false),material(state.skin));m.name='static_tail';group.add(m);}
   if(attachments.includes('wings'))for(const side of [-1,1]){const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute([0,minY+h*.76,-.07,side*h*.6,minY+h*.9,-h*.16,side*h*.3,minY+h*.5,-h*.13],3));g.computeVertexNormals();const m=new THREE.Mesh(g,material(state.cloth,.85));m.name='static_wing_'+side;group.add(m);}
   geometry.dispose();
-  group.userData={source:'MakeHuman hm08; see component asset credits',authored_controls:Object.keys(state.controls).filter(k=>state.controls[k]).length,rigged:false,garment_construction:authoredOutfit?'authored_mesh':'procedural_surface',extreme:state.extreme};return group;
+  group.userData={source:'MakeHuman hm08; see component asset credits',authored_controls:Object.keys(state.controls).filter(k=>state.controls[k]).length,rigged:false,garment_construction:authoredOutfit?'authored_mesh':'procedural_surface',extreme:state.extreme,body_edit_reports:bodyEditReports};return group;
 }
 
 export function terrainGeometry({seed=7,size=200,height=35,resolution=6}){

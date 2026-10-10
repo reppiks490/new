@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "source": "MakeHuman hm08 CC0 adult base",
+  "coordinate_convention": {"up_axis": "y", "centerline_axis": "x", "units": "meters"},
+  "regions": {
+    "hips": {"authored_support_controls": ["hip-scale-horiz", "hip-scale-depth", "hip-scale-vert"]},
+    "glutes": {"authored_support_controls": ["buttocks-volume", "glute-width", "glute-projection", "glute-lift", "glute-roundness"]},
+    "breasts": {"authored_support_controls": ["breast-size", "breast-width", "breast-projection", "breast-upper-fullness", "breast-lower-fullness"]},
+    "waist": {
+      "candidate_support_control": "torso-scale-horiz",
+      "exclude_regions": ["hips", "glutes"],
+      "vertical_bounds": [0.32, 0.56],
+      "full_influence_bounds": [0.40, 0.52],
+      "max_abs_x": 0.28,
+      "operation": "scale x around centerline",
+      "supported_operations": ["reduce_width"],
+      "max_amount_percent": 15
+    }
+  }
+}

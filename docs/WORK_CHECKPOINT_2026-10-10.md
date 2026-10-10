@@ -1,8 +1,8 @@
 # Work checkpoint — 2026-10-10
 
-This checkpoint preserves the user's latest product direction and the evidence
-collected before implementation. It is a requirements and audit checkpoint, not
-a claim that the requested product is built or at Tripo parity.
+This checkpoint preserves the user's product direction and implementation
+evidence. It is not a claim that the requested product is complete or at Tripo
+parity.
 
 ## User goal
 
@@ -18,9 +18,10 @@ prompt-box requirement.
 
 ## Audit findings
 
-- `app/studio/web/app.js` splits prompt text on `and`, has no protected-region
-  constraints, and applies a default 40% when an amount is missing. The example
-  prompt can miss the waist, reduce glutes, and increase hip width.
+- The former prompt parser split on `and`, lacked protected-region constraints,
+  and guessed 40% when an amount was missing. It has been replaced by structured
+  intent parsing; the protected waist example now plans the waist change and
+  protects glutes and hips without guessing an amount.
 - The two imported Street Fighter GLBs are static. Cammy has 17 meshes and
   2,000,000 triangles; neither Street Fighter GLB contains skins, animation
   clips, or body morph targets.
@@ -48,9 +49,9 @@ prompt-box requirement.
   be investigated before relying on the rendering pipeline.
 - App import, Python compilation, JavaScript syntax checks, and `git diff
   --check` passed before this checkpoint was written.
-- Exact CI test command: `.venv/bin/python -m pytest -q -W error` — 462 passed,
-  11 failed in 60.54 seconds. It fails the same 11 Blender live tests as the
-  initial run. The captured common render error is the missing
+- Exact initial CI test command: `.venv/bin/python -m pytest -q -W error` — 462
+  passed, 11 failed in 60.54 seconds. It fails the same 11 Blender live tests as
+  the initial run. The captured common render error is the missing
   `SubsurfModifier.use_adaptive_subdivision` property in Blender 4.3.2.
 - Local Docker 28.4.0 is available. `docker build -t
   character3d-masterbuild:codex-check .` failed while pip tried to install
@@ -60,11 +61,30 @@ prompt-box requirement.
 
 ## Worktree and next gate
 
-The worktree is `codex/browser-studio-customization`. This turn has only added
-requirements documentation; application code and deployments are unchanged.
-The user asked to preserve the direction in the repository and run tests. The
-resulting spec remains a draft for owner review. After spec approval, write and
-review an implementation plan, then implement in testable increments.
+The worktree is `codex/browser-studio-customization`. The owner approved the
+spec and all five execution plans, and implementation has begun. Current code
+adds a typed prompt intent parser, review-before-preview UI, and one tested local
+waist-width operation for the supported CC0 base. That operation uses explicit
+authored-target-derived masks, protects the vertices touched by hip and glute
+targets with measured zero displacement, limits width change to 15%, supports
+preview/cancel/accept/undo, persists in project state, and exports as geometry.
+Imported models expose capability reports; their semantic edits remain blocked
+until per-model maps pass equivalent checks.
+
+The model inspector now reports mesh and triangle counts, UV sets, skin joint
+counts/attributes, morph names, coordinate bounds when source accessors provide
+them, and explicitly unmapped morph targets. The prompt parser tests cover
+negation, conjunctions, protection, units, missing amounts, conflicts,
+unsupported regions, and comparison ranges.
+
+Latest verification: `.venv/bin/python -m pytest -q -W error` reports 469 passed
+and the same 11 pre-existing Blender 4.3.2 live failures caused by missing
+`SubsurfModifier.use_adaptive_subdivision`. Targeted studio/model/body-edit
+tests pass (34 passed), all Node tests pass (23 passed), JavaScript syntax and
+`git diff --check` pass. A Playwright smoke test at 390px verified plan review,
+preview, cancel, accept, save, no horizontal overflow, and no browser errors.
+The project remains far from full Tripo parity; remaining approved plans cover
+asset ingest, mesh processing, rendering, and provider-backed creation stages.
 
 Do not claim feature parity, lossless source conversion, prompt precision,
 finished high-resolution render jobs, or visual quality equivalence until their

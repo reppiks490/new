@@ -2,6 +2,7 @@ import numpy as np
 import trimesh
 from app.studio.parameters import CharacterState, human_data
 from app.studio.wardrobe import catalog, garment_mask
+from app.studio.body_edits import apply_body_edits
 
 
 def build_character(state: CharacterState) -> trimesh.Scene:
@@ -16,6 +17,10 @@ def build_character(state: CharacterState) -> trimesh.Scene:
             continue
         d = np.array(control['positive' if value > 0 else 'negative'])
         vertices[d[:, 0].astype(int)] += d[:, 1:] * abs(value)/100
+    edit_reports = []
+    if state.body_edits:
+        vertices, edit_reports = apply_body_edits(
+            vertices, data, [edit.model_dump() for edit in state.body_edits])
     mesh = trimesh.Trimesh(vertices=vertices, faces=np.array(data['indices']).reshape(-1, 3), process=False)
     mesh.visual = trimesh.visual.ColorVisuals(mesh, vertex_colors=trimesh.visual.color.hex_to_rgba(state.skin))
     scene = trimesh.Scene()
@@ -37,5 +42,6 @@ def build_character(state: CharacterState) -> trimesh.Scene:
         scene.add_geometry(eye, node_name=f'eye-{side}')
     scene.metadata = {'source': data['source'], 'license': data['license'],
                       'rigged': False, 'outfit_construction': 'procedural surface shell',
-                      'extreme_combinations_validated': False}
+                      'extreme_combinations_validated': False,
+                      'body_edit_reports': edit_reports}
     return scene
