@@ -90,8 +90,8 @@ function showModels(){
     '<p class="hint">Files download only when you open them. Street Fighter models appear first. Source animation clips are preserved in exports; playback is off.</p>'+
     (libraryError?`<div class="notice" role="alert">${esc(libraryError)}</div>`:'')+
     (libraryLoading?'<p class="loading" role="status">Reading model inventory…</p>':sorted.length?`<div class="model-library">${sorted.map(model=>`<article class="model-card ${activeModel?.id===model.id?'active-model':''}"><div class="model-card-heading"><span class="eyebrow">${/street[ _-]*fighter/i.test(model.name+' '+model.source_filename)?'PRIORITY MODEL':'SOURCE MODEL'}</span>${activeModel?.id===model.id?'<span class="badge">Open</span>':''}</div><h2>${esc(model.name)}</h2><p class="model-file">${esc(model.source_filename||'GLB asset')}</p><dl class="model-stats"><div><dt>File</dt><dd>${formatBytes(model.bytes)}</dd></div><div><dt>Triangles</dt><dd>${Number(model.triangle_count||0).toLocaleString()}</dd></div><div><dt>Materials</dt><dd>${Number(model.material_count||0)}</dd></div><div><dt>Skins / clips</dt><dd>${Number(model.skin_count||0)} / ${Number(model.animation_count||0)}</dd></div></dl><p class="hint">${Number(model.morph_target_count||0)} source morph targets · ${esc(typeof model.readiness==='string'?model.readiness:'Source inspected')}</p><details><summary>Source information</summary><p class="hint">${esc(sourceCredit(model.source_credit))}</p><p class="hint">License: ${esc(sourceCredit(model.license_status||'Not supplied'))}</p></details>${model.preview_allowed===false?'<p class="notice">Source review required before preview.</p>':''}<button class="wide primary" data-load-model="${esc(model.id)}" ${modelLoading||model.preview_allowed===false?'disabled':''}>${modelLoading?'Loading model…':'Open model'}</button></article>`).join('')}</div>`:librarySource==='bundled'?'<div class="notice">No source GLB files are published with this Pages site. The editable character base is ready; import a GLB file or connect a model worker to open source models.</div>':'<div class="empty">No model inventory loaded. Refresh to load bundled files, or connect your worker.</div>')+
-    (localModels.length?`<h2>On this device</h2><div class="model-library">${localModels.map(m=>`<article class="model-card"><div class="model-card-heading"><span class="eyebrow">LOCAL FILE</span></div><h2>${esc(m.name)}</h2><p class="model-file">${formatBytes(m.file.size)} · available in this tab</p><button class="wide primary" data-open-local="${m.id}">Open model</button></article>`).join('')}</div>`:'')+
-    '<button class="wide primary" id="models-base">Open editable browser base</button><button class="wide" id="models-import-local">Import from Files or Dropbox</button><input id="models-file-input" type="file" accept=".glb,model/gltf-binary" multiple hidden><p class="hint">Choose Browse → Dropbox in the iPhone file picker. Selected models stay private in this tab; they are not uploaded to the site.</p>';
+    (localModels.length?`<h2>On this device</h2><div class="model-library">${localModels.map(m=>`<article class="model-card"><div class="model-card-heading"><span class="eyebrow">LOCAL FILE</span></div><h2>${esc(m.name)}</h2><p class="model-file">${formatBytes(m.file.size)} · ${m.isDefault?'opens by default on this device':'available in this tab'}</p><button class="wide primary" data-open-local="${m.id}">Open model</button>${m.isDefault?'<button class="wide" data-clear-default>Stop opening by default</button>':`<button class="wide" data-default-local="${m.id}">Open this by default</button>`}</article>`).join('')}</div>`:'')+
+    '<button class="wide primary" id="models-base">Open editable browser base</button><button class="wide" id="models-import-local">Import from Files or Dropbox</button><input id="models-file-input" type="file" accept=".glb,model/gltf-binary" multiple hidden><p class="hint">Choose Browse → Dropbox in the iPhone file picker. Selected models stay private on this device; they are not uploaded to the site. Tap “Open this by default” to have a model open automatically next time.</p>';
   $('models-connect').onclick=connectDialog;$('refresh-models').onclick=refreshModels;$('refresh-models').disabled=libraryLoading;
   $('models-base').onclick=loadSupportedBase;
   $('models-import-local').onclick=()=>$('models-file-input').click();
@@ -103,13 +103,24 @@ function showModels(){
     showModels();status(`${accepted.length} GLB file${accepted.length===1?'':'s'} added to this tab.${skipped?` ${skipped} unsupported or oversized file${skipped===1?'':'s'} skipped.`:''}`);
   };
   for(const button of document.querySelectorAll('[data-open-local]'))button.onclick=()=>openLocalModel(button.dataset.openLocal);
+  for(const button of document.querySelectorAll('[data-default-local]'))button.onclick=()=>setDefaultModel(button.dataset.defaultLocal);
+  for(const button of document.querySelectorAll('[data-clear-default]'))button.onclick=clearDefaultModel;
   for(const button of document.querySelectorAll('[data-load-model]'))button.onclick=()=>loadLibraryModel(button.dataset.loadModel).catch(error=>status(error.message));
 }
+// Default model lives only in this browser's IndexedDB; it is never uploaded or published.
+function deviceStore(mode,fn){return new Promise((resolve,reject)=>{const open=indexedDB.open('forma-device-models',1);open.onupgradeneeded=()=>open.result.createObjectStore('models');open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result,tx=db.transaction('models',mode),req=fn(tx.objectStore('models'));tx.oncomplete=()=>{db.close();resolve(req?.result);};tx.onerror=tx.onabort=()=>{db.close();reject(tx.error||Error('Browser storage unavailable'));};};});}
+const getDefaultModel=()=>deviceStore('readonly',s=>s.get('default')).catch(()=>null);
+async function setDefaultModel(id){
+  const model=localModels.find(m=>m.id===id);if(!model)return status('This local file is no longer available; import it again.');
+  try{status(`Saving ${model.name} on this device…`);await navigator.storage?.persist?.();await deviceStore('readwrite',s=>s.put({name:model.name,blob:model.file,savedAt:Date.now()},'default'));localModels.forEach(m=>m.isDefault=m.id===id);showModels();status(`${model.name} now opens by default on this device.`);}
+  catch(error){status(`Could not save default model: ${error.message}. The browser may be out of storage or in private mode.`);}
+}
+async function clearDefaultModel(){try{await deviceStore('readwrite',s=>s.delete('default'));localModels.forEach(m=>m.isDefault=false);showModels();status('Default model removed from this device. The editable base opens next time.');}catch(error){status(error.message);}}
 async function openLocalModel(id){
   const model=localModels.find(m=>m.id===id);if(!model)return status('This local file is no longer available; import it again.');
   if(modelLoading)return status('Wait for the current model to finish loading.');
   modelLoading=true;clearTimeout(updateTimer);
-  try{status(`Opening ${model.name}…`);await view.import(await model.file.arrayBuffer());kind='import';activeModel=null;morphSearch='';enableModelActions();$('view-label').textContent=model.name;$('mode-badge').textContent='Local GLB · session only';tab='body';await renderPanel();status(`${model.name} loaded from this device. Export GLB to save a modified copy.`);}
+  try{status(`Opening ${model.name}…`);await view.import(await model.file.arrayBuffer());kind='import';activeModel=null;morphSearch='';enableModelActions();$('view-label').textContent=model.name;$('mode-badge').textContent=model.isDefault?'Default GLB · saved on this device':'Local GLB · session only';tab='body';await renderPanel();status(`${model.name} loaded from this device. Export GLB to save a modified copy.`);}
   catch(error){status(`Could not open ${model.name}: ${error.message}`);}
   finally{modelLoading=false;}
 }
@@ -365,7 +376,11 @@ $('save').onclick=async()=>{try{if(['character','terrain'].includes(kind))await 
 $('connection-dialog').addEventListener('close',async()=>{if($('connection-dialog').returnValue!=='connect')return;const value=$('backend-url').value.trim();try{const url=new URL(value);if(url.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(url.hostname))throw Error('Use HTTPS for remote workers');backend=url.origin;token=$('backend-token').value;modelLibrary=null;librarySource=null;await connect();if(!capabilities)throw Error('Worker unavailable or unauthorized. Check URL, token, and allowed origin.');await refreshModels();renderPanel();}catch(e){status(e.message);}});
 
 try{
-  enableModelActions();renderPanel();await connect();await refreshModels();
-  if(!backend&&librarySource==='bundled'&&!modelLibrary?.length){tab='body';if(await loadSupportedBase())status('Editable browser character loaded. Import a GLB or connect a worker to open additional source models.');}
+  enableModelActions();renderPanel();
+  const saved=await getDefaultModel();
+  if(saved?.blob?.size){const id=crypto.randomUUID();localModels.push({id,name:saved.name,file:new File([saved.blob],saved.name,{type:'model/gltf-binary'}),isDefault:true});await openLocalModel(id);}
+  await connect();await refreshModels();
+  if(kind==='import'){if(tab==='models')showModels();}
+  else if(!backend&&librarySource==='bundled'&&!modelLibrary?.length){tab='body';if(await loadSupportedBase())status('Editable browser character loaded. Import a GLB or connect a worker to open additional source models.');}
   else status(librarySource==='bundled'?'Bundled library ready in your browser. Choose a model to download and open.':'Choose a source model to begin. No model downloads until selected.');
 }catch(e){status(e.message);$('inspector').innerHTML=heading('Unable to start',esc(e.message))+'<button class="wide" onclick="location.reload()">Retry loading</button>';}
