@@ -10,6 +10,11 @@ adapters. Native implementation in this session.
 
 **Spec:** [BROWSER_STUDIO_SPEC.md](BROWSER_STUDIO_SPEC.md)
 
+The user's current beyond-Tripo product target and measured acceptance gates
+are documented in [`BEYOND_TRIPO_SPEC.md`](BEYOND_TRIPO_SPEC.md). This older
+implementation plan does not yet implement that target and must be revised
+after the new spec is reviewed.
+
 ## Constraints and review focus
 
 Keep legacy APIs compatible but restrict network exposure. Never expose arbitrary

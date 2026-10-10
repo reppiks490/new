@@ -48,6 +48,13 @@ license. Run new regression checks with:
 python -m pytest tests/test_studio.py tests/test_studio_curves.py -q
 ```
 
+The browser editor is not yet at Tripo capability parity. The current product
+and quality target, audited model-source capabilities, known prompt-constraint
+defect, staged requirements, and measurable acceptance gates are recorded in
+[`docs/BEYOND_TRIPO_SPEC.md`](docs/BEYOND_TRIPO_SPEC.md). In particular, the
+imported static Street Fighter GLBs do not contain authored body shape keys, and
+the unconstrained prompt parser must not be used for precision body edits.
+
 ## Existing production pipeline
 
 Local-first, prompt-driven high-fidelity 3D character, scene, and world production framework with provider routing across Tripo3D, Meshy, and Hi3D/Hitem3D plus a canonical Blender/USD finishing pipeline.

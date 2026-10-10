@@ -2,6 +2,11 @@
 
 Status: proposed design for user review; no implementation or deployment claimed.
 
+The precision-editing and beyond-Tripo product target is recorded in
+[`BEYOND_TRIPO_SPEC.md`](BEYOND_TRIPO_SPEC.md). That specification supersedes
+any earlier assumption that the existing prompt parser is safe for constrained
+body edits. The current implementation does not meet that target.
+
 ## Intended outcome
 
 Evolve Character3D into a private browser application for creating, customizing,
