@@ -6,7 +6,7 @@ import {parseEditIntent} from './edit-intent.js';
 const $=id=>document.getElementById(id), esc=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const defaults=()=>({base:'female',controls:{},body_edits:[],extreme:false,skin:'#b77f60',cloth:'#253d65',iris:'#527c83',outfit:'female_casualsuit01',hair:'long01',shoes:'shoes01',skinTexture:true,attachments:[]});
 let state=defaults(), data,catalog,tab='models',kind='empty',group='curves',search='',category='fashion',wardrobePage=0,mature=false,linked=true;
-let backend='',token='',capabilities=null,reference=null,uploadedImage=null,updateTimer,history=[],future=[],jobs=[],terrain={seed:7,size:200,height:35,resolution:6};
+let backend='',token='',capabilities=null,reference=null,uploadedImage=null,updateTimer,history=[],future=[],jobs=[],localModels=[],terrain={seed:7,size:200,height:35,resolution:6};
 let baseAssetsPromise,modelLibrary=null,librarySource=null,libraryError='',libraryLoading=false,modelLoading=false,activeModel=null,morphSearch='',sculptPicking=false,pendingBodyEdit=null;
 const groups={curves:'Breasts & glutes',breast:'Breasts',armslegs:'Arms, legs, hands & feet',head:'Head',eyes:'Eyes',nose:'Nose',mouth:'Mouth',ears:'Ears',cheek:'Cheeks',chin:'Chin & jaw',forehead:'Forehead',eyebrows:'Brows',neck:'Neck',torso:'Torso',hip:'Hips',pelvis:'Pelvis',stomach:'Abdomen',buttocks:'Glutes'};
 const view=new StudioView($('canvas'),text=>$('mesh-stats').textContent=text);
@@ -90,11 +90,28 @@ function showModels(){
     '<p class="hint">Files download only when you open them. Street Fighter models appear first. Source animation clips are preserved in exports; playback is off.</p>'+
     (libraryError?`<div class="notice" role="alert">${esc(libraryError)}</div>`:'')+
     (libraryLoading?'<p class="loading" role="status">Reading model inventory…</p>':sorted.length?`<div class="model-library">${sorted.map(model=>`<article class="model-card ${activeModel?.id===model.id?'active-model':''}"><div class="model-card-heading"><span class="eyebrow">${/street[ _-]*fighter/i.test(model.name+' '+model.source_filename)?'PRIORITY MODEL':'SOURCE MODEL'}</span>${activeModel?.id===model.id?'<span class="badge">Open</span>':''}</div><h2>${esc(model.name)}</h2><p class="model-file">${esc(model.source_filename||'GLB asset')}</p><dl class="model-stats"><div><dt>File</dt><dd>${formatBytes(model.bytes)}</dd></div><div><dt>Triangles</dt><dd>${Number(model.triangle_count||0).toLocaleString()}</dd></div><div><dt>Materials</dt><dd>${Number(model.material_count||0)}</dd></div><div><dt>Skins / clips</dt><dd>${Number(model.skin_count||0)} / ${Number(model.animation_count||0)}</dd></div></dl><p class="hint">${Number(model.morph_target_count||0)} source morph targets · ${esc(typeof model.readiness==='string'?model.readiness:'Source inspected')}</p><details><summary>Source information</summary><p class="hint">${esc(sourceCredit(model.source_credit))}</p><p class="hint">License: ${esc(sourceCredit(model.license_status||'Not supplied'))}</p></details>${model.preview_allowed===false?'<p class="notice">Source review required before preview.</p>':''}<button class="wide primary" data-load-model="${esc(model.id)}" ${modelLoading||model.preview_allowed===false?'disabled':''}>${modelLoading?'Loading model…':'Open model'}</button></article>`).join('')}</div>`:librarySource==='bundled'?'<div class="notice">No source GLB files are published with this Pages site. The editable character base is ready; import a GLB file or connect a model worker to open source models.</div>':'<div class="empty">No model inventory loaded. Refresh to load bundled files, or connect your worker.</div>')+
-    '<button class="wide primary" id="models-base">Open editable browser base</button><button class="wide" id="models-import-local">Import a local GLB</button>';
+    (localModels.length?`<h2>On this device</h2><div class="model-library">${localModels.map(m=>`<article class="model-card"><div class="model-card-heading"><span class="eyebrow">LOCAL FILE</span></div><h2>${esc(m.name)}</h2><p class="model-file">${formatBytes(m.file.size)} · available in this tab</p><button class="wide primary" data-open-local="${m.id}">Open model</button></article>`).join('')}</div>`:'')+
+    '<button class="wide primary" id="models-base">Open editable browser base</button><button class="wide" id="models-import-local">Import from Files or Dropbox</button><input id="models-file-input" type="file" accept=".glb,model/gltf-binary" multiple hidden><p class="hint">Choose Browse → Dropbox in the iPhone file picker. Selected models stay private in this tab; they are not uploaded to the site.</p>';
   $('models-connect').onclick=connectDialog;$('refresh-models').onclick=refreshModels;$('refresh-models').disabled=libraryLoading;
   $('models-base').onclick=loadSupportedBase;
-  $('models-import-local').onclick=()=>{tab='create';renderPanel();$('creation-mode').value='import';creationFields();};
+  $('models-import-local').onclick=()=>$('models-file-input').click();
+  $('models-file-input').onchange=e=>{
+    const files=[...e.target.files];e.target.value='';
+    const accepted=files.filter(f=>f.name.toLowerCase().endsWith('.glb')&&f.size>0&&f.size<=MAX_GLB_BYTES);
+    const skipped=files.length-accepted.length;
+    for(const file of accepted){if(!localModels.some(m=>m.name===file.name&&m.file.size===file.size&&m.file.lastModified===file.lastModified))localModels.push({id:crypto.randomUUID(),name:file.name,file});}
+    showModels();status(`${accepted.length} GLB file${accepted.length===1?'':'s'} added to this tab.${skipped?` ${skipped} unsupported or oversized file${skipped===1?'':'s'} skipped.`:''}`);
+  };
+  for(const button of document.querySelectorAll('[data-open-local]'))button.onclick=()=>openLocalModel(button.dataset.openLocal);
   for(const button of document.querySelectorAll('[data-load-model]'))button.onclick=()=>loadLibraryModel(button.dataset.loadModel).catch(error=>status(error.message));
+}
+async function openLocalModel(id){
+  const model=localModels.find(m=>m.id===id);if(!model)return status('This local file is no longer available; import it again.');
+  if(modelLoading)return status('Wait for the current model to finish loading.');
+  modelLoading=true;clearTimeout(updateTimer);
+  try{status(`Opening ${model.name}…`);await view.import(await model.file.arrayBuffer());kind='import';activeModel=null;morphSearch='';enableModelActions();$('view-label').textContent=model.name;$('mode-badge').textContent='Local GLB · session only';tab='body';await renderPanel();status(`${model.name} loaded from this device. Export GLB to save a modified copy.`);}
+  catch(error){status(`Could not open ${model.name}: ${error.message}`);}
+  finally{modelLoading=false;}
 }
 async function refreshModels(){
   if(libraryLoading)return;
