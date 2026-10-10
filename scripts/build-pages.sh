@@ -16,9 +16,14 @@ rm dist/studio/index.html
 python - <<'PY'
 from pathlib import Path
 import os
+import re
 p=Path('dist/index.html')
 s=p.read_text().replace('href="/"', 'href="./"')
 version=os.environ.get('GITHUB_SHA','development')[:12]
+for module in Path('dist/studio').rglob('*.js'):
+    text=module.read_text()
+    text=re.sub(r"(['\"])(\.{1,2}/[^'\"]+\.js)(?:\?[^'\"]*)?\1", lambda m: f'{m.group(1)}{m.group(2)}?v={version}{m.group(1)}', text)
+    module.write_text(text)
 for asset in ('./studio/style.css', './studio/vendor/three.module.js', './studio/app.js'):
     s=s.replace(asset+'"', asset+'?v='+version+'"')
 p.write_text(s)
