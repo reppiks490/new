@@ -2,7 +2,7 @@ name: Deploy 3D Studio to GitHub Pages
 
 on:
   push:
-    branches: ["codex/browser-studio-customization", "main"]
+    branches: ["codex/browser-studio-customization", "claude/effort-status-tjzcfd"]
   workflow_dispatch:
 
 permissions:
