@@ -1,4 +1,4 @@
-const LIBRARY_ROOT='/studio/library/';
+const LIBRARY_ROOT='./studio/library/';
 const MAX_MANIFEST_BYTES=1024*1024;
 const MAX_CHUNK_BYTES=16*1024*1024;
 
@@ -6,7 +6,7 @@ function assetURL(value,origin){
   if(typeof value!=='string'||value.length>512)throw Error('Invalid bundled model URL');
   const url=new URL(value,origin);
   if(url.origin!==new URL(origin).origin||url.username||url.password||url.search||url.hash||
-    !url.pathname.startsWith(LIBRARY_ROOT)||!/^\/studio\/library\/[a-zA-Z0-9_./-]+$/.test(url.pathname)||
+    !/\/studio\/library\/[a-zA-Z0-9_./-]+$/.test(url.pathname)||
     value.includes('\\')||value.split('/').some(part=>part==='.'||part==='..'))throw Error('Unsupported bundled model URL');
   return url.href;
 }
