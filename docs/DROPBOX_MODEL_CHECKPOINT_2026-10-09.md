@@ -103,7 +103,8 @@ contains Cammy, the Street Fighter cosplay model, and clothed Command Grab. The
 other three GLBs remain in the full local library. Chromium loaded Command Grab
 from a no-worker bundle and exposed all 12 facial targets. The private deployment
 ID is `appgdep_6ac9cc437cb48191b448a9a1f43160dc`; check its status before claiming
-the browser link is live.
+the browser link is live. It is now **succeeded** at
+`https://forma-character-studio.cloudyrook1.chatgpt.site` and remains owner-only.
 
 Run the private studio from the repository root:
 
@@ -111,7 +112,8 @@ Run the private studio from the repository root:
 .venv/bin/uvicorn app.studio.server:app --host 127.0.0.1 --port 8000
 ```
 
-Then open `http://127.0.0.1:8000/` on that machine. No public deployment or GitHub
-push is claimed. The previous Sites staging copy is outdated. This checkpoint
+Then open `http://127.0.0.1:8000/` on that machine for all six local library
+models. The previous Sites staging copy is outdated. The hosted source commit is
+`4749ed8519719549513f4f355553dfdcd1805c47`. This checkpoint
 does not complete rigging, sculpting, wardrobe fitting, production quality, or
 live text/image generation.
