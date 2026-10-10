@@ -155,8 +155,16 @@ export class StudioView {
   sculptFromPrompt(prompt,radiusFraction=.12){
     if(!this.sculptSelection)throw Error('Pick an area on the model first.');
     if(typeof prompt!=='string'||prompt.length>500)throw Error('Keep the sculpt prompt under 500 characters.');
+    // This brush only knows the picked surface patch. It has no anatomical
+    // segmentation, bilateral pairing, or garment correspondence, so reject
+    // prompts that claim to edit a body region instead of silently deforming
+    // whichever point happened to be selected.
+    if(/\b(?:breasts?|bust|chest|nipples?|glutes?|butt(?:ocks?)?|hips?|waist|abdomen|stomach|thighs?|legs?|calves?|arms?|shoulders?|neck|head|face)\b/i.test(prompt)){
+      throw Error('No edit made. This imported mesh has no verified body-region map. Surface sculpt only moves the picked patch; it cannot precisely change breast size or another named body part. Open the editable character base for mapped body controls.');
+    }
     const amountMatch=prompt.match(/([+-]?\d+(?:\.\d+)?)\s*%?/),worded=/\b(slightly|subtly|a little)\b/i.test(prompt)?15:/\b(much|drastically|a lot|significantly)\b/i.test(prompt)?60:30;
     let amount=amountMatch?Number(amountMatch[1]):worded;
+    if(amount>20)throw Error('No edit made. Local sculpt is limited to 20% of the brush radius per pass. Large percentage prompts are not safe for a point-based brush.');
     if(/\b(smaller|reduce|reduc|decrease|less|shrink|flatten)\b/i.test(prompt)&&amount>0)amount=-amount;
     amount=Math.max(-100,Math.min(100,amount));
     if(!Number.isFinite(radiusFraction)||radiusFraction<.04||radiusFraction>.35)throw Error('Sculpt radius must be between 4% and 35% of the selected mesh.');
