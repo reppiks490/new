@@ -90,8 +90,9 @@ function showModels(){
     '<p class="hint">Files download only when you open them. Street Fighter models appear first. Source animation clips are preserved in exports; playback is off.</p>'+
     (libraryError?`<div class="notice" role="alert">${esc(libraryError)}</div>`:'')+
     (libraryLoading?'<p class="loading" role="status">Reading model inventory…</p>':sorted.length?`<div class="model-library">${sorted.map(model=>`<article class="model-card ${activeModel?.id===model.id?'active-model':''}"><div class="model-card-heading"><span class="eyebrow">${/street[ _-]*fighter/i.test(model.name+' '+model.source_filename)?'PRIORITY MODEL':'SOURCE MODEL'}</span>${activeModel?.id===model.id?'<span class="badge">Open</span>':''}</div><h2>${esc(model.name)}</h2><p class="model-file">${esc(model.source_filename||'GLB asset')}</p><dl class="model-stats"><div><dt>File</dt><dd>${formatBytes(model.bytes)}</dd></div><div><dt>Triangles</dt><dd>${Number(model.triangle_count||0).toLocaleString()}</dd></div><div><dt>Materials</dt><dd>${Number(model.material_count||0)}</dd></div><div><dt>Skins / clips</dt><dd>${Number(model.skin_count||0)} / ${Number(model.animation_count||0)}</dd></div></dl><p class="hint">${Number(model.morph_target_count||0)} source morph targets · ${esc(typeof model.readiness==='string'?model.readiness:'Source inspected')}</p><details><summary>Source information</summary><p class="hint">${esc(sourceCredit(model.source_credit))}</p><p class="hint">License: ${esc(sourceCredit(model.license_status||'Not supplied'))}</p></details>${model.preview_allowed===false?'<p class="notice">Source review required before preview.</p>':''}<button class="wide primary" data-load-model="${esc(model.id)}" ${modelLoading||model.preview_allowed===false?'disabled':''}>${modelLoading?'Loading model…':'Open model'}</button></article>`).join('')}</div>`:'<div class="empty">No model inventory loaded. Refresh to load bundled files, or connect your worker.</div>')+
-    '<button class="wide" id="models-import-local">Import a local GLB</button>';
+    '<button class="wide primary" id="models-base">Open editable browser base</button><button class="wide" id="models-import-local">Import a local GLB</button>';
   $('models-connect').onclick=connectDialog;$('refresh-models').onclick=refreshModels;$('refresh-models').disabled=libraryLoading;
+  $('models-base').onclick=loadSupportedBase;
   $('models-import-local').onclick=()=>{tab='create';renderPanel();$('creation-mode').value='import';creationFields();};
   for(const button of document.querySelectorAll('[data-load-model]'))button.onclick=()=>loadLibraryModel(button.dataset.loadModel).catch(error=>status(error.message));
 }
@@ -101,7 +102,13 @@ async function refreshModels(){
   try{
     try{const result=await api('/models');if(!Array.isArray(result))throw Error('Worker returned an invalid model inventory');modelLibrary=result.filter(m=>m&&validModelId(m.id));librarySource='worker';}
     catch(error){if(backend)throw error;modelLibrary=await loadBundledLibrary({origin:location.href,maxBytes:MAX_GLB_BYTES});librarySource='bundled';}
-  }catch(error){modelLibrary=null;librarySource=null;libraryError=`Model library unavailable: ${error.message}. Connect your worker and try again.`;}
+  }catch(error){
+    if(!backend){
+      // GitHub Pages carries the editable browser base but not private GLB source files.
+      // Keep the studio usable instead of blocking the mobile experience on a missing inventory.
+      modelLibrary=[];librarySource='bundled';libraryError='Source model inventory is not published in this static build. The editable browser base remains available.';
+    }else{modelLibrary=null;librarySource=null;libraryError=`Model library unavailable: ${error.message}. Connect your worker and try again.`;}
+  }
   finally{libraryLoading=false;updateConnectionStatus();if(tab==='models')showModels();}
 }
 async function downloadModel(url){
