@@ -15,6 +15,8 @@ ignored workspace data; they are not bundled into a public deployment or Git.
 Five self-contained GLBs are registered in `workspace/studio/`. Registration
 copies original bytes, uses a content-derived ID, preserves attribution metadata,
 and rejects external resources and invalid binary ranges. Repeat imports dedupe.
+The clothed Command Grab source was later converted and registered, bringing the
+library to six models.
 
 | Library model | Triangles | Embedded images | Browser verification |
 | --- | ---: | ---: | --- |
@@ -23,6 +25,7 @@ and rejects external resources and invalid binary ranges. Repeat imports dedupe.
 | Pomni — source model | 120,826 | 29 | Structure checked; visual review pending |
 | Pomni — T-pose | 2,000,000 | 1 | Structure checked; visual review pending |
 | Frozen Queen — source model | 493,953 | 3 | Structure checked; visual review pending |
+| Command Grab — clothed, rigged character | 1,271,016 | 4 | Loaded, 12 source targets, project reopened and exported |
 
 **All five GLBs have zero skins, animation clips, and morph targets.** Their
 appearance is not evidence of editable topology, rigging, or body controls.
@@ -62,6 +65,12 @@ No source `.blend` was overwritten. No conversion is claimed for these sources:
   warnings, dependency cycles and invalid drivers. Contains adult anatomy
   components. Retained for technical inspection; not converted or previewed.
 
+The Elegg review found a visible swimwear configuration, but none of the 296
+visible body morphs has matching clothing deformation; applying them could break
+the fit. Toon shaders also depend on Blender-specific nodes and one optional
+skin texture is missing, so no visual-fidelity conversion is claimed. Haineko
+has no verified fully clothed outfit configuration, so remains source-only.
+
 Inventories and archive extraction records are in
 `workspace/imported_models/reports/`. Inspection scripts are in `.studio-qa/`.
 
@@ -82,6 +91,19 @@ That export also reloaded in the browser. A separate synthetic fixture verified
 that one skin, one animation clip, and a morph value survive export/reimport.
 The renderer produced zero additional frames during a 500 ms idle check and
 redrew after a morph change. Evidence: `.studio-qa/model-engine-report.json`.
+Command Grab conversion preserves its 70-bone skin and 12 facial targets. Its
+body color graph was baked to a 2K texture; the Blender subsurface scattering
+effect is not represented by glTF's core material model. The source gives the
+character's fan artist credit, but no distribution license.
+
+The local library has six registered models. A static package in
+`/workspace/forma-site/dist` was built for the existing owner-only Sites project.
+Sites limits the expanded deployment archive to 256 MiB, so the hosted catalog
+contains Cammy, the Street Fighter cosplay model, and clothed Command Grab. The
+other three GLBs remain in the full local library. Chromium loaded Command Grab
+from a no-worker bundle and exposed all 12 facial targets. The private deployment
+ID is `appgdep_6ac9cc437cb48191b448a9a1f43160dc`; check its status before claiming
+the browser link is live.
 
 Run the private studio from the repository root:
 

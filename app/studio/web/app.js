@@ -1,11 +1,12 @@
 import {StudioView,characterGeometry,terrainGeometry,MAX_GLB_BYTES} from './engine.js';
 import {loadAvatarAssets,avatarOptions,avatarAsset} from './avatar-assets.js';
+import {loadBundledLibrary,downloadBundledModel} from './bundled-library.js';
 
 const $=id=>document.getElementById(id), esc=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const defaults=()=>({base:'female',controls:{},extreme:false,skin:'#b77f60',cloth:'#253d65',iris:'#527c83',outfit:'female_casualsuit01',hair:'long01',shoes:'shoes01',skinTexture:true,attachments:[]});
 let state=defaults(), data,catalog,tab='models',kind='empty',group='curves',search='',category='fashion',wardrobePage=0,mature=false,linked=true;
 let backend='',token='',capabilities=null,reference=null,uploadedImage=null,updateTimer,history=[],future=[],jobs=[],terrain={seed:7,size:200,height:35,resolution:6};
-let baseAssetsPromise,modelLibrary=null,libraryError='',libraryLoading=false,modelLoading=false,activeModel=null,morphSearch='';
+let baseAssetsPromise,modelLibrary=null,librarySource=null,libraryError='',libraryLoading=false,modelLoading=false,activeModel=null,morphSearch='';
 const groups={curves:'Breasts & glutes',breast:'Breasts',armslegs:'Arms, legs, hands & feet',head:'Head',eyes:'Eyes',nose:'Nose',mouth:'Mouth',ears:'Ears',cheek:'Cheeks',chin:'Chin & jaw',forehead:'Forehead',eyebrows:'Brows',neck:'Neck',torso:'Torso',hip:'Hips',pelvis:'Pelvis',stomach:'Abdomen',buttocks:'Glutes'};
 const view=new StudioView($('canvas'),text=>$('mesh-stats').textContent=text);
 function status(text){$('status').textContent=text;}
@@ -28,13 +29,14 @@ function connectDialog(){$('backend-url').value=backend||location.origin;$('conn
 function formatBytes(bytes){return Number.isFinite(bytes)?`${(bytes/1024/1024).toFixed(1)} MiB`:'Size unavailable';}
 function validModelId(id){return typeof id==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(id);}
 function sourceCredit(value){return typeof value==='string'?value:value?JSON.stringify(value):'No creator credit supplied';}
+function updateConnectionStatus(){$('backend-status').textContent=capabilities?.backend?'Worker connected':librarySource==='bundled'?'Browser mode · bundled library':'Browser mode · no worker';}
 function showModels(){
   const sorted=[...(modelLibrary||[])].sort((a,b)=>Number(/street[ _-]*fighter/i.test(b.name+' '+b.source_filename))-Number(/street[ _-]*fighter/i.test(a.name+' '+a.source_filename))||String(a.name).localeCompare(String(b.name)));
   $('inspector').innerHTML=heading('Your model library','Source models with their original materials, textures, rigs, and authored shape targets.')+
     '<div class="row"><button id="refresh-models">Refresh library</button><button id="models-connect">Connect worker</button></div>'+
     '<p class="hint">Files download only when you open them. Street Fighter models appear first. Source animation clips are preserved in exports; playback is off.</p>'+
     (libraryError?`<div class="notice" role="alert">${esc(libraryError)}</div>`:'')+
-    (libraryLoading?'<p class="loading" role="status">Reading model inventory…</p>':sorted.length?`<div class="model-library">${sorted.map(model=>`<article class="model-card ${activeModel?.id===model.id?'active-model':''}"><div class="model-card-heading"><span class="eyebrow">${/street[ _-]*fighter/i.test(model.name+' '+model.source_filename)?'PRIORITY MODEL':'SOURCE MODEL'}</span>${activeModel?.id===model.id?'<span class="badge">Open</span>':''}</div><h2>${esc(model.name)}</h2><p class="model-file">${esc(model.source_filename||'GLB asset')}</p><dl class="model-stats"><div><dt>File</dt><dd>${formatBytes(model.bytes)}</dd></div><div><dt>Triangles</dt><dd>${Number(model.triangle_count||0).toLocaleString()}</dd></div><div><dt>Materials</dt><dd>${Number(model.material_count||0)}</dd></div><div><dt>Skins / clips</dt><dd>${Number(model.skin_count||0)} / ${Number(model.animation_count||0)}</dd></div></dl><p class="hint">${Number(model.morph_target_count||0)} source morph targets · ${esc(typeof model.readiness==='string'?model.readiness:'Source inspected')}</p><details><summary>Source information</summary><p class="hint">${esc(sourceCredit(model.source_credit))}</p><p class="hint">License: ${esc(sourceCredit(model.license_status||'Not supplied'))}</p></details>${model.preview_allowed===false?'<p class="notice">Source review required before preview.</p>':''}<button class="wide primary" data-load-model="${esc(model.id)}" ${modelLoading||model.preview_allowed===false?'disabled':''}>${modelLoading?'Loading model…':'Open model'}</button></article>`).join('')}</div>`:'<div class="empty">No model inventory loaded. Connect the worker and refresh to see imported files.</div>')+
+    (libraryLoading?'<p class="loading" role="status">Reading model inventory…</p>':sorted.length?`<div class="model-library">${sorted.map(model=>`<article class="model-card ${activeModel?.id===model.id?'active-model':''}"><div class="model-card-heading"><span class="eyebrow">${/street[ _-]*fighter/i.test(model.name+' '+model.source_filename)?'PRIORITY MODEL':'SOURCE MODEL'}</span>${activeModel?.id===model.id?'<span class="badge">Open</span>':''}</div><h2>${esc(model.name)}</h2><p class="model-file">${esc(model.source_filename||'GLB asset')}</p><dl class="model-stats"><div><dt>File</dt><dd>${formatBytes(model.bytes)}</dd></div><div><dt>Triangles</dt><dd>${Number(model.triangle_count||0).toLocaleString()}</dd></div><div><dt>Materials</dt><dd>${Number(model.material_count||0)}</dd></div><div><dt>Skins / clips</dt><dd>${Number(model.skin_count||0)} / ${Number(model.animation_count||0)}</dd></div></dl><p class="hint">${Number(model.morph_target_count||0)} source morph targets · ${esc(typeof model.readiness==='string'?model.readiness:'Source inspected')}</p><details><summary>Source information</summary><p class="hint">${esc(sourceCredit(model.source_credit))}</p><p class="hint">License: ${esc(sourceCredit(model.license_status||'Not supplied'))}</p></details>${model.preview_allowed===false?'<p class="notice">Source review required before preview.</p>':''}<button class="wide primary" data-load-model="${esc(model.id)}" ${modelLoading||model.preview_allowed===false?'disabled':''}>${modelLoading?'Loading model…':'Open model'}</button></article>`).join('')}</div>`:'<div class="empty">No model inventory loaded. Refresh to load bundled files, or connect your worker.</div>')+
     '<button class="wide" id="models-import-local">Import a local GLB</button>';
   $('models-connect').onclick=connectDialog;$('refresh-models').onclick=refreshModels;$('refresh-models').disabled=libraryLoading;
   $('models-import-local').onclick=()=>{tab='create';renderPanel();$('creation-mode').value='import';creationFields();};
@@ -43,9 +45,11 @@ function showModels(){
 async function refreshModels(){
   if(libraryLoading)return;
   libraryLoading=true;libraryError='';if(tab==='models')showModels();
-  try{const result=await api('/models');if(!Array.isArray(result))throw Error('Worker returned an invalid model inventory');modelLibrary=result.filter(m=>m&&validModelId(m.id));}
-  catch(error){modelLibrary=null;libraryError=`Model library unavailable: ${error.message}. Connect your worker and try again.`;}
-  finally{libraryLoading=false;if(tab==='models')showModels();}
+  try{
+    try{const result=await api('/models');if(!Array.isArray(result))throw Error('Worker returned an invalid model inventory');modelLibrary=result.filter(m=>m&&validModelId(m.id));librarySource='worker';}
+    catch(error){if(backend)throw error;modelLibrary=await loadBundledLibrary({origin:location.origin,maxBytes:MAX_GLB_BYTES});librarySource='bundled';}
+  }catch(error){modelLibrary=null;librarySource=null;libraryError=`Model library unavailable: ${error.message}. Connect your worker and try again.`;}
+  finally{libraryLoading=false;updateConnectionStatus();if(tab==='models')showModels();}
 }
 async function downloadModel(url){
   const target=new URL(url,backend||location.origin),origin=new URL(backend||location.origin).origin;
@@ -64,11 +68,15 @@ async function loadLibraryModel(id,project=null){
   if(!validModelId(id))throw Error('Invalid model identifier');
   modelLoading=true;clearTimeout(updateTimer);if(tab==='models')showModels();
   try{
-    status('Reading model source…');const model=await api('/models/'+encodeURIComponent(id));
+    status('Reading model source…');
+    if(!modelLibrary)await refreshModels();
+    const bundled=!backend&&librarySource==='bundled';
+    const model=bundled?modelLibrary.find(item=>item.id===id):await api('/models/'+encodeURIComponent(id));
+    if(!model)throw Error('This source model is not available in the current library.');
     if(model.preview_allowed===false)throw Error('This source is awaiting review before preview.');
     if(!/^[0-9a-f]{64}$/i.test(model.sha256||''))throw Error('Model source has no valid integrity hash');
     if(project&&project.source_sha256!==model.sha256)throw Error('The source model has changed since this project was saved. Reopen the current model separately.');
-    const buffer=await downloadModel(model.asset_url);
+    const buffer=bundled?await downloadBundledModel(model,{origin:location.origin,maxBytes:MAX_GLB_BYTES,onProgress:bytes=>status(`Downloading bundled model · ${formatBytes(bytes)}`)}):await downloadModel(model.asset_url);
     const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',buffer)),n=>n.toString(16).padStart(2,'0')).join('');
     if(digest!==model.sha256.toLowerCase())throw Error('Downloaded model does not match its registered source hash');
     status('Preparing original materials and geometry…');await view.import(buffer);kind='model';activeModel=model;morphSearch='';enableModelActions();
@@ -191,8 +199,8 @@ async function api(path,options={}){
   if(!response.ok){let detail;try{detail=(await response.json()).detail;}catch{}throw Error(typeof detail==='string'?detail:`Worker request failed (${response.status})`);}return response.json();
 }
 async function connect(){
-  try{capabilities=await api('/capabilities');$('backend-status').textContent='Worker connected';status('Worker connected. Provider readiness is shown in System.');if(tab==='status')showStatus();}
-  catch{capabilities=null;$('backend-status').textContent='Browser mode · no worker';}
+  try{capabilities=await api('/capabilities');status('Worker connected. Provider readiness is shown in System.');if(tab==='status')showStatus();}
+  catch{capabilities=null;}finally{updateConnectionStatus();}
 }
 function localProjects(){try{const entries=JSON.parse(localStorage.getItem('forma-projects')||'[]');return Array.isArray(entries)?entries.filter(p=>p&&typeof p.id==='string'&&typeof p.created==='string'):[];}catch{return [];}}
 function projectData(){
@@ -227,7 +235,7 @@ async function openProject(p){
 }
 function showProjects(){
   const projects=localProjects();$('inspector').innerHTML=heading('Projects','Saved in this browser. Download a project file to keep a portable backup.')+
-  '<button id="download-project" class="wide">Download project JSON</button><label>Open project file<input id="project-file" type="file" accept=".json,application/json"></label><div id="project-list"></div><p class="hint">Library projects store the source ID, integrity hash, and editable morph values. Reopening needs that model on the connected worker. Local imports are saved with GLB export.</p>';
+  '<button id="download-project" class="wide">Download project JSON</button><label>Open project file<input id="project-file" type="file" accept=".json,application/json"></label><div id="project-list"></div><p class="hint">Library projects store the source ID, integrity hash, and editable morph values. Reopening needs that model in the bundled library or on the connected worker. Local imports are saved with GLB export.</p>';
   $('project-list').innerHTML=projects.length?projects.map(p=>`<div class="project-card"><strong>${esc(p.name)}</strong><p>${esc(p.kind)} · ${esc(p.created.slice(0,10))}</p><button data-project="${esc(p.id)}">Open project</button></div>`).join(''):'<div class="empty">No saved projects. Use Save project above.</div>';
   for(const b of document.querySelectorAll('[data-project]'))b.onclick=async()=>{try{await openProject(projects.find(p=>p.id===b.dataset.project));}catch(e){status(e.message);}};
   $('download-project').disabled=!hasModel();
@@ -237,7 +245,7 @@ function showProjects(){
 function showStatus(){
   const runtime=capabilities?.runtime;
   $('inspector').innerHTML=heading('System & capabilities','Implemented features and available worker services.')+
-  `<div class="capability">Body controls<span>${data?data.controls.length+' loaded authored and local targets':'Loaded when you open the supported base'}</span></div><div class="capability">Wardrobe<span>${catalog?.length||360} executable surface recipes · no cloth simulation</span></div><div class="capability">Browser editing & GLB export<span>Runs locally in your browser</span></div><div class="capability">Provider generation<span>${capabilities?'Worker connected':'Connect a Python worker'}</span></div>${runtime?.providers?.map(p=>`<div class="capability">${esc(p.name.replace('provider:',''))}<span>${p.available?'Credentials configured; live request not yet verified':'API key not configured'}</span></div>`).join('')||''}<div class="capability">Blender rendering<span>${runtime?.blender?.available?'Worker installed; browser render job controls pending':'Requires a Blender worker; browser snapshots remain available'}</span></div><div class="notice">Imported models preserve their source materials, rigs, shape targets, and animation clips. The supported base is static. New rigging, animation authoring, sculpt brushes, and production garment fitting remain incomplete.</div><button class="wide" id="system-connect">Connect worker</button><h2>Asset credits</h2><p class="hint">MakeHuman hm08 body and targets: CC0. Authored hair, clothing, lashes, skin textures and shoes from the older MakeHuman asset collection: AGPL-3.0-or-later, with source and license bundled. Three.js: MIT.</p><a href="/studio/data/provenance.json" target="_blank" rel="noopener">Body provenance</a><p><a href="/studio/data/quality-assets/CREDITS.md">Finish asset credits</a> · <a href="/studio/data/quality-assets/source-assets.zip">Original asset source</a></p>`;
+  `<div class="capability">Body controls<span>${data?data.controls.length+' loaded authored and local targets':'Loaded when you open the supported base'}</span></div><div class="capability">Wardrobe<span>${catalog?.length||360} executable surface recipes · no cloth simulation</span></div><div class="capability">Browser editing & GLB export<span>Runs locally in your browser</span></div><div class="capability">Provider generation<span>${capabilities?.backend?'Worker connected':'Connect a Python worker'}</span></div>${runtime?.providers?.map(p=>`<div class="capability">${esc(p.name.replace('provider:',''))}<span>${p.available?'Credentials configured; live request not yet verified':'API key not configured'}</span></div>`).join('')||''}<div class="capability">Blender rendering<span>${runtime?.blender?.available?'Worker installed; browser render job controls pending':'Requires a Blender worker; browser snapshots remain available'}</span></div><div class="notice">Imported models preserve their source materials, rigs, shape targets, and animation clips. The supported base is static. New rigging, animation authoring, sculpt brushes, and production garment fitting remain incomplete.</div><button class="wide" id="system-connect">Connect worker</button><h2>Asset credits</h2><p class="hint">MakeHuman hm08 body and targets: CC0. Authored hair, clothing, lashes, skin textures and shoes from the older MakeHuman asset collection: AGPL-3.0-or-later, with source and license bundled. Three.js: MIT.</p><a href="/studio/data/provenance.json" target="_blank" rel="noopener">Body provenance</a><p><a href="/studio/data/quality-assets/CREDITS.md">Finish asset credits</a> · <a href="/studio/data/quality-assets/source-assets.zip">Original asset source</a></p>`;
   $('system-connect').onclick=()=>{$('backend-url').value=backend||location.origin;$('connection-dialog').showModal();};
 }
 async function renderPanel(){
@@ -256,8 +264,8 @@ $('wire').onclick=e=>{const v=e.target.getAttribute('aria-pressed')!=='true';e.t
 $('snapshot').onclick=()=>{downloadDataURL(view.snapshot(),'forma-preview.png');status('Browser preview image downloaded. This is not a Cycles render.');};
 $('export').onclick=async()=>{const b=$('export');b.disabled=true;try{status('Building GLB export…');const result=await view.export();download(new Blob([result],{type:'model/gltf-binary'}),'forma-'+kind+'.glb');status('GLB exported with the visible model, garments, and attachments.');}catch(e){status('Export failed: '+e.message);}finally{b.disabled=false;}};
 $('save').onclick=async()=>{try{if(['character','terrain'].includes(kind))await ensureBaseAssets();const p=validateProject(projectData()),list=localProjects();localStorage.setItem('forma-projects',JSON.stringify([p,...list].slice(0,50)));let workerError='';if(capabilities?.backend&&kind==='character'){try{await api('/projects',{method:'POST',body:JSON.stringify({name:p.name,character:state})});}catch(error){workerError=` Worker copy failed: ${error.message}`;}}if(tab==='projects')showProjects();status('Editable project saved in this browser.'+workerError);}catch(e){status(e.message);}};
-$('connection-dialog').addEventListener('close',async()=>{if($('connection-dialog').returnValue!=='connect')return;const value=$('backend-url').value.trim();try{const url=new URL(value);if(url.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(url.hostname))throw Error('Use HTTPS for remote workers');backend=url.origin;token=$('backend-token').value;modelLibrary=null;await connect();if(!capabilities)throw Error('Worker unavailable or unauthorized. Check URL, token, and allowed origin.');await refreshModels();renderPanel();}catch(e){status(e.message);}});
+$('connection-dialog').addEventListener('close',async()=>{if($('connection-dialog').returnValue!=='connect')return;const value=$('backend-url').value.trim();try{const url=new URL(value);if(url.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(url.hostname))throw Error('Use HTTPS for remote workers');backend=url.origin;token=$('backend-token').value;modelLibrary=null;librarySource=null;await connect();if(!capabilities)throw Error('Worker unavailable or unauthorized. Check URL, token, and allowed origin.');await refreshModels();renderPanel();}catch(e){status(e.message);}});
 
 try{
-  enableModelActions();renderPanel();await connect();await refreshModels();status('Choose a source model to begin. No model downloads until selected.');
+  enableModelActions();renderPanel();await connect();await refreshModels();status(librarySource==='bundled'?'Bundled library ready in your browser. Choose a model to download and open.':'Choose a source model to begin. No model downloads until selected.');
 }catch(e){status(e.message);$('inspector').innerHTML=heading('Unable to start',esc(e.message))+'<button class="wide" onclick="location.reload()">Retry loading</button>';}
