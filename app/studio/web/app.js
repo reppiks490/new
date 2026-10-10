@@ -50,7 +50,7 @@ function parsePromptParts(prompt,available){
     let amount=amountMatch?Number(amountMatch[1]):worded;
     if(/\b(smaller|reduce|reduc|decrease|less|shrink|narrower)\b/.test(part)&&amount>0)amount=-amount;
     const isSet=/\b(set|make|to)\b/.test(part)&&/\bto\b/.test(part);
-    edits.push({entry,value:isSet?amount:entry.value+amount,label:entry.label});
+    edits.push({entry,value:isSet?amount:entry.value+amount,delta:amount,isSet,label:entry.label});
   }
   return edits;
 }
@@ -67,7 +67,7 @@ function applySourcePrompt(){
   try{
     const edits=parsePromptParts($('body-edit-prompt').value,view.getMorphControls());
     if(!edits.length)throw Error('This model has no matching authored shape target. Open Body → Edit an adult base to use the full proportion controls.');
-    for(const edit of edits)view.setMorph(edit.entry.id,Math.max(edit.entry.min,Math.min(edit.entry.max,edit.value)));
+    for(const edit of edits){const range=edit.entry.max-edit.entry.min,value=edit.isSet?edit.entry.min+edit.value/100*range:edit.entry.value+edit.delta/100*range;view.setMorph(edit.entry.id,Math.max(edit.entry.min,Math.min(edit.entry.max,value)));}
     showImportedControls();status(`Applied source prompt to ${edits.map(e=>e.label).join(', ')}.`);
   }catch(error){status(error.message);}
 }
