@@ -20,6 +20,7 @@ dependencies = [
   "networkx>=3.3",
   "Pillow>=10.4",
   "cryptography>=43.0",
+  "python-multipart>=0.0.18",
 ]
 
 [project.optional-dependencies]
@@ -31,3 +32,6 @@ pythonpath = ["."]
 
 [tool.setuptools.packages.find]
 include = ["app", "app.*"]
+
+[tool.setuptools.package-data]
+"app.studio" = ["web/*", "web/vendor/*", "web/data/*", "web/data/quality-assets/*"]

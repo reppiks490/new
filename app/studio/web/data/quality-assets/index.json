@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "id": "long01",
+      "label": "Long, center part",
+      "kind": "hair",
+      "license": "AGPL-3.0-or-later",
+      "source": "https://github.com/dmaugis/makehuman-py3-assets",
+      "file": "long01.json"
+    },
+    {
+      "id": "bob02",
+      "label": "Rounded bob",
+      "kind": "hair",
+      "license": "AGPL-3.0-or-later",
+      "source": "https://github.com/dmaugis/makehuman-py3-assets",
+      "file": "bob02.json"
+    },
+    {
+      "id": "female_casualsuit01",
+      "label": "Denim & layered top",
+      "kind": "garment",
+      "license": "AGPL-3.0-or-later",
+      "source": "https://github.com/dmaugis/makehuman-py3-assets",
+      "file": "female_casualsuit01.json"
+    },
+    {
+      "id": "female_elegantsuit01",
+      "label": "Pinstripe & skirt",
+      "kind": "garment",
+      "license": "AGPL-3.0-or-later",
+      "source": "https://github.com/dmaugis/makehuman-py3-assets",
+      "file": "female_elegantsuit01.json"
+    },
+    {
+      "id": "shoes01",
+      "label": "Lace-up shoes",
+      "kind": "shoes",
+      "license": "AGPL-3.0-or-later",
+      "source": "https://github.com/dmaugis/makehuman-py3-assets",
+      "file": "shoes01.json"
+    },
+    {
+      "id": "shoes02",
+      "label": "Classic shoes",
+      "kind": "shoes",
+      "license": "AGPL-3.0-or-later",
+      "source": "https://github.com/dmaugis/makehuman-py3-assets",
+      "file": "shoes02.json"
+    },
+    {
+      "id": "eyelashes01",
+      "label": "Natural lashes",
+      "kind": "lashes",
+      "license": "AGPL-3.0-or-later",
+      "source": "https://github.com/dmaugis/makehuman-py3-assets",
+      "file": "eyelashes01.json"
+    }
+  ],
+  "textures": {
+    "skin_female": "skin_female.jpg",
+    "skin_male": "skin_male.jpg"
+  },
+  "source": "https://github.com/dmaugis/makehuman-py3-assets",
+  "source_archive": "source-assets.zip",
+  "license": "AGPL-3.0-or-later",
+  "hashes": [
+    {
+      "path": "LICENSE",
+      "sha256": "76a97c878c9c7a8321bb395c2b44d3fe2f8d81314d219b20138ed0e2dddd5182"
+    },
+    {
+      "path": "base/clothes/female_casualsuit01/female_casualsuit01.mhclo",
+      "sha256": "328518eff500e16fc5986f3900eb83befc85a4668f7983d6f479fbd297820fda"
+    },
+    {
+      "path": "base/clothes/female_casualsuit01/female_casualsuit01.mhmat",
+      "sha256": "86e5017580c03187a163599508943e9297925270043056fe05054703e05e2b79"
+    },
+    {
+      "path": "base/clothes/female_casualsuit01/female_casualsuit01.obj",
+      "sha256": "11b3e99fa9d2ed68e8be19edd18780a27c53ffc3ab5082394e961ec09622d232"
+    },
+    {
+      "path": "base/clothes/female_casualsuit01/female_casualsuit01.thumb",
+      "sha256": "3a37e779cef6e9f080ed70d58c022b898aed36be8cd0b88270b2683ce803fcbb"
+    },
+    {
+      "path": "base/clothes/female_casualsuit01/female_casualsuit01_ao.png",
+      "sha256": "f97a31fb02b5f36802a08bfe22bffb1961240d4ecb20059540eec6516d753424"
+    },
+    {
+      "path": "base/clothes/female_casualsuit01/female_casualsuit01_diffuse.png",
+      "sha256": "414d46afa55fba09ad0913484d57df2ba6b597dc8193595a13a12436137dc21b"
+    },
+    {
+      "path": "base/clothes/female_casualsuit01/female_casualsuit01_normal.png",
+      "sha256": "7bff7afbbc3f068e06f69abcddc8c2c9ce667ec181e0f2a918f8af78eba12610"
+    },
+    {
+      "path": "base/clothes/female_elegantsuit01/female_elegantsuit01.mhclo",
+      "sha256": "10f10fba16ac092912405b513a6a94b40f4a74c581da507ce430e3dc29a980bd"
+    },
+    {
+      "path": "base/clothes/female_elegantsuit01/female_elegantsuit01.mhmat",
+      "sha256": "999650ae8f663537bb1bf7a30f968a0417b1f0446d81e7628297f07a8e2d35aa"
+    },
+    {
+      "path": "base/clothes/female_elegantsuit01/female_elegantsuit01.obj",
+      "sha256": "b6e8896cb3b2da7dd020985ee280a19b9997fd41a17aba14a9edd60a8b1e0ec5"
+    },
+    {
+      "path": "base/clothes/female_elegantsuit01/female_elegantsuit01.thumb",
+      "sha256": "453de1486208ce17e2e8e20cd66c846d9319e612b39263d02c7d5a9cbd3d0a20"
+    },
+    {
+      "path": "base/clothes/female_elegantsuit01/female_elegantsuit01_ao.png",
+      "sha256": "0f89546c63ab16e2c1ba0556da7e07264b98b58e6200b043491f92f796b87673"
+    },
+    {
+      "path": "base/clothes/female_elegantsuit01/female_elegantsuit01_diffuse.png",
+      "sha256": "ebe6f2afcbaadbe56d5cee6e00bab45e97ce482f0be0e34491d16ca5f98b38ac"
+    },
+    {
+      "path": "base/clothes/female_elegantsuit01/female_elegantsuit01_normal.png",
+      "sha256": "ae3650bce6678cd67d025ab70e68b22683176aeaabc06d8e5b2129af99c762e9"
+    },
+    {
+      "path": "base/clothes/shoes01/shoes01.mhclo",
+      "sha256": "eb30da32d5890389cb90c5c28f36d645c74ceae7822d63583e30d3b35925eb4b"
+    },
+    {
+      "path": "base/clothes/shoes01/shoes01.mhmat",
+      "sha256": "c6c341a58ccb26bb221c6b9fcaaff5153a996c665d09ee3878342c1ca6a991c8"
+    },
+    {
+      "path": "base/clothes/shoes01/shoes01.mhw",
+      "sha256": "4209db35199095011974ddef2a945efadb25e66c6a243a6dd1352cd510e75014"
+    },
+    {
+      "path": "base/clothes/shoes01/shoes01.obj",
+      "sha256": "8b7772f9978c3f53c4dc3896a0934c589ac97f8c954bdc489306a4f50d6d7c17"
+    },
+    {
+      "path": "base/clothes/shoes01/shoes01.thumb",
+      "sha256": "959aaabd1afb2a5d1a2128632c88747c1c644c439cc3320fe28d40e3fa8159d5"
+    },
+    {
+      "path": "base/clothes/shoes01/shoes01_diffuse.png",
+      "sha256": "50c9a406a7f1cb6aa7b42912348e78f09d0252aa3963c8229cf18dfe8353cdbf"
+    },
+    {
+      "path": "base/clothes/shoes01/shoes01_normal.png",
+      "sha256": "a9bfd7223e98b8f93100e89596135e3a94e6044f9db11b4d23cec625c37a4599"
+    },
+    {
+      "path": "base/clothes/shoes02/shoes02.mhclo",
+      "sha256": "af7c5acbb08a0ceba734e00dd2bf36ac7df4133d2f8720c9aeb8e49e48604a76"
+    },
+    {
+      "path": "base/clothes/shoes02/shoes02.mhmat",
+      "sha256": "3e67859e682d6b421564bc70b68541bc472acae0cef96a0269c6ff2262c45522"
+    },
+    {
+      "path": "base/clothes/shoes02/shoes02.mhw",
+      "sha256": "44d0a6458237a2d1f70eefe87917cbd72dfd9f840c30b0479ec3cef35e9fb49f"
+    },
+    {
+      "path": "base/clothes/shoes02/shoes02.obj",
+      "sha256": "2d9648c6497076c43ed851b176a175f8891de4530c7402e2518ff4d155c7d418"
+    },
+    {
+      "path": "base/clothes/shoes02/shoes02.thumb",
+      "sha256": "efa9b744337c0b69b90d28b2036eb8c75c053a835631217c1008276dbb6f034d"
+    },
+    {
+      "path": "base/clothes/shoes02/shoes02_diffuse.png",
+      "sha256": "efef94ea34b0e0c2283095cb47a9e0389b55449c61a4f4972d0ad4d2bf06b4f0"
+    },
+    {
+      "path": "base/eyelashes/eyelashes01/eyelashes01.mhclo",
+      "sha256": "07d75823f0578d46734dfcc48004dd730ff8133883470370a28a3bc7fde4e412"
+    },
+    {
+      "path": "base/eyelashes/eyelashes01/eyelashes01.mhmat",
+      "sha256": "d71e4ed6fc12824784c5480d3886613eb74c5dc88a41a248ce30ddfcb1c7f6de"
+    },
+    {
+      "path": "base/eyelashes/eyelashes01/eyelashes01.obj",
+      "sha256": "c1e68c68fa87c65839c73561954805e6e91fffeba46fba0e30a3f7a28d8e1322"
+    },
+    {
+      "path": "base/eyelashes/eyelashes01/eyelashes01.png",
+      "sha256": "4b69c0fff2648874460e9caf80c31413c444218a5c50afebc425aeaa65484a35"
+    },
+    {
+      "path": "base/eyelashes/eyelashes01/eyelashes01.thumb",
+      "sha256": "3667311b21d65327dc60e1505acfb35a54571c67a4623cccbdee97000339ea6f"
+    },
+    {
+      "path": "base/hair/bob02/bob02.mhclo",
+      "sha256": "5142ba1bd04d7f4059c2d2aa34cfc441394bcca284e714e54bf99fb401548fb0"
+    },
+    {
+      "path": "base/hair/bob02/bob02.mhmat",
+      "sha256": "88ddb6429a7007759a32ae1c51e86d88c541b79a5eb758b45977145067f4764f"
+    },
+    {
+      "path": "base/hair/bob02/bob02.obj",
+      "sha256": "1d75b597591db5f9ef91f15bad2fd3c715f3cee65f99957a4e62e76e53ab2cc5"
+    },
+    {
+      "path": "base/hair/bob02/bob02.thumb",
+      "sha256": "fe7117cf9ed0aab4ca4ae50cb84cad66150585a191222fab11ab7d5808099cbf"
+    },
+    {
+      "path": "base/hair/bob02/bob02_diffuse.png",
+      "sha256": "38c88e6f71631356591f09b1f17a1bb5a99c3bb095b1a29003f1dc3d3e839b0d"
+    },
+    {
+      "path": "base/hair/long01/long01.mhclo",
+      "sha256": "e9dc110dcc59a2bd38e07d38f8812556785fbf5faa9656cb9f74ad4d1239019c"
+    },
+    {
+      "path": "base/hair/long01/long01.mhmat",
+      "sha256": "13ba8d953d6d79dc3d4f277cd8c950b003f4c637f847c47e3dcf3d08102b52ed"
+    },
+    {
+      "path": "base/hair/long01/long01.obj",
+      "sha256": "d3355e4e6d64ed83f4cb088e6c7b6d6282b4fdeac485832d513caf2ed2dba2a7"
+    },
+    {
+      "path": "base/hair/long01/long01.thumb",
+      "sha256": "5b7edfe103a9968c69315c461b61134a4e5090da80348e035926e7b1cf80ba97"
+    },
+    {
+      "path": "base/hair/long01/long01_diffuse.png",
+      "sha256": "e8dc25d90f8f62467e8630420e1240a400d070054fb7c3f1d3f7bf3e457d6c2c"
+    },
+    {
+      "path": "base/skins/textures/young_lightskinned_female_diffuse2.png",
+      "sha256": "8d1fb3ceedf142fad32a3504eca1feb4539aecca6de66acde1514b9a61fc7ba0"
+    },
+    {
+      "path": "base/skins/textures/young_lightskinned_male_diffuse2.png",
+      "sha256": "03efe1f6b0ae52429649dcefc9dcaef6058032f874a251169cc3e2ed473c3874"
+    },
+    {
+      "path": "base/skins/young_caucasian_female/young_caucasian_female2.mhmat",
+      "sha256": "5c3cde04ab180f9b2c5ded9c61562e5dbe4b244f82565541c443bfe13fe63296"
+    },
+    {
+      "path": "base/skins/young_caucasian_male/young_caucasian_male2.mhmat",
+      "sha256": "2ed09b22ac94daa7933d064c7e7ee859460b24d77c83d3a527922e096b9c8584"
+    }
+  ]
+}
