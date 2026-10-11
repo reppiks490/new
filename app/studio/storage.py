@@ -29,7 +29,18 @@ def asset_path(identifier: str, extension='glb') -> Path:
 def connection():
     db = sqlite3.connect(root()/'studio.sqlite', timeout=10)
     try:
-        db.execute('PRAGMA journal_mode=WAL')
+        # Changing journal mode needs an exclusive lock and SQLite does not
+        # consistently honor the connection busy timeout for this pragma.
+        # Concurrent first requests can therefore race during worker startup.
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                db.execute('PRAGMA journal_mode=WAL')
+                break
+            except sqlite3.OperationalError as exc:
+                if 'locked' not in str(exc).lower() or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
         db.execute('CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, kind TEXT, data TEXT, updated REAL)')
         with db:
             yield db
