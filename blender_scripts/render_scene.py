@@ -175,7 +175,8 @@ def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
     img.colorspace_settings.name = 'Non-Color'
     span = disp['max_m'] - disp['min_m']
     scene = bpy.context.scene
-    scene.cycles.dicing_rate = 1.0  # a multiplier on the per-object pixel size set below
+    requested_dicing_px = float(subdivision['dicing_rate_px'])
+    scene.cycles.dicing_rate = 1.0  # overridden below for Blender's legacy Cycles API
     scene.cycles.max_subdivisions = int(subdivision['max_subdivisions'])
     scene.cycles.offscreen_dicing_scale = float(subdivision.get('offscreen_dicing_scale', 4.0))
     base_info = None
@@ -187,11 +188,24 @@ def apply_displacement(meshes, disp: dict, subdivision: dict) -> dict:
     for obj in meshes:
         mod = obj.modifiers.new('C3D_AdaptiveSubdivision', 'SUBSURF')
         mod.subdivision_type = 'SIMPLE'  # displacement supplies the shape; don't shrink-smooth the terrain
-        mod.use_adaptive_subdivision = True
-        mod.adaptive_space = 'PIXEL'
-        mod.adaptive_pixel_size = float(subdivision['dicing_rate_px'])
+        if hasattr(mod, 'use_adaptive_subdivision'):
+            # Blender 5.x exposes adaptive dicing on the Subdivision modifier.
+            mod.use_adaptive_subdivision = True
+            mod.adaptive_space = 'PIXEL'
+            mod.adaptive_pixel_size = requested_dicing_px
+        elif hasattr(obj, 'cycles') and hasattr(obj.cycles, 'use_adaptive_subdivision'):
+            # Blender 4.x stores the same Cycles setting on the object and
+            # uses the scene dicing rate as a pixel size.
+            scene.cycles.feature_set = 'EXPERIMENTAL'
+            scene.cycles.dicing_rate = requested_dicing_px
+            obj.cycles.use_adaptive_subdivision = True
+            obj.cycles.dicing_rate = 1.0
+        else:
+            raise RuntimeError('This Blender version does not expose Cycles adaptive subdivision')
         materials.update(s.material for s in obj.material_slots if s.material is not None)
     for mat in materials:
+        if not mat.use_nodes:
+            mat.use_nodes = True
         nt = mat.node_tree
         tex = nt.nodes.new('ShaderNodeTexImage')
         tex.image = img
@@ -283,6 +297,7 @@ def add_atmosphere(terrain, disp: dict, density: float) -> dict:
     obj.matrix_world = terrain.matrix_world
     bpy.context.scene.collection.objects.link(obj)
     mat = bpy.data.materials.new('C3D_Atmosphere')
+    mat.use_nodes = True
     nt = mat.node_tree
     for n in list(nt.nodes):
         if n.type != 'OUTPUT_MATERIAL':
@@ -316,6 +331,7 @@ def add_water(terrain, disp: dict) -> dict:
     obj.matrix_world = terrain.matrix_world
     bpy.context.scene.collection.objects.link(obj)
     mat = bpy.data.materials.new('C3D_Water')
+    mat.use_nodes = True
     nt = mat.node_tree
     bsdf = nt.nodes.get('Principled BSDF') or nt.nodes.new('ShaderNodeBsdfPrincipled')
     bsdf.inputs['Base Color'].default_value = (0.75, 0.9, 0.92, 1)

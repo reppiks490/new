@@ -25,6 +25,7 @@ VARIANTS = 12  # distinct meshes per species; repetition is invisible at 16K
 
 def _leaf_material(name: str, base: tuple[float, float, float]):
     mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
     nt = mat.node_tree
     nt.nodes.clear()
     out = nt.nodes.new('ShaderNodeOutputMaterial')
@@ -48,6 +49,7 @@ def _leaf_material(name: str, base: tuple[float, float, float]):
 
 def _bark_material():
     mat = bpy.data.materials.new('C3D_Bark')
+    mat.use_nodes = True
     bsdf = mat.node_tree.nodes.get('Principled BSDF')
     bsdf.inputs['Base Color'].default_value = (0.09, 0.06, 0.04, 1)
     bsdf.inputs['Roughness'].default_value = 0.9

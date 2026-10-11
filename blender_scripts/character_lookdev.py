@@ -361,7 +361,8 @@ def apply_eye(mat, cfg: dict):
 
 
 def apply_hair(mat, cfg: dict):
-    nt = (mat.use_nodes or True) and mat.node_tree
+    mat.use_nodes = True
+    nt = mat.node_tree
     for n in list(nt.nodes):
         if n.type != 'OUTPUT_MATERIAL':
             nt.nodes.remove(n)
@@ -646,6 +647,7 @@ def portrait_rig(lo, hi, cfg: dict) -> dict:
     bd.from_pydata([c + Vector((-w, 0, -w)), c + Vector((w, 0, -w)), c + Vector((w, 0, w)), c + Vector((-w, 0, w))], [], [(0, 1, 2, 3)])
     bdo = bpy.data.objects.new('C3D_Backdrop', bd)
     bm_ = bpy.data.materials.new('C3D_Backdrop')
+    bm_.use_nodes = True
     bsdf = bm_.node_tree.nodes.get('Principled BSDF')
     bsdf.inputs['Base Color'].default_value = cfg.get('backdrop', (0.09, 0.1, 0.11, 1))
     bsdf.inputs['Roughness'].default_value = 1.0

@@ -105,8 +105,9 @@ def test_private_api_requires_token_and_rejects_untrusted_origins(client, monkey
     headers={'Authorization':'Bearer test-secret'}
     response = client.get('/api/studio/capabilities', headers=headers)
     assert response.status_code == 200 and 'test-secret' not in response.text
-    assert response.json()['body_editing']['supported_base_regions'] == ['waist']
-    assert response.json()['body_editing']['protected_regions'] == ['hips', 'glutes']
+    assert response.json()['body_editing']['supported_base_regions'] == ['breasts', 'glutes', 'hips', 'waist']
+    assert response.json()['body_editing']['protected_regions'] == ['breasts', 'glutes', 'hips', 'waist']
+    assert response.json()['body_editing']['percentage_semantics'].startswith('authored_target_strength')
     assert client.post('/api/studio/projects', json={'name':'test','character':{}},
                        headers={**headers,'Origin':'https://untrusted.example'}).status_code == 403
     assert client.get('/').status_code == 200

@@ -149,47 +149,53 @@ The imported source files are user-provided. Their redistribution licenses have
 not been verified; do not bundle them into a public package or deploy them to a
 third-party model service without permission and licensing review.
 
-## Known current defect
+## Current limits and implementation evidence (2026-10-10)
 
-`app/studio/web/app.js` previously split body prompts on `and` and independently
-guessed a target and default percentage. The prompt `slim her waist without
-reducing glute and hip size` could miss the waist, reduce glute volume by 40%,
-and increase hip width by 40%. The editor now parses that prompt into a plan
-targeting the waist and protecting glutes and hips, and requests an omitted
-amount. The supported CC0 base can preview and accept one bounded waist-width
-operation with tested zero movement across authored hip and glute support
-vertices. Imported Street Fighter GLBs still have no source morphs, and
-localized sculpt remains a coarse picked-surface operation; neither is precise
-semantic body editing.
+The browser now reviews and previews mapped prompt edits on its CC0 base. Supported
+single-region operations map breast size to the authored breast target, glute size
+to the authored glute target, hip width to the authored hip-width target, and
+waist reduction to the constrained waist mask. Percentages for authored targets
+mean morph strength, not a measured anatomical percentage. Each edit has an
+accept/cancel step and accepted changes can be undone. A requested protected
+region is checked against the target's authored vertex support; overlapping
+targets are rejected rather than silently moving protected vertices.
 
-The Blender files are not currently imported by the browser model library,
-which registers self-contained GLBs. Converting a `.blend` is not considered
-lossless until shape keys, UVs, materials, vertex groups, skeletons, and a
-representative pose survive conversion and are verified on the reopened GLB.
+The protected-region prompt `slim her waist without reducing glute and hip size`
+parses to a waist reduction plan and requests an amount when omitted. The
+supported CC0 base previews that edit with zero displacement across protected
+authored hip and glute support vertices. Cumulative waist reduction is capped
+at 15% after triangle-orientation checks; waist widening remains disabled.
 
-## Implementation evidence (2026-10-10)
+Imported GLBs still need per-model semantic maps to support anatomical prompts.
+The Pomni source has 30 meshes and no skins, animation clips, or morph targets;
+its local brush only edits a picked surface patch. Named anatomy prompts are
+blocked for this source so they cannot be mistaken for a precise body-part edit.
+The brush does not provide Tripo-style AI segmentation or automated semantic
+body reconstruction.
 
-- `app/studio/web/edit-intent.js` returns a structured intent with canonical
-  targets, operation, protected regions, explicit amount and unit, ambiguity,
-  and conflict status. The key waist prompt no longer splits its protected
-  conjunction or invents a 40% amount.
-- `app/studio/web/data/body_region_masks.json` defines the current supported
-  CC0 base mask from authored target support. The bounded waist-width reduction
-  excludes vertices touched by authored hip and glute controls. Browser and
-  Python paths measure protected-vertex deltas; tests require exactly zero.
-  Cumulative width reduction is capped at 15% after triangle-orientation checks.
-  Waist widening remains disabled because this topology showed triangle
-  reversals at larger expansion values.
-- Browser flow separates plan review, temporary geometry preview,
-  accept/cancel, undo, project save, and GLB export. Accepted edits persist in
-  project state and export as geometry with the fitted surface garment.
-- Imported GLBs expose mesh/triangle counts, UV sets, skin/joint attributes,
-  source morph names, coordinate bounds when available, and explicit `unmapped`
-  semantic morph status. Prompt application to imports remains unavailable
-  until model-specific masks pass equivalent preservation tests.
-- This is one source-specific operation, not a generalized sculpt system or
-  proof of visual parity. Retopology, generation, texturing, Blender project
-  conversion, and render jobs remain in the approved roadmap.
+The Blender files are not currently imported by the browser model library, which
+registers self-contained GLBs. Converting a `.blend` is not considered lossless
+until shape keys, UVs, materials, vertex groups, skeletons, and a representative
+pose survive conversion and are verified on the reopened GLB.
+
+- `app/studio/web/edit-intent.js` returns typed targets, operations, protected
+  regions, amounts, units, ambiguity, and conflict status. It does not split
+  protected conjunctions or invent a missing amount.
+- `app/studio/web/data/body_region_masks.json` defines source-specific masks
+  from authored target support. `body-edits.js` measures protected-vertex deltas
+  and limits waist reduction to 15%.
+- Browser edits are previewed before acceptance. Accepted controls and waist
+  operations enter undo history, remain editable, and export to GLB. A local
+  browser round trip was verified for an accepted breast target edit.
+- Imported GLBs expose mesh, triangle, UV, skin/joint, morph, and coordinate
+  metadata. Morphs remain unmapped unless a per-target audit proves their
+  semantic meaning and preservation behavior.
+- These are source-specific controls, not general AI model editing or proof of
+  visual parity with Tripo. Automated segmentation, imported-mesh anatomy edits,
+  retopology, texturing, rigging, Blender project conversion, and remote render
+  jobs remain incomplete. Generation and enhancement require configured provider
+  credentials and a connected worker; a static GitHub Pages site cannot run
+  those services by itself.
 
 ## Staged delivery and gates
 
