@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.studio.parameters import WEB
 from app.studio.router import router
+from app.video.router import router as video_router
 from app.studio import storage
 
 
@@ -22,7 +23,7 @@ async def lifespan(app):
 app = FastAPI(title='Forma 3D Studio', version='1.6.0', lifespan=lifespan)
 origins = [o.strip() for o in os.getenv('CHARACTER3D_STUDIO_ORIGINS','').split(',') if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins,
-                   allow_methods=['GET','POST'], allow_headers=['Authorization','Content-Type'])
+                   allow_methods=['GET','POST','PUT'], allow_headers=['Authorization','Content-Type'])
 
 
 @app.middleware('http')
@@ -45,6 +46,7 @@ async def private_api(request: Request, call_next):
 
 
 app.include_router(router)
+app.include_router(video_router)
 app.mount('/studio', StaticFiles(directory=WEB), name='studio')
 
 
