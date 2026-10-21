@@ -4,6 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#111720"><title>Forma · 3D Studio</title>
   <link rel="stylesheet" href="/studio/style.css">
+  <link rel="stylesheet" href="/studio/video-studio.css">
   <script type="importmap">{"imports":{"three":"/studio/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -16,6 +17,7 @@
       <button data-tab="models" class="selected"><span>▦</span>Models</button>
       <button data-tab="body"><span>◉</span>Body</button>
       <button data-tab="create"><span>✦</span>Create</button>
+      <button data-tab="video"><span>▶</span>Video</button>
       <button data-tab="wardrobe"><span>◇</span>Wardrobe</button>
       <button data-tab="details"><span>⌘</span>Details</button>
       <button data-tab="world"><span>△</span>World</button>
@@ -33,5 +35,6 @@
   <footer><span id="status" role="status" aria-live="polite">Loading studio…</span><span id="backend-status">Browser workspace</span></footer>
   <dialog id="connection-dialog"><form method="dialog"><h2>Connect a worker</h2><p>Your model library lives on the Python worker. AI generation also needs provider credentials. Local GLB import works independently.</p><label>Backend URL<input id="backend-url" type="url" placeholder="https://your-worker.example.com"></label><label>Studio access token<input id="backend-token" type="password" autocomplete="off"></label><p class="hint">Use a private HTTPS worker. The token stays in this tab's memory.</p><div class="row"><button value="cancel">Cancel</button><button id="connect-confirm" value="connect" class="primary">Connect</button></div></form></dialog>
   <script type="module" src="/studio/app.js"></script>
+  <script type="module" src="/studio/video-studio.js"></script>
 </body>
 </html>
