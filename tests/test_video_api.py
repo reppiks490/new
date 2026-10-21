@@ -192,8 +192,26 @@ def test_missing_video_job_is_404(monkeypatch, tmp_path):
     assert response.status_code == 404
 
 
-def test_generate_route_exists_but_does_not_fallback_to_cloud_before_worker(monkeypatch, tmp_path):
+def test_generate_rejects_missing_source_image(monkeypatch, tmp_path):
     server = _reload_server(monkeypatch, tmp_path)
+    from app.video import engine
+    engine._ENGINE_REGISTRY.clear()
+    engine.register_engine(engine.FakeVideoEngine())
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/video/generate",
+            json={"image_id": VALID_ID, "prompt": "subtle movement"},
+        )
+    assert response.status_code == 422
+    assert "source" in response.json()["detail"].lower()
+
+
+def test_generate_does_not_fallback_to_cloud_when_no_local_engine(monkeypatch, tmp_path):
+    server = _reload_server(monkeypatch, tmp_path)
+    from app.video import engine
+    engine._ENGINE_REGISTRY.clear()
+    storage = importlib.import_module("app.video.storage")
+    Image.new("RGB", (24, 16), (1, 2, 3)).save(storage.video_asset_path(VALID_ID, "png"))
     with TestClient(server.app) as client:
         response = client.post(
             "/api/video/generate",
@@ -201,3 +219,56 @@ def test_generate_route_exists_but_does_not_fallback_to_cloud_before_worker(monk
         )
     assert response.status_code == 503
     assert "local" in response.json()["detail"].lower()
+
+
+def test_generate_rejects_controls_not_supported_by_selected_engine(monkeypatch, tmp_path):
+    server = _reload_server(monkeypatch, tmp_path)
+    from app.video import engine
+    engine._ENGINE_REGISTRY.clear()
+    engine.register_engine(engine.FakeVideoEngine())
+    storage = importlib.import_module("app.video.storage")
+    Image.new("RGB", (24, 16), (1, 2, 3)).save(storage.video_asset_path(VALID_ID, "png"))
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/video/generate",
+            json={"image_id": VALID_ID, "prompt": "subtle movement", "motion_strength": 0.5},
+        )
+    assert response.status_code == 422
+    assert "motion_strength" in response.json()["detail"]
+
+
+def test_generate_queues_local_job_and_returns_without_waiting(monkeypatch, tmp_path):
+    server = _reload_server(monkeypatch, tmp_path)
+    from app.video import engine
+    engine._ENGINE_REGISTRY.clear()
+    engine.register_engine(engine.FakeVideoEngine())
+    storage = importlib.import_module("app.video.storage")
+    Image.new("RGB", (24, 16), (1, 2, 3)).save(storage.video_asset_path(VALID_ID, "png"))
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/video/generate",
+            json={"image_id": VALID_ID, "prompt": "subtle movement"},
+        )
+        assert response.status_code == 200
+        job = response.json()
+        assert job["status"] == "queued"
+        deadline = __import__("time").time() + 10
+        while __import__("time").time() < deadline:
+            current = client.get(f"/api/video/jobs/{job['id']}").json()
+            if current["status"] in {"succeeded", "failed"}:
+                break
+            __import__("time").sleep(0.05)
+        assert current["status"] == "succeeded", current
+        assert "prompt" not in current
+
+
+def test_server_startup_interrupts_preexisting_video_jobs(monkeypatch, tmp_path):
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    storage = importlib.import_module("app.video.storage")
+    pending = storage.put_video_record("video_job", {"status": "queued", "stage": "Queued", "progress": 0})
+    server = _reload_server(monkeypatch, tmp_path)
+    with TestClient(server.app):
+        pass
+    stored = storage.get_video_record("video_job", pending["id"])
+    assert stored["status"] == "failed"
+    assert stored["stage"] == "Interrupted"
