@@ -7,4 +7,9 @@ dist/
 .pytest_cache/
 assets/makehuman/
 workspace/
+weights/
+vendor/LTX-2/
+.env
+.env.*
+!.env.example
 .studio-qa/
