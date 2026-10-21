@@ -42,6 +42,10 @@ jobs:
       - name: Run tests (warnings as errors)
         run: python -m pytest -q -W error
 
+      - name: Run browser privacy tests
+        if: matrix.python-version == '3.11'
+        run: node --test tests/*.mjs
+
   docker:
     runs-on: ubuntu-latest
     # GitHub Actions runners have a real Docker daemon, unlike the sandbox
