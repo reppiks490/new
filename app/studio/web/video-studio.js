@@ -47,11 +47,54 @@ function currentConnection() {
   return {origin, token: tokenInput?.value || ''};
 }
 
+export function buildPrivateAssetRequest(path, connection) {
+  const origin=connection?.origin || globalThis.location?.origin || '';
+  const token=connection?.token || '';
+  let url;
+  try { url=new URL(path, `${origin}/`).toString(); }
+  catch { url=String(path || ''); }
+  return {
+    url,
+    options:{
+      headers: token ? {'Authorization': `Bearer ${token}`} : {},
+      cache:'no-store',
+    },
+  };
+}
 
-function videoAssetUrl(path) {
-  if (!path) return '';
-  try { return new URL(path, `${currentConnection().origin}/`).toString(); }
-  catch { return String(path); }
+async function fetchPrivateAssetBlob(path, fetchRef=globalThis.fetch) {
+  const request=buildPrivateAssetRequest(path,currentConnection());
+  const response=await fetchRef(request.url,request.options);
+  if(!response.ok) throw new Error(`Private media request failed (${response.status})`);
+  return response.blob();
+}
+
+function releasePrivateAssetUrl(state,path) {
+  const current=state.mediaObjectUrls?.get(path);
+  if(current){
+    URL.revokeObjectURL(current);
+    state.mediaObjectUrls.delete(path);
+  }
+}
+
+function ensurePrivateAssetUrl(state,path) {
+  if(!path || state.closed || state.mediaObjectUrls.has(path) || state.mediaLoads.has(path)) return;
+  const load=fetchPrivateAssetBlob(path)
+    .then(blob=>{
+      if(state.closed)return;
+      const objectUrl=URL.createObjectURL(blob);
+      state.mediaObjectUrls.set(path,objectUrl);
+      renderWorkspace(state);
+    })
+    .catch(error=>setStatus(error.message))
+    .finally(()=>state.mediaLoads.delete(path));
+  state.mediaLoads.set(path,load);
+}
+
+function privateAssetUrl(state,path) {
+  if(!path)return '';
+  ensurePrivateAssetUrl(state,path);
+  return state.mediaObjectUrls.get(path) || '';
 }
 
 async function videoApi(path, options = {}) {
@@ -138,14 +181,23 @@ function renderWorkspace(state) {
     return;
   }
   const current = state.activeJob?.asset_url ? state.activeJob : state.jobs.find(job=>job.asset_url);
+  const currentUrl=current?.asset_url ? privateAssetUrl(state,current.asset_url) : '';
+  const sourceUrl=state.sourceImageUrl ? privateAssetUrl(state,state.sourceImageUrl) : '';
+  const mediaMarkup=current
+    ? currentUrl
+      ? `<video id="video-result-preview" playsinline controls preload="metadata" src="${escapeHtml(currentUrl)}"></video>`
+      : '<div class="video-empty-stage">Loading private result…</div>'
+    : state.sourceImageUrl
+      ? sourceUrl
+        ? `<img id="video-source-preview" src="${escapeHtml(sourceUrl)}" alt="Private source image">`
+        : '<div class="video-empty-stage">Loading private source…</div>'
+      : '<div class="video-empty-stage">Choose an image from your iPhone to begin.</div>';
   workspace.innerHTML = `<div class="video-stage">
     <div class="video-stage-header"><div><span class="eyebrow">PRIVATE VIDEO /</span><h1>${current?'Generated result':'Source preview'}</h1></div><button id="video-quick-hide">Quick Hide</button></div>
-    <div class="video-media-shell">
-      ${current?`<video id="video-result-preview" playsinline controls preload="metadata" src="${escapeHtml(videoAssetUrl(current.asset_url))}"></video>`:state.sourceImageUrl?`<img id="video-source-preview" src="${escapeHtml(state.sourceImageUrl)}" alt="Private source image">`:'<div class="video-empty-stage">Choose an image from your iPhone to begin.</div>'}
-    </div>
+    <div class="video-media-shell">${mediaMarkup}</div>
     <div class="video-stage-actions">
       ${current?'<button id="video-peek-preview">Hold to peek</button><button id="video-reveal-preview">Reveal result</button>':''}
-      ${current?`<a class="video-download" href="${escapeHtml(videoAssetUrl(current.asset_url))}" download>Download MP4</a>`:''}
+      ${currentUrl?`<a class="video-download" href="${escapeHtml(currentUrl)}" download="private-video.mp4">Download MP4</a>`:''}
       ${state.sourceImageUrl?'<button id="video-peek-source">Hold to peek</button><button id="video-reveal-source">Reveal source</button>':''}
     </div>
   </div>`;
@@ -197,7 +249,8 @@ function renderInspector(state) {
     try{
       setStatus('Uploading private source image…');
       const result=await videoApi('/images',{method:'POST',body:form});
-      state.sourceImageId=result.image_id; state.sourceImageUrl=videoAssetUrl(result.url);
+      if(state.sourceImageUrl)releasePrivateAssetUrl(state,state.sourceImageUrl);
+      state.sourceImageId=result.image_id; state.sourceImageUrl=result.url;
       state.privacy.conceal('source');
       renderInspector(state); renderWorkspace(state);
       setStatus('Source image ready.');
@@ -282,6 +335,9 @@ export async function renderVideoStudio() {
     pollTimer:null,
     cleanups:[],
     privacy:null,
+    mediaObjectUrls:new Map(),
+    mediaLoads:new Map(),
+    closed:false,
   };
   state.privacy=createPrivacyController({onChange:()=>{
     if(state.privacy.isQuickHidden()) renderNeutralScreen(workspace,inspector,state.privacy);
@@ -315,7 +371,10 @@ export function exitVideoStudio() {
   if(!workspace || !viewport) return;
   const state=workspace.__videoState;
   if(state?.pollTimer)clearTimeout(state.pollTimer);
+  if(state)state.closed=true;
   for(const cleanup of state?.cleanups || []) { try{cleanup();}catch{} }
+  for(const url of state?.mediaObjectUrls?.values?.() || []) { try{URL.revokeObjectURL(url);}catch{} }
+  state?.mediaObjectUrls?.clear?.();
   if(state?.privacy)state.privacy.concealAll();
   workspace.__videoState=null;
   workspace.innerHTML=''; workspace.hidden=true;
