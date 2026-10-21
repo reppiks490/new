@@ -10,6 +10,7 @@ from app.studio.parameters import WEB
 from app.studio.router import router
 from app.studio import storage
 from app.video.router import router as video_router
+from app.video.jobs import interrupt_active_video_jobs
 
 
 @asynccontextmanager
@@ -17,6 +18,7 @@ async def lifespan(app):
     # This process does not guess whether an interrupted paid task may be
     # resubmitted. Preserve task IDs and require the owner to inspect it.
     storage.interrupt_active_jobs()
+    interrupt_active_video_jobs()
     yield
 
 

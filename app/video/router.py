@@ -104,8 +104,10 @@ def put_privacy(payload: dict):
 
 @router.post('/generate')
 def generate(req: VideoGenerationRequest):
+    from app.video.jobs import VideoEngineUnavailable, VideoSourceMissing, enqueue_video_job
     try:
-        from app.video.jobs import enqueue_video_job
-    except ImportError as exc:
-        raise HTTPException(503, 'Local video generation worker is not installed yet') from exc
-    return enqueue_video_job(req)
+        return enqueue_video_job(req)
+    except VideoEngineUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except (VideoSourceMissing, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc

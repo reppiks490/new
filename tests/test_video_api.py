@@ -78,3 +78,14 @@ def test_privacy_get_put_validates(monkeypatch, tmp_path):
 def test_jobs_missing_returns_404(monkeypatch, tmp_path):
     c = client(monkeypatch, tmp_path)
     assert c.get('/api/video/jobs/' + 'e'*32).status_code == 404
+
+
+def test_generate_without_local_engine_returns_503(monkeypatch, tmp_path):
+    c = client(monkeypatch, tmp_path)
+    from app.video import engine
+    engine.clear_engines()
+    r = c.post('/api/video/images', files={'file': ('source.png', png_bytes(), 'image/png')})
+    image_id = r.json()['image_id']
+    r = c.post('/api/video/generate', json={'image_id': image_id, 'prompt': 'move'})
+    assert r.status_code == 503
+    assert 'No compatible local image-to-video engine' in r.json()['detail']
