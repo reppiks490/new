@@ -47,6 +47,7 @@ function currentConnection() {
   return {origin, token: tokenInput?.value || ''};
 }
 
+
 function videoAssetUrl(path) {
   if (!path) return '';
   try { return new URL(path, `${currentConnection().origin}/`).toString(); }
