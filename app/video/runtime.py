@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import os
 import subprocess
 from typing import TypedDict
@@ -8,9 +7,8 @@ from typing import TypedDict
 from app.video.models import EngineProfile, VideoRuntimeReport
 
 
-LOW_VRAM_MIN_MB = 8 * 1024
-BALANCED_MIN_MB = 16 * 1024
-HIGH_QUALITY_MIN_MB = 24 * 1024
+BALANCED_MIN_MB = 15 * 1024
+HIGH_QUALITY_MIN_MB = 31 * 1024
 
 
 class NvidiaGpuInfo(TypedDict):
@@ -57,14 +55,6 @@ def detect_nvidia_gpu() -> NvidiaGpuInfo | None:
         return None
 
 
-def _torch_cuda_available() -> bool:
-    try:
-        torch = importlib.import_module('torch')
-        return bool(torch.cuda.is_available())
-    except (ImportError, AttributeError, RuntimeError):
-        return False
-
-
 def ffmpeg_available() -> bool:
     try:
         completed = subprocess.run(
@@ -86,28 +76,26 @@ def recommended_profile(report: VideoRuntimeReport) -> EngineProfile | None:
         return 'high_quality'
     if report.vram_total_mb >= BALANCED_MIN_MB:
         return 'balanced'
-    if report.vram_total_mb >= LOW_VRAM_MIN_MB:
-        return 'low_vram'
     return None
 
 
 def detect_video_runtime() -> VideoRuntimeReport:
     enabled = _env_enabled('CHARACTER3D_VIDEO_ENABLED', True)
     gpu = detect_nvidia_gpu()
-    cuda_available = _torch_cuda_available()
     encoder_available = ffmpeg_available()
+    cuda_hardware_available = gpu is not None
     blockers: list[str] = []
 
     if not enabled:
         blockers.append('Local video generation is disabled by CHARACTER3D_VIDEO_ENABLED.')
     if gpu is None:
         blockers.append('No NVIDIA GPU was detected for local image-to-video generation.')
-    if not cuda_available:
-        blockers.append('PyTorch CUDA is unavailable; local GPU video inference cannot start.')
-    if gpu is not None and gpu['total_mb'] < LOW_VRAM_MIN_MB:
-        blockers.append(f'Detected GPU has less than {LOW_VRAM_MIN_MB} MiB VRAM required by the low-VRAM profile.')
+    elif gpu['total_mb'] < BALANCED_MIN_MB:
+        blockers.append(
+            f'Detected GPU has less than {BALANCED_MIN_MB} MiB VRAM required by the conservative LTX-2.5 profile.'
+        )
     if not encoder_available:
-        blockers.append('FFmpeg is required to encode generated frames into MP4 video.')
+        blockers.append('FFmpeg is required to validate and serve generated MP4 video.')
 
     report = VideoRuntimeReport(
         enabled=enabled,
@@ -115,11 +103,12 @@ def detect_video_runtime() -> VideoRuntimeReport:
         gpu_name=gpu['name'] if gpu else None,
         vram_total_mb=gpu['total_mb'] if gpu else None,
         vram_free_mb=gpu['free_mb'] if gpu else None,
-        cuda_available=cuda_available,
+        cuda_available=cuda_hardware_available,
         ffmpeg_available=encoder_available,
         blockers=blockers,
         notes=[
-            'Runtime inspection never returns credential values.',
+            'The FastAPI environment does not need PyTorch; production inference runs in a separate pinned LTX Python environment.',
+            'The 15 GiB floor is intentionally conservative; lower-VRAM optimized paths are not claimed until verified on the target PC.',
             'Video generation has no paid-provider fallback; unavailable local hardware remains unavailable.',
         ],
     )
