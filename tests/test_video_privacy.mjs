@@ -26,6 +26,7 @@ class FakeDocument extends FakeTarget {
   constructor(){ super(); this.hidden=false; }
 }
 
+
 test('studio shell exposes a dedicated Video tab, workspace, stylesheet, and module', () => {
   const here=path.dirname(fileURLToPath(import.meta.url));
   const web=path.join(here,'..','app','studio','web');
@@ -95,6 +96,7 @@ test('quick hide clears reveal state and restore leaves sensitive content concea
   assert.equal(privacy.isQuickHidden(), false);
   assert.equal(privacy.isRevealed('prompt'), false);
 });
+
 
 test('idle guard quick hides private content after the configured timeout', () => {
   const doc=new FakeDocument();
