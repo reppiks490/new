@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import subprocess
 
 import pytest
 from PIL import Image
@@ -60,13 +59,14 @@ def test_request_validation_rejects_controls_engine_does_not_support():
         engine.validate_request_for_engine(_request(resolution="1080p"), capabilities)
 
 
-def test_fake_engine_generates_valid_mp4_from_source_image(tmp_path):
+def test_fake_engine_generates_hermetic_mp4_fixture_without_external_encoder(monkeypatch, tmp_path):
     from app.video import engine
 
     source = tmp_path / "source.png"
     output = tmp_path / "out.mp4"
     Image.new("RGB", (48, 32), (40, 80, 120)).save(source)
     progress = []
+    monkeypatch.setenv("PATH", "")
 
     result = engine.FakeVideoEngine().generate(
         request=_request(),
@@ -76,15 +76,9 @@ def test_fake_engine_generates_valid_mp4_from_source_image(tmp_path):
     )
 
     assert result == output
-    assert output.is_file()
-    assert b"ftyp" in output.read_bytes()[:64]
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=format_name", "-of", "default=nw=1", str(output)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=10,
-    )
-    assert probe.returncode == 0
-    assert "mp4" in probe.stdout
-    assert progress
+    payload = output.read_bytes()
+    assert len(payload) > 500
+    assert b"ftyp" in payload[:64]
+    assert b"moov" in payload
+    assert b"mdat" in payload
+    assert progress == [("generating", 25), ("encoding", 90)]
