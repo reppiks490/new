@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import shutil
 import subprocess
 from typing import Mapping
 
@@ -15,8 +14,11 @@ from app.video.runtime import detect_nvidia_gpu
 
 LTX2_RELEASE = '1.5.0'
 LTX2_SOURCE_REVISION = 'e98f6d927d83c92ef2be6aec76c8440b19306e39'
+LTX25_MODEL_ID = 'Lightricks/LTX-2.5'
+LTX25_MODEL_REVISION = '49b093a39c19169a8a81721dcc541e07e945232f'
 LTX25_MIN_VRAM_MB = 15 * 1024
 LTX25_HIGH_QUALITY_VRAM_MB = 31 * 1024
+LTX25_IMAGE_STRENGTH = '0.8'
 
 LTX25_REQUIRED_FILES: dict[str, str] = {
     'transformer': 'diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors',
@@ -29,9 +31,11 @@ LTX25_HIGH_QUALITY_FILES: dict[str, str] = {
     'video_vae': 'vae/ltx-2.5-video-vae-bf16.safetensors',
 }
 
+# LTX DistilledPipeline is two-stage, so every output dimension must be a
+# multiple of 64. Preset names describe the user-facing quality tier rather
+# than promising an exact broadcast raster.
 _RESOLUTIONS: dict[str, tuple[int, int, int]] = {
-    # landscape width, landscape height, square edge
-    '480p': (832, 480, 640),
+    '480p': (896, 512, 640),
     '720p': (1280, 704, 960),
     '1080p': (1920, 1088, 1536),
 }
@@ -72,23 +76,24 @@ class Ltx25Paths:
         )
 
     def missing(self) -> list[str]:
-        required = [
+        required = (
             self.transformer,
             self.text_encoder,
             self.video_vae,
             self.audio_vae,
             self.spatial_upsampler,
-        ]
-        return [path.name for path in required if not path.is_file()]
+        )
+        return [str(path.relative_to(self.model_dir)) for path in required if not path.is_file()]
 
     def high_quality_missing(self) -> list[str]:
-        return [] if self.high_quality_video_vae.is_file() else [self.high_quality_video_vae.name]
+        path = self.high_quality_video_vae
+        return [] if path.is_file() else [str(path.relative_to(self.model_dir))]
 
 
 def _model_dir() -> Path:
-    configured = os.getenv('CHARACTER3D_LTX_MODEL_DIR')
-    if configured:
-        return Path(configured).expanduser()
+    explicit = os.getenv('CHARACTER3D_LTX_MODEL_DIR')
+    if explicit:
+        return Path(explicit).expanduser()
     return Path(os.getenv('CHARACTER3D_VIDEO_MODEL_DIR', './weights/video')).expanduser() / 'ltx-2.5'
 
 
@@ -114,18 +119,31 @@ def _quantization() -> str:
     return value if value in _ALLOWED_QUANTIZATION else ''
 
 
+def _sanitized_child_env(source: Mapping[str, str] | None = None) -> dict[str, str]:
+    env = dict(source or os.environ)
+    for name in tuple(env):
+        upper = name.upper()
+        if any(marker in upper for marker in _SECRET_ENV_MARKERS):
+            env.pop(name, None)
+    env['HF_HUB_OFFLINE'] = '1'
+    env['TRANSFORMERS_OFFLINE'] = '1'
+    env['HF_HUB_DISABLE_TELEMETRY'] = '1'
+    return env
+
+
 def snap_ltx_frames(duration_seconds: float, fps: int) -> int:
     target = max(1, int(round(float(duration_seconds) * int(fps))))
-    k = max(0, int(round((target - 1) / 8)))
-    return 8 * k + 1
+    grid_index = max(0, int(round((target - 1) / 8)))
+    return 8 * grid_index + 1
 
 
 def ltx_dimensions(resolution: str, source_path: str | Path) -> tuple[int, int]:
-    if resolution not in _RESOLUTIONS:
-        raise ValueError(f'Unsupported LTX resolution preset: {resolution}')
+    try:
+        landscape_width, landscape_height, square_edge = _RESOLUTIONS[resolution]
+    except KeyError as exc:
+        raise ValueError(f'Unsupported LTX resolution preset: {resolution}') from exc
     with Image.open(source_path) as image:
         source_width, source_height = image.size
-    landscape_width, landscape_height, square_edge = _RESOLUTIONS[resolution]
     ratio = source_width / max(1, source_height)
     if 0.9 <= ratio <= 1.1:
         return square_edge, square_edge
@@ -151,6 +169,7 @@ def probe_ltx_python(executable: str) -> LtxPythonProbe:
             check=False,
             timeout=15,
             shell=False,
+            env=_sanitized_child_env(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return LtxPythonProbe(False, None, False, f'ltx-pipelines unavailable: {exc.__class__.__name__}')
@@ -166,18 +185,13 @@ def probe_ltx_python(executable: str) -> LtxPythonProbe:
     return LtxPythonProbe(True, version, True, 'LTX-2.5 local runtime ready')
 
 
-def _sanitized_child_env(source: Mapping[str, str] | None = None) -> dict[str, str]:
-    env = dict(source or os.environ)
-    for name in list(env):
-        upper = name.upper()
-        if any(marker in upper for marker in _SECRET_ENV_MARKERS):
-            env.pop(name, None)
-    env['HF_HUB_OFFLINE'] = '1'
-    env['TRANSFORMERS_OFFLINE'] = '1'
-    return env
-
-
 class Ltx25LocalEngine:
+    """Local-only adapter around the pinned LTX-2.5 distilled CLI.
+
+    The heavy PyTorch/LTX stack lives in a dedicated Python environment and is
+    started only for a queued generation. The FastAPI process never imports it.
+    """
+
     name = 'ltx25_local'
 
     def __init__(self, *, python_executable: str | None = None, model_dir: str | Path | None = None):
@@ -194,7 +208,9 @@ class Ltx25LocalEngine:
         if gpu is None:
             problems.append('No NVIDIA GPU detected')
         elif gpu['total_mb'] < LTX25_MIN_VRAM_MB:
-            problems.append(f'At least {LTX25_MIN_VRAM_MB} MiB VRAM is required by this conservative LTX profile')
+            problems.append(
+                f'At least {LTX25_MIN_VRAM_MB} MiB VRAM is required by the conservative LTX-2.5 profile'
+            )
         if missing:
             problems.append('Missing model components: ' + ', '.join(missing))
 
@@ -203,12 +219,16 @@ class Ltx25LocalEngine:
         if not problems:
             profiles.append('balanced')
             resolutions.extend(['480p', '720p'])
-            if gpu is not None and gpu['total_mb'] >= LTX25_HIGH_QUALITY_VRAM_MB and not self.paths.high_quality_missing():
+            if (
+                gpu is not None
+                and gpu['total_mb'] >= LTX25_HIGH_QUALITY_VRAM_MB
+                and not self.paths.high_quality_missing()
+            ):
                 profiles.append('high_quality')
                 resolutions.append('1080p')
 
         detail = '; '.join(problems) if problems else (
-            f'LTX-2.5 local runtime ready (ltx-pipelines {probe.version}, pinned source {LTX2_SOURCE_REVISION[:12]}).'
+            f'LTX-2.5 local runtime ready (ltx-pipelines {probe.version}, source {LTX2_SOURCE_REVISION[:12]}).'
         )
         return EngineCapabilities(
             name=self.name,
@@ -253,7 +273,7 @@ class Ltx25LocalEngine:
             '--height', str(height),
             '--num-frames', str(frames),
             '--frame-rate', str(request.fps),
-            '--image', str(source), '0', '1.0',
+            '--image', str(source), '0', LTX25_IMAGE_STRENGTH,
             '--offload', _offload_mode(),
             '--output-path', str(output),
         ]
@@ -274,9 +294,9 @@ class Ltx25LocalEngine:
         from app.video.engine import validate_request_for_engine
 
         capabilities = self.capabilities()
-        validate_request_for_engine(request, capabilities)
         if not capabilities.available:
             raise RuntimeError(capabilities.detail)
+        validate_request_for_engine(request, capabilities)
         if not source_path.is_file():
             raise FileNotFoundError('Source image does not exist')
         output_path.parent.mkdir(parents=True, exist_ok=True)
