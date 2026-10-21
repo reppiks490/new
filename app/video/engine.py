@@ -36,6 +36,12 @@ class ImageToVideoEngine(Protocol):
 _ENGINE_REGISTRY: dict[str, ImageToVideoEngine] = {}
 
 
+def _ensure_builtin_engines() -> None:
+    if 'ltx25_local' not in _ENGINE_REGISTRY:
+        from app.video.adapters.ltx25 import Ltx25LocalEngine
+        register_engine(Ltx25LocalEngine())
+
+
 def register_engine(engine: ImageToVideoEngine, *, replace: bool = False) -> None:
     if not engine.name or (engine.name in _ENGINE_REGISTRY and not replace):
         raise ValueError(f'Video engine {engine.name!r} is already registered or invalid')
@@ -50,10 +56,12 @@ def get_engine(name: str) -> ImageToVideoEngine:
 
 
 def registered_engine_capabilities() -> list[EngineCapabilities]:
+    _ensure_builtin_engines()
     return [engine.capabilities() for engine in _ENGINE_REGISTRY.values()]
 
 
 def select_engine(profile: EngineProfile) -> ImageToVideoEngine:
+    _ensure_builtin_engines()
     for engine in _ENGINE_REGISTRY.values():
         capabilities = engine.capabilities()
         if capabilities.available and profile in capabilities.profiles:
