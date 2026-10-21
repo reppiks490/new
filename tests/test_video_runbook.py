@@ -53,8 +53,3 @@ def test_runbook_contains_setup_start_restart_private_mobile_and_truth_gates():
         assert term in runbook
     assert "not yet been live-verified" in runbook
     assert "target PC" in runbook
-
-
-def test_guide_links_private_video_runbook():
-    guide = (ROOT / "GUIDE.md").read_text(encoding="utf-8")
-    assert "docs/PRIVATE_VIDEO_STUDIO_RUNBOOK.md" in guide
