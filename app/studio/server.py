@@ -9,22 +9,19 @@ from fastapi.staticfiles import StaticFiles
 from app.studio.parameters import WEB
 from app.studio.router import router
 from app.video.router import router as video_router
+from app.video.jobs import interrupt_active_video_jobs
 from app.studio import storage
-
 
 @asynccontextmanager
 async def lifespan(app):
-    # This process does not guess whether an interrupted paid task may be
-    # resubmitted. Preserve task IDs and require the owner to inspect it.
     storage.interrupt_active_jobs()
+    interrupt_active_video_jobs()
     yield
-
 
 app = FastAPI(title='Forma 3D Studio', version='1.6.0', lifespan=lifespan)
 origins = [o.strip() for o in os.getenv('CHARACTER3D_STUDIO_ORIGINS','').split(',') if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins,
                    allow_methods=['GET','POST','PUT'], allow_headers=['Authorization','Content-Type'])
-
 
 @app.middleware('http')
 async def private_api(request: Request, call_next):
@@ -44,16 +41,13 @@ async def private_api(request: Request, call_next):
                 return JSONResponse({'detail':'Origin is not allowed'},status_code=403)
     return await call_next(request)
 
-
 app.include_router(router)
 app.include_router(video_router)
 app.mount('/studio', StaticFiles(directory=WEB), name='studio')
 
-
 @app.get('/')
 def index():
     return FileResponse(WEB/'index.html')
-
 
 @app.get('/health')
 def health():
