@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 EngineProfile = Literal['low_vram', 'balanced', 'high_quality']
@@ -20,6 +20,7 @@ CameraMotionPreset = Literal[
 
 
 class VideoGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     image_id: str = Field(pattern=r'^[a-f0-9]{32}$')
     prompt: str = Field(min_length=1, max_length=2000)
     engine_profile: EngineProfile = 'balanced'
@@ -40,6 +41,7 @@ class VideoGenerationRequest(BaseModel):
 
 
 class PrivacyPreferences(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     privacy_mode: bool = True
     mask_prompts: bool = True
     blur_media: bool = True
