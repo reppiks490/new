@@ -13,6 +13,7 @@ import {
   neutralJobLabel,
   availableVideoControls,
   renderPrivateJobSummary,
+  buildPrivateAssetRequest,
 } from '../app/studio/web/video-studio.js';
 
 class FakeTarget {
@@ -143,4 +144,16 @@ test('capability-driven controls disable unsupported motion and camera settings'
     motionStrength:false,
     cameraMotions:['static'],
   });
+});
+
+
+test('private media assets use bearer headers without leaking tokens into URLs', () => {
+  const request=buildPrivateAssetRequest('/api/video/assets/0123456789abcdef0123456789abcdef.mp4',{
+    origin:'https://private.tailnet.example',
+    token:'super-secret-token',
+  });
+  assert.equal(request.url,'https://private.tailnet.example/api/video/assets/0123456789abcdef0123456789abcdef.mp4');
+  assert.equal(request.options.headers.Authorization,'Bearer super-secret-token');
+  assert.equal(request.options.cache,'no-store');
+  assert.equal(request.url.includes('super-secret-token'),false);
 });
