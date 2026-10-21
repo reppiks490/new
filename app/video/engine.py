@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
-import subprocess
 from typing import Callable, Protocol
 
 from app.video.models import EngineCapabilities, EngineProfile, VideoGenerationRequest
 
 
 ProgressCallback = Callable[[str, int], None]
+
+
+_FAKE_MP4_B64 = (
+    'AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAA0xtb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAA+gABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAACd3RyYWsAAABcdGtoZAAAAAMAAAAAAAAAAAAAAAEAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAQAAAAEAAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAAPoAAAAAAAEAAAAAAe9tZGlhAAAAIG1kaGQAAAAAAAAAAAAAAAAAAEAAAAAQAFXEAAAAAAAtaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAFZpZGVvSGFuZGxlcgAAAAGabWluZgAAABR2bWhkAAAAAQAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAABWnN0YmwAAADac3RzZAAAAAAAAAABAAAAym1wNHYAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAQABAAEgAAABIAAAAAAAAAAETTGF2YzYxLjE5LjEwMSBtcGVnNAAAAAAAAAAAAAAAAAAY//8AAABgZXNkcwAAAAADgICATwABAASAgIBBIBEAAAAAAw1AAAAUwAWAgIAvAAABsAEAAAG1iRMAAAEAAAABIADEjYgARQIECBRDAAABskxhdmM2MS4xOS4xMDEGgICAAQIAAAAUYnRydAAAAAAAAw1AAAAUwAAAABhzdHRzAAAAAAAAAAEAAAACAAAIAAAAABRzdHNzAAAAAAAAAAEAAAABAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAACAAAAAQAAABxzdHN6AAAAAAAAAAAAAAACAAAAUgAAAFQAAAAUc3RjbwAAAAAAAAABAAADeAAAAGF1ZHRhAAAAWW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALGlsc3QAAAAkqXRvbwAAABxkYXRhAAAAAQAAAABMYXZmNjEuNy4xMDMAAAAIZnJlZQAAAK5tZGF0AAABswAQBwAAAbYRgsYV22GgWRtt/G238bbfvwAAoVGFdthoFkbbfxtt/G237wAAwVGFdthoFkbbfxtt/G237wAA4VGFdthoFkbbfxtt/G237wAAAbZTwUhjCu2w0CwMbbfhjbb8MbbfvwAAoUGMK7bDQLAxtt+GNtvwxtt+AADBQYwrtsNAsDG234Y22/DG234AAOFBjCu2w0CwMbbfhjbb8Mbbfg=='
+)
 
 
 class EngineUnavailableError(RuntimeError):
@@ -103,7 +108,7 @@ class FakeVideoEngine:
             supported_fps=[8, 12, 24, 30, 60],
             supports_motion_strength=False,
             camera_motion_presets=['static'],
-            detail='Deterministic local FFmpeg test engine; not a production generative model.',
+            detail='Deterministic local MP4 fixture engine; not a production generative model.',
         )
 
     def generate(
@@ -119,20 +124,9 @@ class FakeVideoEngine:
             raise FileNotFoundError('Source image does not exist')
         output_path.parent.mkdir(parents=True, exist_ok=True)
         progress('generating', 25)
-        completed = subprocess.run(
-            [
-                'ffmpeg', '-y', '-loglevel', 'error',
-                '-loop', '1', '-i', str(source_path),
-                '-t', '0.25', '-vf', 'scale=64:64', '-r', '8', '-an',
-                '-c:v', 'mpeg4', '-q:v', '5', '-movflags', '+faststart',
-                str(output_path),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=15,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(f'FFmpeg test encoding failed: {(completed.stderr or "unknown error")[-500:]}')
+        # Keep the deterministic test engine hermetic. Production readiness still
+        # requires FFmpeg, but unit/API tests must not depend on host multimedia
+        # packages that vary across CI runners.
+        output_path.write_bytes(base64.b64decode(_FAKE_MP4_B64))
         progress('encoding', 90)
         return output_path
