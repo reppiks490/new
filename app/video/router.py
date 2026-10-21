@@ -10,6 +10,8 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.video.models import PrivacyPreferences, VideoGenerationRequest
 from app.video.runtime import detect_video_runtime
+from app.video.engine import EngineUnavailableError, UnsupportedEngineControl, registered_engine_capabilities
+from app.video.jobs import enqueue_video_job
 from app.video.storage import (
     get_video_record,
     list_video_records,
@@ -51,9 +53,11 @@ def _default_privacy() -> PrivacyPreferences:
 
 @router.get('/capabilities')
 def capabilities():
+    runtime = detect_video_runtime()
+    runtime.engines = registered_engine_capabilities()
     return {
         'backend': True,
-        'runtime': detect_video_runtime().model_dump(mode='json'),
+        'runtime': runtime.model_dump(mode='json'),
         'auth_required': bool(os.getenv('CHARACTER3D_STUDIO_TOKEN')),
     }
 
@@ -125,4 +129,17 @@ def job(identifier: str):
 
 @router.post('/generate')
 def generate(req: VideoGenerationRequest):
-    raise HTTPException(503, 'Local video generation worker is not ready yet')
+    try:
+        source_path = video_asset_path(req.image_id, 'png')
+    except ValueError as exc:
+        raise HTTPException(422, 'Invalid source image identifier') from exc
+    if not source_path.is_file():
+        raise HTTPException(422, 'Uploaded source image was not found')
+    try:
+        return enqueue_video_job(req)
+    except UnsupportedEngineControl as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except EngineUnavailableError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(422, str(exc)) from exc
