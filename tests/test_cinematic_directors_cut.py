@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 
@@ -10,6 +11,7 @@ import pytest
 from app.video.cinematic_directors_cut import (
     CutSelection,
     plan_directors_cut,
+    verify_directors_cut,
 )
 from app.video.cinematic_editing import TimelineValidationError, preflight_editorial_timeline
 from app.video.cinematic_models import (
@@ -220,3 +222,39 @@ def test_input_metadata_counts_never_imply_footage_exists():
     assert 'rendered' not in json.dumps(fields)
     assert 'source_timeline_digest_sha256' in fields
     assert len(fields['cut_digest_sha256']) == 64
+
+
+def test_saved_cut_snapshot_verification_detects_stale_or_tampered_metadata():
+    project = _project()
+    shot = project.scenes[0].shots[0]
+    cut = plan_directors_cut(project, [CutSelection(shot.shot_id, 0, 23)])
+    assert cut.schema_version == 1
+    assert verify_directors_cut(project, cut) is None
+
+    for forged in [
+        replace(cut, schema_version=2),
+        replace(cut, frame_count=cut.frame_count + 1),
+        replace(cut, cut_digest_sha256='0' * 64),
+        replace(cut, segments=(replace(
+            cut.segments[0], source_out_frame_exclusive=24
+        ),)),
+        replace(cut, segments=(replace(
+            cut.segments[0], continuity_changed_fields=('private-note',)
+        ),)),
+    ]:
+        with pytest.raises(TimelineValidationError):
+            verify_directors_cut(project, forged)
+
+    revised = project.model_copy(update={'revision': project.revision + 1})
+    with pytest.raises(TimelineValidationError, match='does not match'):
+        verify_directors_cut(revised, cut)
+    assert project.revision == 4
+
+
+def test_directors_cut_verifier_rejects_empty_snapshot_without_partial_success():
+    project = _project()
+    cut = plan_directors_cut(
+        project, [CutSelection(project.scenes[0].shots[0].shot_id)]
+    )
+    with pytest.raises(TimelineValidationError, match='no segments'):
+        verify_directors_cut(project, replace(cut, segments=()))
