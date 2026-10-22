@@ -10,8 +10,9 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.video.cinematic_models import ProjectCreateRequest, ProjectUpdateRequest
 from app.video.cinematic_assembly_jobs import (
-    AssemblyQueueFull, enqueue_master_assembly, get_master_assembly_job,
-    list_master_assembly_jobs,
+    AssemblyCancellationConflict, AssemblyQueueFull,
+    cancel_queued_master_assembly, enqueue_master_assembly,
+    get_master_assembly_job, list_master_assembly_jobs,
 )
 from app.video.cinematic_requests import (
     AssembleMasterRequest, BatchRenderRequest, CompileProjectRequest, ShotRenderRequest,
@@ -313,6 +314,19 @@ def cinematic_assembly_job(project_id: str, job_id: str):
         return get_master_assembly_job(project_id, job_id)
     except (KeyError, ValueError) as exc:
         raise HTTPException(404, 'Cinematic project or assembly job not found') from exc
+
+
+
+@router.post('/projects/{project_id}/assembly-jobs/{job_id}/cancel')
+def cinematic_cancel_queued_assembly(project_id: str, job_id: str):
+    """Cancel only queued work; never imply an active FFmpeg job was stopped."""
+    try:
+        get_project(project_id)
+        return cancel_queued_master_assembly(project_id, job_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project or assembly job not found') from exc
+    except AssemblyCancellationConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get('/jobs')
