@@ -12,6 +12,7 @@ from app.video.cinematic_directors_cut import (
     CutSelection,
     plan_directors_cut,
     verify_directors_cut,
+    restore_directors_cut,
 )
 from app.video.cinematic_editing import TimelineValidationError, preflight_editorial_timeline
 from app.video.cinematic_models import (
@@ -258,3 +259,76 @@ def test_directors_cut_verifier_rejects_empty_snapshot_without_partial_success()
     )
     with pytest.raises(TimelineValidationError, match='no segments'):
         verify_directors_cut(project, replace(cut, segments=()))
+
+
+def test_archived_cut_json_roundtrip_is_canonical_and_matches_source():
+    project = _project()
+    a, b = [s.shot_id for s in project.scenes[0].shots[:2]]
+    original = plan_directors_cut(project, [
+        CutSelection(a, 3, 31), CutSelection(b), CutSelection(a, 0, 1)
+    ])
+    payload = json.loads(json.dumps(original.to_dict()))
+    loaded = restore_directors_cut(project, payload)
+    assert loaded == original
+    assert verify_directors_cut(project, loaded) is None
+    assert json.loads(json.dumps(loaded.to_dict())) == payload
+
+
+def test_archived_cut_json_rejects_all_tampered_public_fields():
+    project = _project()
+    shot = project.scenes[0].shots[0].shot_id
+    original = plan_directors_cut(project, [CutSelection(shot, 0, 20)])
+    clean = json.loads(json.dumps(original.to_dict()))
+
+    for top_key, bad in [
+        ('project_revision', 9),
+        ('frame_count', 999),
+        ('cut_digest_sha256', 'f' * 64),
+        ('source_timeline_digest_sha256', 'f' * 64),
+        ('schema_version', 2),
+        ('fps', 30),
+        ('new_private_field', 'INJECT'),
+    ]:
+        tampered = deepcopy(clean)
+        tampered[top_key] = bad
+        with pytest.raises(TimelineValidationError):
+            restore_directors_cut(project, tampered)
+
+    for segment_key, bad in [
+        ('edit_in_frame', 9),
+        ('frame_count', 99),
+        ('scene_changed', True),
+        ('source_in_frame', True),
+        ('source_out_frame_exclusive', -1),
+        ('shot_id', ['non-hashable']),
+        ('continuity_changed_fields', ['PRIVATE_SECRET']),
+        ('surprise_key', 'INJECT'),
+    ]:
+        tampered = deepcopy(clean)
+        tampered['segments'][0][segment_key] = bad
+        with pytest.raises(TimelineValidationError):
+            restore_directors_cut(project, tampered)
+
+    assert restore_directors_cut(project, clean) == original
+
+
+@pytest.mark.parametrize('bad', [
+    None, [], {}, {'schema_version': True, 'segments': []},
+    {'schema_version': 1, 'segments': None},
+    {'schema_version': 1, 'segments': []},
+    {'schema_version': 1, 'segments': ['malformed']},
+])
+def test_archived_cut_rejects_invalid_root_or_segment_structure(bad):
+    with pytest.raises(TimelineValidationError):
+        restore_directors_cut(_project(), bad)
+
+
+def test_restoring_a_cut_after_revision_change_fails_closed():
+    project = _project()
+    cut = plan_directors_cut(project, [
+        CutSelection(project.scenes[0].shots[0].shot_id)
+    ])
+    serialized = json.loads(json.dumps(cut.to_dict()))
+    revised = project.model_copy(update={'revision': project.revision + 1})
+    with pytest.raises(TimelineValidationError, match='does not match'):
+        restore_directors_cut(revised, serialized)
