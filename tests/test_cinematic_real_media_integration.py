@@ -131,7 +131,7 @@ def test_real_ffmpeg_master_has_decodable_ordered_video_and_verified_bytes(
     master = service.assemble_project_master(
         project.id,
         requests.AssembleMasterRequest(
-            expected_revision=project.revision, ffmpeg_path=ffmpeg,
+            expected_revision=project.revision, ffmpeg_path="ffmpeg",
         ),
     )
     output = storage.video_asset_path(master["asset_id"], "mp4")
@@ -164,11 +164,13 @@ def test_real_ffmpeg_master_has_decodable_ordered_video_and_verified_bytes(
     again = service.assemble_project_master(
         project.id,
         requests.AssembleMasterRequest(
-            expected_revision=project.revision, ffmpeg_path=ffmpeg,
+            expected_revision=project.revision, ffmpeg_path="ffmpeg",
         ),
     )
     assert again["id"] == master["id"]
     assert len(storage.list_video_records("video_master")) == 1
-    # Probe evidence is local to this test; production metadata must not
-    # falsely advertise externally validated output without a server probe.
-    assert master["actual_video_probe_verified"] is False
+    # Server ffprobe metadata verification and the test's full media decode
+    # are separate claims; neither establishes artistic continuity.
+    assert master["actual_video_probe_verified"] is True
+    assert master["probe"]["probe_metadata_verified"] is True
+    assert master["probe"]["full_decode_verified"] is False
