@@ -311,8 +311,11 @@ def render_shot(
 # Project-wide orchestration builds on the proven single-shot render path.
 # Keep master assets separate from mutable project documents.
 import hashlib
+import json
+import math
 import subprocess
 import uuid
+from fractions import Fraction
 
 from app.video.cinematic_requests import AssembleMasterRequest, BatchRenderRequest
 
@@ -339,6 +342,17 @@ def _linked_shot_job(
     return job
 
 
+def _job_has_local_render(job: dict | None) -> bool:
+    """Do not trust persisted succeeded state after a file is lost or truncated."""
+    if job is None or job.get('status') != 'succeeded':
+        return False
+    try:
+        from app.video.jobs import _valid_mp4
+        return _valid_mp4(video_asset_path(job['asset_id'], 'mp4'))
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+
+
 def project_render_status(project_id: str) -> dict:
     """Expose neutral progress metrics without repeating private prompt text."""
     project = get_project(project_id)
@@ -358,13 +372,8 @@ def project_render_status(project_id: str) -> dict:
             else:
                 category = 'missing'
             counts[category] += 1
-            if category == 'succeeded':
-                try:
-                    asset_path = video_asset_path(job['asset_id'], 'mp4')
-                    if not asset_path.is_file() or asset_path.stat().st_size < 12:
-                        missing_assets += 1
-                except (KeyError, TypeError, ValueError, OSError):
-                    missing_assets += 1
+            if category == 'succeeded' and not _job_has_local_render(job):
+                missing_assets += 1
             shots.append({
                 'scene_id': scene.scene_id,
                 'shot_id': shot.shot_id,
@@ -392,7 +401,9 @@ def render_project_missing(project_id: str, request: BatchRenderRequest) -> dict
     for scene in project.scenes:
         for shot in scene.shots:
             job = _linked_shot_job(project, scene, shot)
-            if job is not None and job.get('status') in {'queued', 'running', 'succeeded'}:
+            if job is not None and (
+                job.get('status') in {'queued', 'running'} or _job_has_local_render(job)
+            ):
                 skipped += 1
                 continue
             if len(submitted) >= request.max_shots:
@@ -440,14 +451,7 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
     for scene in project.scenes:
         for shot in scene.shots:
             job = _linked_shot_job(project, scene, shot)
-            if job is None or job.get('status') != 'succeeded':
-                continue
-            asset_id = job.get('asset_id')
-            try:
-                source = video_asset_path(asset_id, 'mp4')
-            except (TypeError, ValueError):
-                continue
-            if not source.is_file() or source.stat().st_size < 12:
+            if not _job_has_local_render(job):
                 continue
             sources.append((scene, shot, job))
     required_shots = sum(len(scene.shots) for scene in project.scenes)
