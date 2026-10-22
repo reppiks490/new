@@ -1,7 +1,9 @@
 # Cinematic editorial preflight — Helper Bot 3
 
-This is an isolated, zero-network contribution based on
-`feat/cinematic-orchestrator-v1`. It does **not** change the existing
+This is an isolated, zero-network contribution originally based on
+`feat/cinematic-orchestrator-v1`. PR #9 now targets
+`chatgpt/cinematic-master-assembly-20261022` to validate against the lead's
+implemented batch/master services; neither parent branch was rewritten. It does **not** change the existing
 cinematic project CRUD, shot rendering, or master assembler.
 
 ## Purpose
@@ -38,6 +40,15 @@ frames are half-open intervals, so clip `[0, 1200)` contributes precisely
   a warning and signed frame difference, never an invented perfect total.
 - Sub-frame shots that cannot occupy one whole delivery frame are rejected.
 - Scene and shot ordinal inconsistencies are detected without reordering.
+- Per-scene half-open spans report authored shot count, expected/actual frames,
+  and signed scene-budget differences. Empty scenes remain explicit diagnostics.
+- Each clip has start/end integer-frame non-drop timecodes. The `clip_at_frame`
+  method finds the authored shot for an exact frame, including cut boundaries;
+  out-of-range seeks are rejected.
+- The canonical `timeline_digest_sha256` tracks project ID, revision, delivery
+  FPS, target frames and scene/shot frame intervals. Its identity matches the
+  independent **Helper 4** QA-only frame oracle. It is not a media-content
+  hash, cryptographic asset attestation, or approval to reuse an output file.
 - Effective continuity inheritance is inspected between consecutive shots;
   only changed **field names** are reported, not sensitive field values.
 - Project content, prompts, source-media URLs and credentials never enter the
@@ -66,6 +77,7 @@ Files in this helper contribution:
 - this guide
 
 No new dependencies, paid APIs, GPU, FFmpeg, browser storage, or schema
-migrations. Merge only after the parent cinematic branch is stable and the
-full CI matrix passes, or after a documented pre-existing CI failure is
-resolved. This helper does not own the lead branch or the CI repair.
+migrations. The lead's merge/target branch is not rewritten. Merge only after
+fresh *combined-head* Python 3.11/3.12, browser regression and Docker CI
+succeed and security/release blockers are separately dispositioned. This helper
+does not own the lead branch or the CI repair.
