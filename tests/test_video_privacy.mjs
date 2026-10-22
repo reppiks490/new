@@ -40,9 +40,9 @@ test('studio shell exposes a dedicated Video tab, workspace, stylesheet, and mod
   // editor. A direct script tag would compete for the same click listener.
   const launcher=fs.readFileSync(path.join(web,'cinematic-launcher.js'),'utf8');
   assert.ok(
-    /\\/studio\\/video-studio\\.js/.test(html) ||
-      (/\\/studio\\/cinematic-launcher\\.js/.test(html) &&
-       /import\\(['"]\\.\\/video-studio\\.js['"]\\)/.test(launcher)),
+    /\/studio\/video-studio\.js/.test(html) ||
+      (/\/studio\/cinematic-launcher\.js/.test(html) &&
+       /import\(['"]\.\/video-studio\.js['"]\)/.test(launcher)),
     'Video editor must be reachable directly or via cinematic launcher',
   );
   assert.match(css,/\.privacy-blurred/);
