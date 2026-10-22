@@ -52,6 +52,7 @@ class CutSegment:
 class DirectorsCut:
     """Stable, privacy-neutral edit decisions linked to a project revision."""
 
+    schema_version: int
     project_id: str
     project_revision: int
     fps: int
@@ -184,6 +185,7 @@ def plan_directors_cut(
     if not project.id:
         raise TimelineValidationError('project must be persisted')
     return DirectorsCut(
+        schema_version=1,
         project_id=timeline.project_id,
         project_revision=timeline.project_revision,
         fps=timeline.delivery_fps,
@@ -192,3 +194,32 @@ def plan_directors_cut(
         frame_count=cursor,
         segments=tuple(result),
     )
+
+
+def verify_directors_cut(
+    project: 'CinematicProject', cut: DirectorsCut
+) -> None:
+    """Verify archived cut metadata by recomputing it from the current project.
+
+    Detects stale revisions, altered shot bounds, frame arithmetic, scene/
+    continuity flags and forged or corrupted cut digests. This is deterministic
+    project-metadata validation, not cryptographic proof of actual media bytes
+    or a digital signature. Returns None only if the snapshot matches.
+    """
+    if not isinstance(cut, DirectorsCut) or cut.schema_version != 1:
+        raise TimelineValidationError('unsupported director cut snapshot schema')
+    if not cut.segments:
+        raise TimelineValidationError('director cut snapshot has no segments')
+    selections = [
+        CutSelection(
+            shot_id=segment.shot_id,
+            source_in_frame=segment.source_in_frame,
+            source_out_frame_exclusive=segment.source_out_frame_exclusive,
+        )
+        for segment in cut.segments
+    ]
+    expected = plan_directors_cut(project, selections)
+    if cut != expected:
+        raise TimelineValidationError(
+            'director cut snapshot does not match current project metadata'
+        )
