@@ -175,8 +175,9 @@ def render_shot(
         metadata=metadata,
         before_submit=link_job,
     )
+    linked_project = linked['project']
     return {
         'job': job,
-        'project': linked['project'],
-        'plan': plan,
+        'project': linked_project.model_dump(mode='json'),
+        'plan': plan.model_dump(mode='json'),
     }
