@@ -164,5 +164,6 @@ def test_output_is_json_compatible_and_snapshot_has_no_master_prompt():
 
     payload = json.dumps(timeline.to_dict())
     assert 'A cinematic sequence' not in payload
-    assert timeline.clips[0].transition_out == 'hard cut'
+    assert timeline.clips[0].transition_out_declared is True
+    assert 'hard cut' not in payload
     assert timeline.to_dict()['clips'][0]['duration_frames'] == 240
