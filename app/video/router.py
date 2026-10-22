@@ -8,6 +8,17 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from app.video.cinematic_models import ProjectCreateRequest, ProjectUpdateRequest
+from app.video.cinematic_requests import CompileProjectRequest
+from app.video.cinematic_service import (
+    ProjectRevisionConflict,
+    build_render_plan,
+    compile_project,
+    create_project,
+    get_project,
+    list_projects,
+    update_project,
+)
 from app.video.models import PrivacyPreferences, VideoGenerationRequest
 from app.video.runtime import detect_video_runtime
 from app.video.engine import EngineUnavailableError, UnsupportedEngineControl, registered_engine_capabilities
@@ -112,6 +123,78 @@ def privacy():
 def set_privacy(preferences: PrivacyPreferences):
     put_video_record('video_privacy', preferences.model_dump(mode='json'), identifier=_PRIVACY_ID)
     return preferences
+
+
+@router.get('/projects')
+def cinematic_projects():
+    return list_projects()
+
+
+@router.post('/projects')
+def create_cinematic_project(request: ProjectCreateRequest):
+    return create_project(request)
+
+
+@router.get('/projects/{project_id}')
+def cinematic_project(project_id: str):
+    try:
+        return get_project(project_id)
+    except (KeyError, ValueError):
+        raise HTTPException(404, 'Cinematic project not found')
+
+
+@router.put('/projects/{project_id}')
+def replace_cinematic_project(project_id: str, request: ProjectUpdateRequest):
+    try:
+        return update_project(project_id, request)
+    except ProjectRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, 'Cinematic project not found') from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post('/projects/{project_id}/compile')
+def compile_cinematic_project(project_id: str, request: CompileProjectRequest):
+    try:
+        project, diagnostics = compile_project(project_id, request)
+        return {'project': project, 'diagnostics': diagnostics}
+    except ProjectRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, 'Cinematic project or engine not found') from exc
+    except EngineUnavailableError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.get('/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/plan')
+def cinematic_shot_plan(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    engine_name: str | None = None,
+):
+    try:
+        return build_render_plan(
+            project_id,
+            scene_id,
+            shot_id,
+            engine_name=engine_name,
+            require_assets=True,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, 'Cinematic project, scene, or shot not found') from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except EngineUnavailableError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get('/jobs')
