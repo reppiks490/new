@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable
 
+from app.video.cinematic_compiler import compile_project_prompt
 from app.video.cinematic_models import (
     CinematicProject,
     CinematicScene,
@@ -14,6 +15,7 @@ from app.video.cinematic_models import (
     RenderPlan,
     merge_continuity,
 )
+from app.video.cinematic_requests import CompileProjectRequest
 from app.video.models import EngineCapabilities
 from app.video.storage import (
     compare_and_swap_video_project,
@@ -100,6 +102,40 @@ def update_project(project_id: str, request: ProjectUpdateRequest) -> CinematicP
     if not updated or record is None:
         raise ProjectRevisionConflict(project_id, request.expected_revision, actual_revision)
     return CinematicProject.model_validate(record)
+
+
+def compile_project(
+    project_id: str,
+    request: CompileProjectRequest,
+) -> tuple[CinematicProject, dict]:
+    project = get_project(project_id)
+    if project.revision != request.expected_revision:
+        raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
+
+    engine_cap = request.engine_max_duration_seconds
+    if request.engine_name:
+        from app.video.engine import get_engine
+
+        engine_cap = min(engine_cap, get_engine(request.engine_name).capabilities().max_duration_seconds)
+
+    result = compile_project_prompt(
+        project,
+        preferred_shot_seconds=request.preferred_shot_seconds,
+        engine_max_duration_seconds=engine_cap,
+    )
+    updated = update_project(
+        project_id,
+        ProjectUpdateRequest(
+            expected_revision=request.expected_revision,
+            scenes=result.scenes,
+        ),
+    )
+    diagnostics = {
+        **result.diagnostics,
+        'project_revision': updated.revision,
+        'engine_duration_cap_seconds': float(engine_cap),
+    }
+    return updated, diagnostics
 
 
 def resolve_effective_continuity(
