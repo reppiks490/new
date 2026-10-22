@@ -296,7 +296,7 @@ def test_persisted_six_hundred_second_compiled_project_has_identical_edl_after_r
     original = cinematic_service.create_project(
         ProjectCreateRequest(
             title='Ten-minute filmed sequence',
-            master_prompt='SCENE 1: Rooftop\\nA traveler approaches the rooftop door.',
+            master_prompt='SCENE 1: Rooftop\nA traveler approaches the rooftop door.',
             target_duration_seconds=600,
             delivery_fps=120,
             delivery_resolution='2160p',
