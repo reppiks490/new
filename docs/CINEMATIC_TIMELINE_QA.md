@@ -38,6 +38,23 @@ The single test file has no effect on production request paths and contains an i
 - Timeline SHA-256 is an edit-graph identity, not a content hash of video files.
 - A timeline can be off target; inspect target_alignment_delta_frames.
 
+## Additional operational recovery tests
+
+Run all independent cinematic QA suites from a repository checkout:
+
+    python -m pytest -q -W error tests/test_cinematic_timeline_integration.py tests/test_cinematic_recovery_integration.py tests/test_cinematic_longform_batch_integration.py
+
+Recovery tests use the existing fake local engine and capture-only GPU job pool. They make no real model or FFmpeg calls. They verify:
+
+- A process restart marks active/queued jobs interrupted/failed, while completed jobs remain linked to their original local assets.
+- Bounded retries pick failed and missing shots in timeline order; active jobs are never duplicated, and no-op retries do not advance the project revision.
+- Stale project revisions reject queued work without creating extra jobs or mutating stored state.
+- A foreign-project job ID linked into the wrong project is not trusted, even when it claims success.
+- Failed FFmpeg invocations and outputs with invalid MP4 signatures remove partial output and do not create a master record.
+- A 600-second, 60-shot, three-scene film can be queued in bounded 13-shot batches without skipping/reordering shots; after a restart, bounded seven-shot retry preserves the full shot graph.
+
+**Limits:** this does not simulate an actual process crash during a SQLite transaction, overlapping workers with independent OS processes, GPU/CPU exhaustion, external decoder failure, or real FFmpeg/ffprobe. It does not prove source immutability or cross-revision content freshness. Those remain integration/release gates rather than silently counted as passing QA.
+
 ## Additional evidence required before calling a cinematic master verified
 
 Record commit SHA, CI run IDs, actual hardware/software versions, asset count and hashes, render command, exit status and ffprobe metadata. On the real generated master file (not synthetic bytes), execute:
