@@ -22,8 +22,14 @@ from app.video.runtime import detect_nvidia_gpu
 
 COMFY_WORKFLOW_REVISION = '9afccb38bb9173575411189a75f4fc6cc8acd06c'
 COMFY_WORKFLOW_NAME = 'image_flux3_klein_distilled_image_edit.json'
-COMFY_MODEL_FILES = (
+# BFL/Comfy metadata has used both names for the same distilled INT8 family.
+# Prefer the current underscore/_sd_ name when present, but keep the filename
+# embedded in the pinned workflow as a compatibility fallback.
+COMFY_DIFFUSION_MODEL_CANDIDATES = (
+    'models/diffusion_models/flux3_image_klein_sd_int8_convrot.safetensors',
     'models/diffusion_models/flux3-image-klein-int8-convrot.safetensors',
+)
+COMFY_REQUIRED_MODEL_FILES = (
     'models/text_encoders/qwen3vl_4b_int8_convrot.safetensors',
     'models/text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors',
     'models/vae/flux2-vae.safetensors',
@@ -104,6 +110,38 @@ def probe_comfy_server(host: str, port: int) -> ComfyProbe:
     return ComfyProbe(False, f'ComfyUI is not reachable on {host}:{port}')
 
 
+def resolve_model_files(comfy_home: Path) -> dict[str, str]:
+    diffusion = next(
+        (relative for relative in COMFY_DIFFUSION_MODEL_CANDIDATES if (comfy_home / relative).is_file()),
+        None,
+    )
+    missing = [relative for relative in COMFY_REQUIRED_MODEL_FILES if not (comfy_home / relative).is_file()]
+    if diffusion is None:
+        missing.insert(0, 'one distilled INT8 diffusion checkpoint')
+    if missing:
+        raise FileNotFoundError(f'Missing FLUX 3 Klein model files: {", ".join(missing)}')
+    return {
+        'diffusion': Path(diffusion).name,
+        'text_encoder': Path(COMFY_REQUIRED_MODEL_FILES[0]).name,
+        'prompt_upsampler': Path(COMFY_REQUIRED_MODEL_FILES[1]).name,
+        'vae': Path(COMFY_REQUIRED_MODEL_FILES[2]).name,
+    }
+
+
+def _set_loader_model(node: dict[str, Any], field: str, filename: str) -> None:
+    values = node.setdefault('widgets_values', [])
+    while len(values) < 1:
+        values.append(None)
+    values[0] = filename
+    named = node.setdefault('widgets_values_named', {})
+    named[field] = filename
+    properties = node.get('properties')
+    if isinstance(properties, dict):
+        models = properties.get('models')
+        if isinstance(models, list) and models and isinstance(models[0], dict):
+            models[0]['name'] = filename
+
+
 def patch_workflow(
     workflow: dict[str, Any],
     *,
@@ -111,6 +149,7 @@ def patch_workflow(
     prompt: str,
     seed: int,
     output_prefix: str,
+    model_files: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     patched = deepcopy(workflow)
     nodes = patched.get('nodes')
@@ -118,6 +157,9 @@ def patch_workflow(
         raise RuntimeError('Pinned ComfyUI workflow has an invalid node list')
 
     seen = {'LoadImage': 0, 'Flux3LayoutPrompt': 0, 'KSampler': 0, 'SaveImage': 0}
+    if model_files is not None:
+        seen.update({'UNETLoader': 0, 'TextEncoder': 0, 'PromptUpsampler': 0, 'VAELoader': 0})
+
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -125,7 +167,21 @@ def patch_workflow(
         values = node.setdefault('widgets_values', [])
         named = node.setdefault('widgets_values_named', {})
 
-        if node_type == 'LoadImage':
+        if node_type == 'UNETLoader' and model_files is not None:
+            _set_loader_model(node, 'unet_name', model_files['diffusion'])
+            seen['UNETLoader'] += 1
+        elif node_type == 'VAELoader' and model_files is not None:
+            _set_loader_model(node, 'vae_name', model_files['vae'])
+            seen['VAELoader'] += 1
+        elif node_type == 'CLIPLoader' and model_files is not None:
+            current = str(named.get('clip_name') or (values[0] if values else ''))
+            if 'qwen3vl_4b' in current:
+                _set_loader_model(node, 'clip_name', model_files['text_encoder'])
+                seen['TextEncoder'] += 1
+            elif 'prompt_upsampler' in current:
+                _set_loader_model(node, 'clip_name', model_files['prompt_upsampler'])
+                seen['PromptUpsampler'] += 1
+        elif node_type == 'LoadImage':
             seen['LoadImage'] += 1
             if values:
                 values[0] = source_name
@@ -133,6 +189,8 @@ def patch_workflow(
                 values.append(source_name)
             named['image'] = source_name
         elif node_type == 'Flux3LayoutPrompt':
+            # This node feeds PreviewAny -> TextGenerate in the pinned graph, so
+            # setting it here supplies the user's short request to the upsampler.
             seen['Flux3LayoutPrompt'] += 1
             if values:
                 values[0] = prompt
@@ -247,9 +305,10 @@ class Flux3KleinComfyEngine:
         if not self.comfy_home.is_dir():
             problems.append('ComfyUI workspace is missing')
         else:
-            missing = [relative for relative in COMFY_MODEL_FILES if not (self.comfy_home / relative).is_file()]
-            if missing:
-                problems.append(f'Missing {len(missing)} required FLUX 3 Klein int8 model file(s)')
+            try:
+                resolve_model_files(self.comfy_home)
+            except FileNotFoundError as exc:
+                problems.append(str(exc))
         if not self.workflow_path.is_file():
             problems.append('Pinned FLUX 3 Klein ComfyUI workflow is missing')
 
@@ -280,6 +339,7 @@ class Flux3KleinComfyEngine:
         executable = _resolved_executable(self.comfy_executable)
         if executable is None:
             raise RuntimeError('comfy-cli is unavailable')
+        model_files = resolve_model_files(self.comfy_home)
 
         input_dir = self.comfy_home / 'input'
         input_dir.mkdir(parents=True, exist_ok=True)
@@ -300,6 +360,7 @@ class Flux3KleinComfyEngine:
                 prompt=request.prompt,
                 seed=request.seed,
                 output_prefix=output_prefix,
+                model_files=model_files,
             )
             with tempfile.NamedTemporaryFile(
                 mode='w',
