@@ -105,6 +105,7 @@ def test_drain_executes_and_records_verified_master_without_leaking_scripts(monk
         return {
             "id": "b" * 32, "asset_id": "a" * 32,
             "asset_url": "/api/video/assets/" + "a" * 32 + ".mp4",
+            "status": "ready", "probe": {"probe_metadata_verified": True},
             "sha256": "f" * 64, "actual_video_probe_verified": True,
         }
     monkeypatch.setattr(queue, "assemble_project_master", fake_assemble)
@@ -117,6 +118,41 @@ def test_drain_executes_and_records_verified_master_without_leaking_scripts(monk
     assert latest["probe_metadata_verified"] is True
     assert latest["asset_id"] == "a" * 32
     assert "VERY_PRIVATE" not in str(latest)
+    assert queue._claim_next() is None
+
+
+@pytest.mark.parametrize("override", [
+    {"actual_video_probe_verified": False},
+    {"status": "not-ready"},
+    {"probe": None},
+    {"sha256": "invalid"},
+    {"asset_url": "/api/video/assets/" + "c" * 32 + ".mp4"},
+    {"asset_id": None},
+])
+def test_worker_rejects_malformed_master_result_without_false_completion(
+    monkeypatch, tmp_path, override,
+):
+    _, _, _, queue, project = _ready_project(monkeypatch, tmp_path)
+    monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
+    requests = importlib.import_module("app.video.cinematic_requests")
+    job = queue.enqueue_master_assembly(
+        project.id, requests.AssembleMasterRequest(expected_revision=project.revision),
+    )
+    result = {
+        "id": "b" * 32, "asset_id": "a" * 32,
+        "asset_url": "/api/video/assets/" + "a" * 32 + ".mp4",
+        "status": "ready", "probe": {"probe_metadata_verified": True},
+        "sha256": "f" * 64, "actual_video_probe_verified": True,
+    }
+    result.update(override)
+    monkeypatch.setattr(queue, "assemble_project_master", lambda *a, **kw: result)
+    queue._drain()
+    stored = queue.get_master_assembly_job(project.id, job["id"])
+    assert stored["status"] == "failed"
+    assert stored["stage"] == "Assembly failed"
+    assert "asset_url" not in stored
+    assert "sha256" not in stored
+    assert "PRIVATE" not in str(stored)
     assert queue._claim_next() is None
 
 
