@@ -7,8 +7,8 @@ from typing import Literal
 from app.studio.storage import get, list_records, put, root
 
 
-VideoRecordKind = Literal['video_job', 'video_privacy', 'video_asset_meta']
-_VIDEO_RECORD_KINDS = frozenset({'video_job', 'video_privacy', 'video_asset_meta'})
+VideoRecordKind = Literal['video_job', 'video_privacy', 'video_asset_meta', 'video_project']
+_VIDEO_RECORD_KINDS = frozenset({'video_job', 'video_privacy', 'video_asset_meta', 'video_project'})
 _VIDEO_EXTENSIONS = frozenset({'png', 'mp4', 'json'})
 _ID_PATTERN = re.compile(r'^[a-f0-9]{32}$')
 
