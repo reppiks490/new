@@ -306,3 +306,220 @@ def render_shot(
     from app.video.cinematic_rendering import render_shot as implementation
 
     return implementation(project_id, scene_id, shot_id, request)
+
+
+# Project-wide orchestration builds on the proven single-shot render path.
+# Keep master assets separate from mutable project documents.
+import hashlib
+import subprocess
+import uuid
+
+from app.video.cinematic_requests import AssembleMasterRequest, BatchRenderRequest
+
+
+class MasterAssemblyNotReady(RuntimeError):
+    """At least one shot is not a verified successful local job."""
+
+
+def _linked_shot_job(
+    project: CinematicProject, scene: CinematicScene, shot: CinematicShot,
+) -> dict | None:
+    if not shot.latest_job_id:
+        return None
+    try:
+        job = get_video_record('video_job', shot.latest_job_id)
+    except (KeyError, ValueError):
+        return None
+    if (
+        job.get('project_id') != project.id
+        or job.get('scene_id') != scene.scene_id
+        or job.get('shot_id') != shot.shot_id
+    ):
+        return None
+    return job
+
+
+def project_render_status(project_id: str) -> dict:
+    """Expose neutral progress metrics without repeating private prompt text."""
+    project = get_project(project_id)
+    counts = {'missing': 0, 'active': 0, 'failed': 0, 'succeeded': 0}
+    shots: list[dict] = []
+    for scene in project.scenes:
+        for shot in scene.shots:
+            job = _linked_shot_job(project, scene, shot)
+            state = job.get('status') if job is not None else None
+            if state == 'succeeded':
+                category = 'succeeded'
+            elif state in {'queued', 'running'}:
+                category = 'active'
+            elif state == 'failed':
+                category = 'failed'
+            else:
+                category = 'missing'
+            counts[category] += 1
+            shots.append({
+                'scene_id': scene.scene_id,
+                'shot_id': shot.shot_id,
+                'status': category,
+                'job_id': job['id'] if job else None,
+            })
+    return {
+        'project_id': project.id,
+        'project_revision': project.revision,
+        'total_shots': len(shots),
+        **counts,
+        'ready_for_assembly': bool(shots) and counts['succeeded'] == len(shots),
+        'shots': shots,
+    }
+
+
+def render_project_missing(project_id: str, request: BatchRenderRequest) -> dict:
+    """Submit unscheduled/failed shots in order; never duplicate active jobs."""
+    project = get_project(project_id)
+    if project.revision != request.expected_revision:
+        raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
+    submitted: list[dict] = []
+    skipped = 0
+    for scene in project.scenes:
+        for shot in scene.shots:
+            job = _linked_shot_job(project, scene, shot)
+            if job is not None and job.get('status') in {'queued', 'running', 'succeeded'}:
+                skipped += 1
+                continue
+            if len(submitted) >= request.max_shots:
+                continue
+            # Each link is an atomic revision update. Carry forward its new
+            # revision before submitting the next job to prevent stale writes.
+            result = render_shot(
+                project_id, scene.scene_id, shot.shot_id,
+                ShotRenderRequest(expected_revision=project.revision, engine_name=request.engine_name),
+            )
+            submitted.append(result['job'])
+            project = CinematicProject.model_validate(result['project'])
+    return {
+        'jobs': submitted,
+        'skipped': skipped,
+        'project': project.model_dump(mode='json'),
+    }
+
+
+def _run_master_ffmpeg(command: list[str], **kwargs):
+    """Subprocess seam allows hermetic tests without requiring FFmpeg."""
+    return subprocess.run(command, **kwargs)
+
+
+def _master_size(project: CinematicProject) -> tuple[int, int]:
+    # The selected label expresses height; width follows the aspect ratio.
+    height = _RESOLUTION_HEIGHT[project.delivery_resolution]
+    try:
+        numerator, denominator = (int(component) for component in project.aspect_ratio.split(':'))
+        if numerator <= 0 or denominator <= 0:
+            raise ValueError
+    except (ValueError, TypeError) as exc:
+        raise ValueError('aspect_ratio must be positive integers like 16:9') from exc
+    width = max(2, 2 * round((height * numerator / denominator) / 2))
+    return width, height
+
+
+def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> dict:
+    """Concatenate ordered local shot videos into a separate, hashed master."""
+    project = get_project(project_id)
+    if project.revision != request.expected_revision:
+        raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
+
+    sources: list[tuple[CinematicScene, CinematicShot, dict]] = []
+    for scene in project.scenes:
+        for shot in scene.shots:
+            job = _linked_shot_job(project, scene, shot)
+            if job is None or job.get('status') != 'succeeded':
+                continue
+            asset_id = job.get('asset_id')
+            try:
+                source = video_asset_path(asset_id, 'mp4')
+            except (TypeError, ValueError):
+                continue
+            if not source.is_file() or source.stat().st_size < 12:
+                continue
+            sources.append((scene, shot, job))
+    required_shots = sum(len(scene.shots) for scene in project.scenes)
+    if not required_shots or len(sources) != required_shots:
+        incomplete = required_shots - len(sources)
+        raise MasterAssemblyNotReady(
+            f'{incomplete} shot(s) are missing successful local render assets'
+        )
+
+    source_ids = [job['asset_id'] for _, _, job in sources]
+    fingerprint = hashlib.sha256(
+        ('|'.join([project.id or '', str(project.revision), *source_ids,
+                   project.delivery_resolution, str(project.delivery_fps)])).encode('utf-8')
+    ).hexdigest()
+    for existing in list_video_records('video_master'):
+        if existing.get('project_id') != project_id or existing.get('source_digest') != fingerprint:
+            continue
+        try:
+            path = video_asset_path(existing['asset_id'], 'mp4')
+        except (KeyError, ValueError, TypeError):
+            continue
+        if path.is_file() and path.stat().st_size >= 12:
+            return existing
+
+    width, height = _master_size(project)
+    output_id = uuid.uuid4().hex
+    output_path = video_asset_path(output_id, 'mp4')
+    filters = []
+    for index, _ in enumerate(sources):
+        filters.append(
+            f'[{index}:v:0]fps={project.delivery_fps},'
+            f'scale={width}:{height}:force_original_aspect_ratio=decrease,'
+            f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,'
+            f'setsar=1,format=yuv420p,setpts=PTS-STARTPTS[v{index}]'
+        )
+    filters.append(
+        ''.join(f'[v{index}]' for index in range(len(sources)))
+        + f'concat=n={len(sources)}:v=1:a=0[v]'
+    )
+    command = [request.ffmpeg_path, '-nostdin', '-y', '-hide_banner', '-loglevel', 'error']
+    for _, _, job in sources:
+        command.extend(['-i', str(video_asset_path(job['asset_id'], 'mp4'))])
+    command.extend([
+        '-filter_complex', ';'.join(filters),
+        '-map', '[v]', '-an', '-c:v', 'libx264',
+        '-preset', 'medium', '-crf', '18', '-movflags', '+faststart',
+        str(output_path),
+    ])
+    try:
+        execution = _run_master_ffmpeg(
+            command, capture_output=True, text=True, timeout=43200, check=False,
+        )
+        if execution.returncode != 0:
+            raise RuntimeError(f'FFmpeg master assembly failed with exit code {execution.returncode}')
+        # A valid MP4 signature guards against absent or empty output.
+        # A separate full media probe is required before production release.
+        from app.video.jobs import _valid_mp4
+        if not _valid_mp4(output_path):
+            raise RuntimeError('FFmpeg did not create a valid MP4 container')
+        with output_path.open('rb') as handle:
+            digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+        record = put_video_record('video_master', {
+            'status': 'ready',
+            'project_id': project_id,
+            'project_revision': project.revision,
+            'source_digest': fingerprint,
+            'source_shot_count': len(sources),
+            'source_shot_ids': [shot.shot_id for _, shot, _ in sources],
+            'source_job_ids': [job['id'] for _, _, job in sources],
+            'asset_id': output_id,
+            'asset_url': f'/api/video/assets/{output_id}.mp4',
+            'sha256': digest,
+            'size_bytes': output_path.stat().st_size,
+            'delivery_fps': project.delivery_fps,
+            'delivery_resolution': project.delivery_resolution,
+            'actual_video_probe_verified': False,
+            'has_audio': False,
+            'created_at': _utcnow().isoformat(),
+        })
+        return record
+    except Exception:
+        if output_path.exists():
+            output_path.unlink()
+        raise
