@@ -140,6 +140,13 @@ class CinematicProject(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_validator('master_prompt')
+    @classmethod
+    def reject_blank_master_prompt(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('master_prompt cannot be blank')
+        return value
+
     @field_validator('reference_image_ids')
     @classmethod
     def dedupe_reference_ids(cls, values: list[str]) -> list[str]:
