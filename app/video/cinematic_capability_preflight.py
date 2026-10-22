@@ -174,7 +174,11 @@ def audit_engine_capabilities(
             )))
             if len(ordered_references) > 1:
                 flag("warning", "ADDITIONAL_REFERENCES_NOT_IMAGE_INPUTS", scene.scene_id, shot.shot_id)
-            if shot.reference_image_ids and (project.reference_image_ids or scene.reference_image_ids):
+            if (
+                shot.reference_image_ids
+                and ordered_references
+                and ordered_references[0] not in shot.reference_image_ids
+            ):
                 flag("warning", "SHOT_REFERENCE_NOT_PRIMARY_SOURCE", scene.scene_id, shot.shot_id)
 
             # Persisted editorial intent may be useful to later finishing
