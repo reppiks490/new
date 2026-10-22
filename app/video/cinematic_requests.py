@@ -31,4 +31,5 @@ class AssembleMasterRequest(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
     expected_revision: int = Field(ge=1)
-    ffmpeg_path: str = Field(default='ffmpeg', min_length=1, max_length=4096)
+    ffmpeg_path: str = Field(default='ffmpeg', pattern=r'^ffmpeg(?:\.exe)?
+)
