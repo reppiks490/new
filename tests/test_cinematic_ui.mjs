@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 import {
   neutralProjectLabel,
@@ -110,4 +113,19 @@ test('quick-hide cinematic view contains no project or prompt content',()=>{
   assert.deepEqual(view,{title:'Workspace',message:'Private cinematic project is hidden.'});
   assert.equal(JSON.stringify(view).includes(project.title),false);
   assert.equal(JSON.stringify(view).includes(project.master_prompt),false);
+});
+
+test('studio shell loads cinematic launcher and responsive command-center styling',()=>{
+  const here=path.dirname(fileURLToPath(import.meta.url));
+  const web=path.join(here,'..','app','studio','web');
+  const html=fs.readFileSync(path.join(web,'index.html'),'utf8');
+  const css=fs.readFileSync(path.join(web,'cinematic-studio.css'),'utf8');
+  const launcher=fs.readFileSync(path.join(web,'cinematic-launcher.js'),'utf8');
+  assert.match(html,/\/studio\/cinematic-studio\.css/);
+  assert.match(html,/\/studio\/cinematic-launcher\.js/);
+  assert.doesNotMatch(html,/src="\/studio\/video-studio\.js"/);
+  assert.match(css,/\.cinematic-shot-grid/);
+  assert.match(css,/@media\(max-width:760px\)/);
+  assert.match(launcher,/import\('\.\/video-studio\.js'\)/);
+  assert.match(launcher,/stopImmediatePropagation\(\)/);
 });
