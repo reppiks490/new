@@ -193,5 +193,41 @@ def test_master_assembly_persists_ordered_master_record_without_mutating_project
     assert storage.video_asset_path(result["asset_id"], "mp4").is_file()
     assert service.get_project(project.id).revision == before_revision
     assert seen["command"][0] == "ffmpeg"
+    graph = seen["command"][seen["command"].index("-filter_complex") + 1]
+    assert "concat=n=2:v=1:a=0[v]" in graph
+    assert "scale=3840:2160" in graph
+    assert graph.count("tpad=stop_mode=clone:stop_duration=5.0") == 2
+    assert graph.count("trim=duration=5.0") == 2
+    assert result["timeline_seconds"] == 10
+    assert result["actual_video_probe_verified"] is False
     masters = [item for item in storage.list_video_records("video_master") if item["project_id"] == project.id]
     assert masters and masters[0]["asset_id"] == result["asset_id"]
+
+
+def test_render_status_does_not_claim_assembly_ready_when_successful_job_media_is_missing(monkeypatch, tmp_path):
+    _, service, storage, project = _project(monkeypatch, tmp_path, shots=1)
+    shot = project.scenes[0].shots[0]
+    absent_asset = "f" * 32
+    job = storage.put_video_record(
+        "video_job", {
+            "status": "succeeded",
+            "project_id": project.id,
+            "scene_id": SCENE,
+            "shot_id": shot.shot_id,
+            "asset_id": absent_asset,
+        },
+    )
+    scene = project.scenes[0].model_copy(update={
+        "shots": [shot.model_copy(update={"latest_job_id": job["id"]})],
+    })
+    service.update_project(
+        project.id,
+        importlib.import_module("app.video.cinematic_models").ProjectUpdateRequest(
+            expected_revision=2, scenes=[scene],
+        ),
+    )
+    result = service.project_render_status(project.id)
+    assert result["total_shots"] == 1
+    assert result["succeeded"] == 1
+    assert result["missing_output_assets"] == 1
+    assert result["ready_for_assembly"] is False
