@@ -3,6 +3,7 @@ import {
   createPrivacyController,
   revealWhileHeld,
 } from './privacy-mode.js';
+import {bindVolatileEditorDraft} from './private-media-draft.js';
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
@@ -241,6 +242,11 @@ function renderInspector(state) {
     <button id="video-generate" class="wide primary" ${ready?'':'disabled'}>Generate video</button>
     <h2>Recent jobs</h2><div id="video-jobs"></div>`;
 
+  bindVolatileEditorDraft(inspector,state.formDraft,{
+    prompt:'video-prompt',profile:'video-profile',resolution:'video-resolution',
+    fps:'video-fps',duration:'video-duration',seed:'video-seed',
+    camera:'video-camera',motion:'video-motion',
+  });
   const imageInput=document.getElementById('video-image-input');
   imageInput.onchange=async event=>{
     const file=event.target.files?.[0]; if(!file)return;
@@ -249,6 +255,7 @@ function renderInspector(state) {
     try{
       setStatus('Uploading private source image…');
       const result=await videoApi('/images',{method:'POST',body:form});
+      if(state.closed)return;
       if(state.sourceImageUrl)releasePrivateAssetUrl(state,state.sourceImageUrl);
       state.sourceImageId=result.image_id; state.sourceImageUrl=result.url;
       state.privacy.conceal('source');
@@ -290,6 +297,7 @@ function renderInspector(state) {
       state.privacy.concealAll();
       setStatus('Queued on your local video worker…');
       const job=await videoApi('/generate',{method:'POST',body:JSON.stringify(payload)});
+      if(state.closed)return;
       state.jobs=[job,...state.jobs.filter(item=>item.id!==job.id)];
       state.activeJob=job;
       renderJobList(state); renderWorkspace(state);
@@ -303,6 +311,7 @@ function renderInspector(state) {
 export async function pollVideoJob(id, state) {
   try{
     const job=await videoApi(`/jobs/${encodeURIComponent(id)}`);
+    if(state.closed)return;
     state.jobs=[job,...state.jobs.filter(item=>item.id!==id)];
     state.activeJob=job;
     renderJobList(state); renderWorkspace(state);
@@ -337,11 +346,14 @@ export async function renderVideoStudio() {
     privacy:null,
     mediaObjectUrls:new Map(),
     mediaLoads:new Map(),
+    formDraft:{},
     closed:false,
   };
   state.privacy=createPrivacyController({onChange:()=>{
+    if(state.closed)return;
     if(state.privacy.isQuickHidden()) renderNeutralScreen(workspace,inspector,state.privacy);
-    else { renderInspector(state); renderWorkspace(state); }
+    else if(!document.getElementById('video-prompt')) { renderInspector(state); renderWorkspace(state); }
+    else applyPrivacyPresentation(state);
   }});
   state.cleanups.push(state.privacy.attachVisibilityGuard());
   state.cleanups.push(state.privacy.attachIdleGuard());
@@ -350,6 +362,7 @@ export async function renderVideoStudio() {
     const [capabilities,preferences,jobs]=await Promise.all([
       videoApi('/capabilities'), videoApi('/privacy'), videoApi('/jobs')
     ]);
+    if(state.closed)return;
     state.capabilities=capabilities;
     state.jobs=Array.isArray(jobs)?jobs:[];
     state.activeJob=state.jobs.find(job=>job.asset_url) || state.jobs[0] || null;
@@ -371,7 +384,7 @@ export function exitVideoStudio() {
   if(!workspace || !viewport) return;
   const state=workspace.__videoState;
   if(state?.pollTimer)clearTimeout(state.pollTimer);
-  if(state)state.closed=true;
+  if(state){state.closed=true;state.formDraft={};}
   for(const cleanup of state?.cleanups || []) { try{cleanup();}catch{} }
   for(const url of state?.mediaObjectUrls?.values?.() || []) { try{URL.revokeObjectURL(url);}catch{} }
   state?.mediaObjectUrls?.clear?.();
