@@ -31,8 +31,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg
           command -v ffmpeg
           command -v ffprobe
-          ffmpeg -version | head -n 1
-          ffprobe -version | head -n 1
+          ffmpeg -version | sed -n '1p'
+          ffprobe -version | sed -n '1p'
 
       - name: Install local application and test dependencies
         run: |
