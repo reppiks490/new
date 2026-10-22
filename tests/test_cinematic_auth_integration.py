@@ -49,6 +49,10 @@ def _project_payload():
         ("GET", f"/api/video/projects/{UNKNOWN}", None),
         ("PUT", f"/api/video/projects/{UNKNOWN}", {"expected_revision": 1, "title": "Leaked"}),
         ("POST", f"/api/video/projects/{UNKNOWN}/compile", {"expected_revision": 1}),
+        ("GET", f"/api/video/projects/{UNKNOWN}/render-status", None),
+        ("POST", f"/api/video/projects/{UNKNOWN}/render-missing", {"expected_revision": 1}),
+        ("GET", f"/api/video/projects/{UNKNOWN}/masters", None),
+        ("POST", f"/api/video/projects/{UNKNOWN}/assemble", {"expected_revision": 1}),
         ("GET", f"/api/video/projects/{UNKNOWN}/scenes/{SCENE}/shots/{SHOT}/plan", None),
         (
             "POST",
@@ -57,7 +61,7 @@ def _project_payload():
         ),
     ],
 )
-def test_every_existing_cinematic_route_requires_owner_bearer(
+def test_every_project_render_and_master_route_requires_owner_bearer(
     monkeypatch, tmp_path, method, path, body
 ):
     server = _server(monkeypatch, tmp_path)
@@ -137,3 +141,27 @@ def test_private_media_assets_require_bearer_and_disallow_token_in_query(
     assert authorized.content == private_bytes
     assert authorized.headers["content-type"].startswith(media_type)
     assert authorized.headers["cache-control"] == "no-store"
+
+
+
+def test_rejected_master_operations_create_no_jobs_or_masters(monkeypatch, tmp_path):
+    server = _server(monkeypatch, tmp_path)
+    storage = importlib.import_module("app.video.storage")
+    authorized = {"Authorization": f"Bearer {TOKEN}"}
+    with TestClient(server.app) as client:
+        create = client.post("/api/video/projects", json=_project_payload(), headers=authorized)
+        assert create.status_code == 200, create.text
+        project = create.json()
+        project_id = project["id"]
+        for endpoint in ("render-missing", "assemble"):
+            denied = client.post(
+                f"/api/video/projects/{project_id}/{endpoint}",
+                json={"expected_revision": project["revision"]},
+            )
+            assert denied.status_code == 401, denied.text
+            assert "SENSITIVE_CANARY_NOT_FOR_ERROR_RESPONSES" not in denied.text
+        reloaded = client.get(f"/api/video/projects/{project_id}", headers=authorized)
+        assert reloaded.status_code == 200
+        assert reloaded.json()["revision"] == project["revision"]
+    assert storage.list_video_records("video_job") == []
+    assert storage.list_video_records("video_master") == []
