@@ -36,7 +36,15 @@ test('studio shell exposes a dedicated Video tab, workspace, stylesheet, and mod
   assert.match(html,/data-tab="video"/);
   assert.match(html,/id="video-workspace"/);
   assert.match(html,/\/studio\/video-studio\.css/);
-  assert.match(html,/\/studio\/video-studio\.js/);
+  // Cinematic mode owns the Video tab and lazy-imports the legacy quick
+  // editor. A direct script tag would compete for the same click listener.
+  const launcher=fs.readFileSync(path.join(web,'cinematic-launcher.js'),'utf8');
+  assert.ok(
+    /\\/studio\\/video-studio\\.js/.test(html) ||
+      (/\\/studio\\/cinematic-launcher\\.js/.test(html) &&
+       /import\\(['"]\\.\\/video-studio\\.js['"]\\)/.test(launcher)),
+    'Video editor must be reachable directly or via cinematic launcher',
+  );
   assert.match(css,/\.privacy-blurred/);
   assert.match(css,/@media\(max-width:760px\)/);
 });
