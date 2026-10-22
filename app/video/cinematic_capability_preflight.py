@@ -164,7 +164,34 @@ def audit_engine_capabilities(
             ):
                 flag("error", "SHOT_CAMERA_MOTION_UNSUPPORTED", scene.scene_id, shot.shot_id)
 
-            if not global_errors and len(findings) == before:
+            # This request type carries just one source image. The render
+            # service picks the first inherited reference; all others are not
+            # consumed as image inputs by VideoGenerationRequest.
+            ordered_references = tuple(dict.fromkeys((
+                *project.reference_image_ids,
+                *scene.reference_image_ids,
+                *shot.reference_image_ids,
+            )))
+            if len(ordered_references) > 1:
+                flag("warning", "ADDITIONAL_REFERENCES_NOT_IMAGE_INPUTS", scene.scene_id, shot.shot_id)
+            if shot.reference_image_ids and (project.reference_image_ids or scene.reference_image_ids):
+                flag("warning", "SHOT_REFERENCE_NOT_PRIMARY_SOURCE", scene.scene_id, shot.shot_id)
+
+            # Persisted editorial intent may be useful to later finishing
+            # stages, but these fields are not accepted by the current
+            # VideoGenerationRequest and do not control shot generation.
+            if shot.lens_mm is not None:
+                flag("warning", "LENS_CONTROL_NOT_FORWARDED", scene.scene_id, shot.shot_id)
+            if shot.framing is not None:
+                flag("warning", "FRAMING_NOT_FORWARDED", scene.scene_id, shot.shot_id)
+            if shot.transition_in is not None or shot.transition_out is not None:
+                flag("warning", "TRANSITION_NOT_SHOT_GENERATION", scene.scene_id, shot.shot_id)
+
+            # Warnings describe missing/finishing-stage creative capabilities,
+            # not a failure to send a legal request to the declared engine.
+            if not global_errors and not any(
+                finding.severity == "error" for finding in findings[before:]
+            ):
                 compatible_count += 1
 
     return CapabilityPreflight(
