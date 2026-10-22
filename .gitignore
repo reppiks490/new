@@ -9,6 +9,8 @@ assets/makehuman/
 workspace/
 weights/
 vendor/LTX-2/
+vendor/ComfyUI/
+vendor/workflows/
 .env
 .env.*
 !.env.example
