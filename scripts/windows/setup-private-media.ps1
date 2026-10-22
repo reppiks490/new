@@ -12,11 +12,15 @@ $WorkflowDir = Join-Path $RepoRoot 'vendor\workflows'
 $WorkflowPath = Join-Path $WorkflowDir 'image_flux3_klein_distilled_image_edit.json'
 $StudioVenv = Join-Path $RepoRoot '.venv'
 $ComfyVenv = Join-Path $ComfyHome '.venv'
+$ModelRoot = Join-Path $ComfyHome 'models'
+$DiffusionModelCandidates = @(
+    'diffusion_models/flux3_image_klein_sd_int8_convrot.safetensors',
+    'diffusion_models/flux3-image-klein-int8-convrot.safetensors'
+)
 $RequiredModelFiles = @(
-    'models\diffusion_models\flux3-image-klein-int8-convrot.safetensors',
-    'models\text_encoders\qwen3vl_4b_int8_convrot.safetensors',
-    'models\text_encoders\qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors',
-    'models\vae\flux2-vae.safetensors'
+    'text_encoders/qwen3vl_4b_int8_convrot.safetensors',
+    'text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors',
+    'vae/flux2-vae.safetensors'
 )
 
 function Invoke-Checked {
@@ -35,6 +39,30 @@ function Invoke-Checked {
     finally {
         Pop-Location
     }
+}
+
+function Get-LocalModelPath {
+    param([Parameter(Mandatory=$true)][string]$RelativePath)
+    return Join-Path $ModelRoot ($RelativePath -replace '/', '\')
+}
+
+function Test-AnyDiffusionModel {
+    foreach ($Relative in $DiffusionModelCandidates) {
+        if (Test-Path (Get-LocalModelPath -RelativePath $Relative)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Invoke-HfDownloadCandidate {
+    param(
+        [Parameter(Mandatory=$true)][string]$HfExe,
+        [Parameter(Mandatory=$true)][string]$RelativePath
+    )
+    Write-Host "Trying official diffusion checkpoint: $RelativePath"
+    & $HfExe download black-forest-labs/flux-3-image-klein-comfy $RelativePath --local-dir $ModelRoot
+    return ($LASTEXITCODE -eq 0)
 }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -122,23 +150,51 @@ if (-not $SkipModels) {
         throw 'Hugging Face authentication is required once for model download. Runtime generation remains local.'
     }
 
-    Write-Host 'Downloading the four official 8 GB int8 model files...'
-    Invoke-Checked -FilePath $HfExe -Arguments @(
-        'download','black-forest-labs/flux-3-image-klein-comfy',
-        'diffusion_models/flux3-image-klein-int8-convrot.safetensors',
-        'text_encoders/qwen3vl_4b_int8_convrot.safetensors',
-        'text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors',
-        'vae/flux2-vae.safetensors',
-        '--local-dir',(Join-Path $ComfyHome 'models')
-    )
+    New-Item -ItemType Directory -Force -Path $ModelRoot | Out-Null
+
+    if (-not (Test-AnyDiffusionModel)) {
+        Write-Host 'Downloading an official FLUX 3 Klein distilled INT8 diffusion checkpoint...'
+        $DownloadedDiffusion = $false
+        foreach ($Candidate in $DiffusionModelCandidates) {
+            if (Invoke-HfDownloadCandidate -HfExe $HfExe -RelativePath $Candidate) {
+                if (Test-Path (Get-LocalModelPath -RelativePath $Candidate)) {
+                    $DownloadedDiffusion = $true
+                    break
+                }
+            }
+            Write-Host "Checkpoint variant unavailable: $Candidate" -ForegroundColor DarkYellow
+        }
+        if (-not $DownloadedDiffusion -and -not (Test-AnyDiffusionModel)) {
+            throw 'Could not download either supported official FLUX 3 Klein distilled INT8 diffusion checkpoint.'
+        }
+    }
+    else {
+        Write-Host 'Existing official FLUX 3 Klein distilled INT8 diffusion checkpoint found.'
+    }
+
+    Write-Host 'Downloading required text encoders and VAE...'
+    foreach ($Relative in $RequiredModelFiles) {
+        if (-not (Test-Path (Get-LocalModelPath -RelativePath $Relative))) {
+            Invoke-Checked -FilePath $HfExe -Arguments @(
+                'download','black-forest-labs/flux-3-image-klein-comfy',
+                $Relative,
+                '--local-dir',$ModelRoot
+            )
+        }
+    }
 }
 
-$Missing = @()
-foreach ($Relative in $RequiredModelFiles) {
-    if (-not (Test-Path (Join-Path $ComfyHome $Relative))) { $Missing += $Relative }
-}
-if (-not $SkipModels -and $Missing.Count -gt 0) {
-    throw "Setup finished with missing model files: $($Missing -join ', ')"
+if (-not $SkipModels) {
+    if (-not (Test-AnyDiffusionModel)) {
+        throw 'Setup finished without a supported FLUX 3 Klein distilled INT8 diffusion checkpoint.'
+    }
+    $Missing = @()
+    foreach ($Relative in $RequiredModelFiles) {
+        if (-not (Test-Path (Get-LocalModelPath -RelativePath $Relative))) { $Missing += $Relative }
+    }
+    if ($Missing.Count -gt 0) {
+        throw "Setup finished with missing model files: $($Missing -join ', ')"
+    }
 }
 
 Write-Host ''
