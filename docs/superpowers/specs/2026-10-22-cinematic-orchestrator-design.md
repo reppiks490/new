@@ -17,7 +17,7 @@ The initial target is a robust 10-minute project representation with no architec
 
 The first implementation is successful when all of the following are true:
 
-1. A user can create a cinematic project with a title, target runtime, aspect ratio, default FPS, resolution target, and master prompt.
+1. A user can create a cinematic project with a title, target runtime, aspect ratio, delivery FPS, delivery resolution target, and master prompt.
 2. A project can contain multiple scenes, and each scene can contain multiple shots.
 3. Each scene and shot can attach multiple reference-image IDs rather than a single global `image_id`.
 4. A long prompt can be compiled into an editable shot graph without requiring an external LLM.
@@ -31,6 +31,7 @@ The first implementation is successful when all of the following are true:
 12. No private prompt text is inserted into public media URLs or neutralized job labels.
 13. The entire orchestration layer is fully testable with the existing fake video engine and does not depend on CUDA, paid APIs, or FFmpeg for unit tests.
 14. The mobile UI can create/open projects, edit scene cards, inspect shots, attach references, and submit a selected shot to the existing render queue.
+15. Delivery FPS/resolution are treated as finishing targets and are never falsely passed to a generation engine that does not support them.
 
 ## 3. Non-goals for v1
 
@@ -69,9 +70,10 @@ The new subsystem should extend these primitives instead of replacing them.
 CinematicProject
   ├── ProjectSettings
   ├── ContinuityBible
-  ├── ReferencePack[]
+  ├── reference_image_ids[]
   └── Scene[]
         ├── SceneContinuityPatch
+        ├── reference_image_ids[]
         └── Shot[]
               ├── prompt
               ├── negative_prompt
@@ -84,6 +86,8 @@ CinematicProject
 ```
 
 A project is the durable unit. A render job is ephemeral execution state tied back to a specific shot and a specific project revision.
+
+Named reusable reference packs are intentionally deferred. v1 uses ordered image-ID lists at project, scene, and shot scope so the stored model has no undefined `ReferencePack` abstraction.
 
 ### 5.2 Separation of responsibilities
 
@@ -98,7 +102,7 @@ A project is the durable unit. A render job is ephemeral execution state tied ba
 - Produces a compile result that can be inspected and tested.
 
 `app/video/cinematic_service.py`
-- Project persistence, revision handling, compile application, shot-plan construction.
+- Project persistence, revision handling, compile application, capability negotiation, and shot-plan construction.
 - Validates reference IDs against local assets before accepting a render plan.
 
 `app/video/router.py`
@@ -123,13 +127,15 @@ Required fields:
 - `title` — 1..160 characters.
 - `master_prompt` — up to 100,000 characters in v1.
 - `target_duration_seconds` — 10..28,800 seconds.
-- `default_fps` — integer, 1..120; output preference, not a claim of engine support.
-- `target_resolution` — `480p | 720p | 1080p | 1440p | 2160p | custom`.
+- `delivery_fps` — integer, 1..120; finishing preference, not a claim of engine support.
+- `delivery_resolution` — `480p | 720p | 1080p | 1440p | 2160p`; finishing preference, not a claim of engine support.
 - `aspect_ratio` — normalized string such as `16:9`, `9:16`, `1:1`, `2.39:1`.
 - `continuity_bible` — base continuity object.
 - `reference_image_ids` — project-level ordered unique list.
 - `scenes` — ordered list.
 - `created_at` / `updated_at` — UTC ISO timestamps.
+
+Generation-native FPS/resolution are not stored as the same fields. They are negotiated for each render plan from the selected engine capabilities.
 
 ### 6.2 Continuity bible
 
@@ -264,7 +270,11 @@ Fields include:
 - negative prompt
 - effective continuity object
 - resolved ordered reference-image IDs
-- requested duration/FPS/resolution/profile
+- requested shot duration/profile
+- `generation_fps`
+- `generation_resolution`
+- `delivery_fps`
+- `delivery_resolution`
 - optional previous-shot bridge asset
 - optional next-shot target frame reference in future versions
 
@@ -277,6 +287,24 @@ Reference resolution order:
 Duplicates are removed while preserving first occurrence.
 
 The plan builder must reject missing local reference IDs before queue submission.
+
+### 8.1 Engine capability negotiation
+
+Delivery settings and generation settings are deliberately separate.
+
+For a selected engine:
+
+- `generation_resolution` is the highest supported native resolution that does not exceed the numeric delivery target; if none is at or below the delivery target, use the engine's lowest supported resolution.
+- `generation_fps` is the highest supported native FPS that does not exceed `delivery_fps`; if none is at or below the delivery target, use the engine's lowest supported FPS.
+- Shot duration must be clamped by compiler construction, not silently truncated at render time.
+- Unsupported camera or motion controls still fail explicitly through the existing engine validation layer.
+
+Examples:
+
+- Delivery target 2160p/120 FPS + engine supports 1080p/60 FPS => generate 1080p/60 FPS and retain 2160p/120 FPS as finishing targets.
+- Delivery target 1080p/24 FPS + engine supports 720p/1080p and 24/30 FPS => generate 1080p/24 FPS.
+
+Interpolation/upscaling are future finishing stages. v1 only preserves the requested delivery target and does not falsely label generated media as native delivery quality.
 
 ## 9. API design
 
@@ -310,7 +338,8 @@ All new routes remain under `/api/video` and inherit existing authentication/ori
 - `POST /api/video/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/render`
   - validates project revision
   - resolves plan
-  - maps plan to existing `VideoGenerationRequest`
+  - maps generation-native fields to the existing `VideoGenerationRequest`
+  - retains delivery targets as project metadata for later finishing stages
   - submits through the existing video job queue
   - persists the returned job ID into shot render metadata
 
@@ -347,7 +376,7 @@ No prompt content is written into filenames. Media assets keep opaque random IDs
 Project mode adds four panes/states while retaining the existing privacy system:
 
 1. **Project list** — neutral titles when privacy mode is active.
-2. **Project editor** — master prompt, duration, format, reference pack.
+2. **Project editor** — master prompt, duration, format, reference images.
 3. **Scene timeline** — collapsible scene cards with duration totals.
 4. **Shot inspector** — prompt, continuity patch, references, camera controls, render button, latest result.
 
@@ -398,6 +427,7 @@ Additional rules:
 - reject overlong master prompts
 - continuity patch merge is non-mutating
 - reference ID deduplication preserves order
+- delivery targets remain distinct from generation-native settings
 
 ### Compiler tests
 
@@ -418,6 +448,7 @@ Additional rules:
 - render plan resolves inherited continuity
 - missing reference IDs rejected
 - project/scene/shot reference order is stable
+- 2160p/120 delivery target negotiates down to actual engine-native capability without altering stored delivery targets
 
 ### API tests
 
@@ -461,6 +492,7 @@ All pre-existing video, image, privacy, startup, and repository-hygiene tests co
 
 These are not required for v1, but the interfaces deliberately permit them:
 
+- named reusable reference packs
 - automatic first/last-frame bridge extraction
 - VLM continuity scoring
 - face/identity consistency scoring
@@ -509,7 +541,7 @@ Optional LLM assistance can be added later behind a compiler interface without c
 ## 19. Implementation order
 
 1. Domain models and pure compiler.
-2. Persistence/service layer with revision semantics.
+2. Persistence/service layer with revision semantics and capability negotiation.
 3. API endpoints and fake-engine shot rendering.
 4. Mobile project/timeline UI.
 5. Regression and security hardening.
