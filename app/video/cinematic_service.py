@@ -574,7 +574,11 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
     command.extend([
         '-filter_complex', ';'.join(filters),
         '-map', '[v]', '-an', '-c:v', 'libx264',
-        '-preset', 'medium', '-crf', '18', '-movflags', '+faststart',
+        '-preset', 'medium', '-crf', '18',
+        # Explicit muxer CFR fixes MP4 average FPS and last-frame duration
+        # (filtergraph fps alone is insufficient on some FFmpeg builds).
+        '-r', str(project.delivery_fps), '-fps_mode', 'cfr',
+        '-movflags', '+faststart',
         str(output_path),
     ])
     try:
