@@ -167,3 +167,121 @@ def test_output_is_json_compatible_and_snapshot_has_no_master_prompt():
     assert timeline.clips[0].transition_out_declared is True
     assert 'hard cut' not in payload
     assert timeline.to_dict()['clips'][0]['duration_frames'] == 240
+
+
+def test_integer_fps_timecodes_and_exact_seek_boundaries():
+    project = _project(
+        [_shot(1, seconds=1), _shot(2, seconds=1)],
+        target_seconds=2,
+        fps=120,
+    )
+    report = preflight_editorial_timeline(project)
+    assert report.timecode_standard == 'integer-fps-non-drop'
+    assert report.clips[0].start_timecode == '00:00:00:00'
+    assert report.clips[0].end_timecode_exclusive == '00:00:01:00'
+    assert report.clips[1].end_timecode_exclusive == '00:00:02:00'
+    assert report.clip_at_frame(0).shot_id == project.scenes[0].shots[0].shot_id
+    assert report.clip_at_frame(119).shot_id == project.scenes[0].shots[0].shot_id
+    assert report.clip_at_frame(120).shot_id == project.scenes[0].shots[1].shot_id
+    assert report.clip_at_frame(239).shot_id == project.scenes[0].shots[1].shot_id
+    for invalid in (-1, 240, 1.5, True):
+        with pytest.raises(IndexError):
+            report.clip_at_frame(invalid)
+
+
+def test_two_scene_spans_preserve_half_open_scene_boundaries():
+    first_scene = _project(
+        [_shot(1, seconds=3.3333333333), _shot(2, seconds=3.3333333333), _shot(3, seconds=3.3333333334)],
+        target_seconds=15,
+    )
+    second_shot = _shot(4, seconds=5).model_copy(update={'ordinal': 1})
+    second_scene = CinematicScene(
+        scene_id='c' * 32, ordinal=2, title='Act two',
+        target_duration_seconds=5, shots=[second_shot]
+    )
+    project = first_scene.model_copy(update={
+        'scenes': first_scene.scenes + [second_scene]
+    })
+    report = preflight_editorial_timeline(project)
+    assert len(report.scenes) == 2
+    assert [(s.start_frame, s.end_frame, s.shot_count) for s in report.scenes] == [
+        (0, 240, 3), (240, 360, 1),
+    ]
+    assert [(s.target_frames, s.frame_difference) for s in report.scenes] == [
+        (240, 0), (120, 0),
+    ]
+    assert report.frame_difference == 0
+    assert report.clips[-1].start_timecode == '00:00:10:00'
+    assert report.clips[-1].end_timecode_exclusive == '00:00:15:00'
+
+
+def test_metadata_digest_matches_independent_frame_oracle_contract():
+    import hashlib
+    import json
+
+    project = _project([_shot(1, seconds=5), _shot(2, seconds=5)], target_seconds=10)
+    report = preflight_editorial_timeline(project)
+    identity = {
+        'project_id': project.id,
+        'project_revision': project.revision,
+        'fps': 24,
+        'target_frames': 240,
+        'sequence': [
+            [project.scenes[0].scene_id, project.scenes[0].shots[0].shot_id, 0, 120],
+            [project.scenes[0].scene_id, project.scenes[0].shots[1].shot_id, 120, 240],
+        ],
+    }
+    expected = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+        .encode('ascii')
+    ).hexdigest()
+    assert report.timeline_digest_sha256 == expected
+    assert report.timeline_digest_sha256 == preflight_editorial_timeline(project).timeline_digest_sha256
+    revised = project.model_copy(update={'revision': 9})
+    assert preflight_editorial_timeline(revised).timeline_digest_sha256 != expected
+    project.scenes[0].shots.reverse()
+    assert preflight_editorial_timeline(project).timeline_digest_sha256 != expected
+
+
+def test_fractional_hundred_clip_manifest_keeps_frames_and_scrubbing_contiguous():
+    project = _project([_shot(i, seconds=0.1) for i in range(1, 101)], target_seconds=10)
+    report = preflight_editorial_timeline(project)
+    assert report.actual_frames == report.target_frames == 240
+    assert not report.warnings
+    assert sum(clip.duration_frames for clip in report.clips) == 240
+    for frame in range(240):
+        clip = report.clip_at_frame(frame)
+        assert clip.start_frame <= frame < clip.end_frame
+    assert report.clip_at_frame(239) == report.clips[-1]
+
+
+def test_scene_budget_mismatch_and_empty_scene_are_diagnostics():
+    project = _project([_shot(1, seconds=5)], target_seconds=10)
+    scene = project.scenes[0].model_copy(update={'target_duration_seconds': 10})
+    empty = CinematicScene(
+        scene_id='c' * 32, ordinal=2, title='Unwritten',
+        target_duration_seconds=10, shots=[],
+    )
+    project = project.model_copy(update={'scenes': [scene, empty]})
+    report = preflight_editorial_timeline(project)
+    assert report.scenes[0].frame_difference == -120
+    assert report.scenes[1].shot_count == 0
+    assert report.scenes[1].duration_frames == 0
+    assert len(report.warnings) == 3  # scene underfill, empty scene, project underfill
+    assert any('contains no shots' in message for message in report.warnings)
+
+
+def test_no_prompt_or_transition_value_leaks_to_edl_metadata():
+    import json
+    project = _project([
+        _shot(1, seconds=10, transition_in='PRIVATE_DIALOGUE_778',
+              transition_out='PRIVATE_SCRIPT_991',
+              continuity_patch=ContinuityPatch(freeform_notes={'secret': 'PRIVATE_NOTE_123'}))
+    ], target_seconds=10)
+    report = preflight_editorial_timeline(project)
+    payload = json.dumps(report.to_dict(), ensure_ascii=False)
+    assert 'PRIVATE_' not in payload
+    assert 'A cinematic sequence' not in payload
+    assert 'A silent cinematic action' not in payload
+    assert report.clips[0].transition_in_declared
+    assert report.clips[0].transition_out_declared
