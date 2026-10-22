@@ -129,6 +129,12 @@ snapshot = cut.to_dict()
   every public field against the current project revision. Tampering or stale
   revisions fail explicitly. This is **not** a cryptographic signature or a
   verification that physical video frames exist.
+- For storage/reload, serialize `cut.to_dict()` to JSON, parse the saved JSON,
+  then call `restore_directors_cut(project, decoded_payload)`. The loader
+  reconstructs canonical shot selections from current authoritative project
+  state and rejects changed fields, injected keys, altered hashes, malformed
+  frame offsets or obsolete revisions. Serialized object data is never blindly
+  trusted or executed. This still cannot establish media authenticity.
 
 ### Safe next integration points
 
