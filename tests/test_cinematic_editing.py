@@ -267,7 +267,7 @@ def test_scene_budget_mismatch_and_empty_scene_are_diagnostics():
     assert report.scenes[0].frame_difference == -120
     assert report.scenes[1].shot_count == 0
     assert report.scenes[1].duration_frames == 0
-    assert len(report.warnings) == 3  # scene underfill, empty scene, project underfill
+    assert len(report.warnings) == 4  # both scene underfills, empty scene, project underfill
     assert any('contains no shots' in message for message in report.warnings)
 
 
