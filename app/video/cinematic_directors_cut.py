@@ -263,7 +263,18 @@ def restore_directors_cut(
     # JSON transforms dataclass tuple fields into arrays. Compare the precise
     # serialized representation, so hidden extra keys or altered flags fail.
     canonical = json.loads(json.dumps(regenerated.to_dict()))
-    if snapshot != canonical:
+    try:
+        candidate_wire = json.dumps(
+            snapshot, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False
+        )
+        canonical_wire = json.dumps(
+            canonical, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False
+        )
+    except (TypeError, ValueError) as exc:
+        raise TimelineValidationError('director cut snapshot is not valid JSON metadata') from exc
+    # Python considers False == 0 and True == 1; wire-level canonical
+    # comparison must reject JSON boolean-for-integer type confusion.
+    if candidate_wire != canonical_wire:
         raise TimelineValidationError(
             'director cut snapshot does not match current project metadata'
         )
