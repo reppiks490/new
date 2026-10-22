@@ -24,6 +24,12 @@ Helper Bot 1 owns build verification and test evidence: Python 3.11/3.12 matrix 
 4. Explicit job timeouts to avoid indefinitely stranded runner capacity.
 5. Docker `/health` failures remain fatal, but container logs are now captured through an exit trap and stopped/removed reliably.
 
+## Additive authorization regression suite
+
+`tests/test_cinematic_auth_integration.py` is owned by this QA lane and is separate from the implementing agent's `cinematic_service` and `router` files. It checks all seven existing cinematic route patterns with missing or wrong bearer tokens, then checks that denied creates/updates do not alter persisted projects and a foreign-origin create is blocked despite having the correct owner bearer. No real video generation, external network, cloud API, or secret tokens are involved.
+
+Do not mark these tests passing until an immutable GitHub CI run has executed the branch head.
+
 ## Acceptance gates before combining branches
 
 - [ ] Confirm the Python 3.11 leg executes to completion rather than being cancelled when Python 3.12 fails.
