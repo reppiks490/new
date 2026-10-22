@@ -46,7 +46,7 @@ def _make_ready_project(models, service, storage, marker):
     )
     asset_id = "4" * 32
     storage.video_asset_path(asset_id, "mp4").write_bytes(
-        b"\\x00\\x00\\x00\\x18ftypmp42private_qa"
+        b"\x00\x00\x00\x18ftypmp42private_qa"
     )
     video_job = storage.put_video_record("video_job", {
         "status": "succeeded", "project_id": project.id,
