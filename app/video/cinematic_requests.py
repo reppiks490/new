@@ -15,3 +15,20 @@ class ShotRenderRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     expected_revision: int = Field(ge=1)
     engine_name: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class BatchRenderRequest(BaseModel):
+    """Schedule only missing or previously failed shots, in timeline order."""
+
+    model_config = ConfigDict(extra='forbid')
+    expected_revision: int = Field(ge=1)
+    engine_name: str | None = Field(default=None, min_length=1, max_length=160)
+    max_shots: int = Field(default=100, ge=1, le=10_000)
+
+
+class AssembleMasterRequest(BaseModel):
+    """Local FFmpeg finishing request; no cloud generation or paid fallback."""
+
+    model_config = ConfigDict(extra='forbid')
+    expected_revision: int = Field(ge=1)
+    ffmpeg_path: str = Field(default='ffmpeg', min_length=1, max_length=4096)
