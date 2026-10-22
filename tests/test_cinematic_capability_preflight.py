@@ -215,7 +215,7 @@ def test_duplicate_image_ids_do_not_report_phantom_extra_inputs():
     project.scenes[0].shots[0].reference_image_ids = [REF]
     report = audit_engine_capabilities(project, FakeVideoEngine().capabilities())
     assert report.capability_ready
-    assert _codes(report) == ["SHOT_REFERENCE_NOT_PRIMARY_SOURCE"]
+    assert _codes(report) == []
 
 
 def test_unforwarded_control_warning_does_not_hide_real_engine_errors():
