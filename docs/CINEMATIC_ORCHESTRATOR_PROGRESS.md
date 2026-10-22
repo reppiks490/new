@@ -119,3 +119,47 @@ GitHub Actions became queued for an extended period after the clean RED evidence
 - final line-by-line spec audit
 - final privacy/security review
 - final full GitHub CI matrix
+
+
+---
+
+## 2026-10-22 — Master-assembly and parallel-agent continuation
+
+The earlier "Remaining implementation gates" section above is a historical snapshot, not the latest implementation state. The latest continuation resides on \`chatgpt/cinematic-master-assembly-20261022\`, tracked in [PR #8](https://github.com/reppiks490/new/pull/8). Other agents own PRs #9–#12; see \`docs/CINEMATIC_PARALLEL_AGENT_HANDOFF.md\` for file ownership and merge discipline.
+
+### Prior clean baseline
+
+At \`c878afb549c8bda8ac340a7dfba878759473e236\`, **both** runs [39860203471](https://github.com/reppiks490/new/actions/runs/39860203471) and [39860196877](https://github.com/reppiks490/new/actions/runs/39860196877) passed Python 3.11 / 3.12, Node privacy tests, and Docker. This does **not** confer green status on later commits; review the CI of PR #8's **current** head.
+
+### Added capabilities and hardening
+
+- Project-wide \`render-missing\` batch scheduling (oldest timeline shots first) with optimistic project-revision updates and no duplicate in-progress jobs.
+- Missing/corrupt successful-job output MP4s are treated as eligible for retry; a metadata success flag alone is insufficient.
+- \`render-status\` distinguishes missing/failed/active/success and does not expose raw cinematic prompts.
+- FFmpeg master creation requires every source job to succeed and its local file to exist.
+- Only \`ffmpeg\` and \`ffmpeg.exe\` may be named by the HTTP request, to avoid running arbitrary client-chosen binaries.
+- Master cache identity incorporates the actual source-media SHA-256 hashes, shot ordering and duration, project revision, aspect ratio, and delivery settings. Master record stores an output SHA-256 checksum and source hashes.
+- FFprobe checks video codec H.264, dimensions, delivery FPS, frame count, and total duration. No record may be marked complete when probe validation fails; partial output is deleted.
+- Concurrent project edits during long master assembly invalidate the result before persistence.
+- Master rendering explicitly uses \`-r <delivery_fps> -fps_mode cfr\` at the output stage.
+
+### Real local synthetic FFmpeg experiment
+
+On the task execution host, two generated **one-second synthetic** 160×90 MPEG-4 input clips (native 12 FPS and 30 FPS) were assembled to 854×480/24 FPS H.264 output.
+
+- Original filter chain **without** explicit output CFR: ffprobe reported **48 frames, 1.958333 seconds, and an incorrect average FPS**.
+- With output \`-r 24 -fps_mode cfr\`: ffprobe reported **48 frames, exactly 2.000000 seconds, and avg_frame_rate 24/1**.
+- Added \`tests/test_cinematic_ffmpeg_live.py\` to exercise real FFmpeg output when both FFmpeg and FFprobe are present on the CI runner, then **decode the full synthetic master** and test hash-based reuse.
+- All mock-based unit tests remain valuable but do not establish actual human-observed movie quality or live GPU image-to-video generation.
+
+### Still unresolved before a production release
+
+- Fresh full CI on PR #8's most recent commit, including the real FFmpeg test wherever supported.
+- Real user-PC environment check for FFmpeg/FFprobe and actual video model availability; no assertion of GPU compatibility.
+- Private iPhone-to-PC authenticated previews of real generated video, not just test clips.
+- Large timeline performance / Windows command-line length / multi-stage concatenation stress under actual hardware.
+- A nonblocking background **server-side queue** for long FFmpeg assembly: the existing synchronous \`POST /assemble\` may exceed phone/browser timeout for long 4K masters.
+- Audio/soundtrack mixing, transitions, scene-fade grammar, image visual consistency, and manual visual QA of start/middle/end and scene boundaries.
+- Independent PR review and orderly merge of the four helper workstreams; no destructive branch reset or forced merge.
+
+Definition of done is tested, decodable, private, correctly timed media with explicit engine/hardware evidence, not merely a green mocked backend.
