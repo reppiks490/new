@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.video.cinematic_models import ProjectCreateRequest, ProjectUpdateRequest
-from app.video.cinematic_requests import CompileProjectRequest
+from app.video.cinematic_requests import CompileProjectRequest, ShotRenderRequest
 from app.video.cinematic_service import (
     ProjectRevisionConflict,
     build_render_plan,
@@ -17,6 +17,7 @@ from app.video.cinematic_service import (
     create_project,
     get_project,
     list_projects,
+    render_shot,
     update_project,
 )
 from app.video.models import PrivacyPreferences, VideoGenerationRequest
@@ -195,6 +196,27 @@ def cinematic_shot_plan(
         raise HTTPException(503, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.post('/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/render')
+def cinematic_shot_render(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    request: ShotRenderRequest,
+):
+    try:
+        return render_shot(project_id, scene_id, shot_id, request)
+    except ProjectRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, 'Cinematic project, scene, or shot not found') from exc
+    except (FileNotFoundError, UnsupportedEngineControl, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except EngineUnavailableError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @router.get('/jobs')
