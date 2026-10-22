@@ -171,20 +171,20 @@ def test_output_is_json_compatible_and_snapshot_has_no_master_prompt():
 
 def test_integer_fps_timecodes_and_exact_seek_boundaries():
     project = _project(
-        [_shot(1, seconds=1), _shot(2, seconds=1)],
-        target_seconds=2,
+        [_shot(1, seconds=5), _shot(2, seconds=5)],
+        target_seconds=10,
         fps=120,
     )
     report = preflight_editorial_timeline(project)
     assert report.timecode_standard == 'integer-fps-non-drop'
     assert report.clips[0].start_timecode == '00:00:00:00'
-    assert report.clips[0].end_timecode_exclusive == '00:00:01:00'
-    assert report.clips[1].end_timecode_exclusive == '00:00:02:00'
+    assert report.clips[0].end_timecode_exclusive == '00:00:05:00'
+    assert report.clips[1].end_timecode_exclusive == '00:00:10:00'
     assert report.clip_at_frame(0).shot_id == project.scenes[0].shots[0].shot_id
-    assert report.clip_at_frame(119).shot_id == project.scenes[0].shots[0].shot_id
-    assert report.clip_at_frame(120).shot_id == project.scenes[0].shots[1].shot_id
-    assert report.clip_at_frame(239).shot_id == project.scenes[0].shots[1].shot_id
-    for invalid in (-1, 240, 1.5, True):
+    assert report.clip_at_frame(599).shot_id == project.scenes[0].shots[0].shot_id
+    assert report.clip_at_frame(600).shot_id == project.scenes[0].shots[1].shot_id
+    assert report.clip_at_frame(1199).shot_id == project.scenes[0].shots[1].shot_id
+    for invalid in (-1, 1200, 1.5, True):
         with pytest.raises(IndexError):
             report.clip_at_frame(invalid)
 
