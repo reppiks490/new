@@ -200,3 +200,13 @@ def test_pillow_decompression_bomb_guard_reports_neutral_size_error(tmp_path, mo
     report = audit_reference_files(_project(refs=[A]), workspace=tmp_path)
     assert _codes(report) == ["REFERENCE_TOO_MANY_PIXELS"] * 2
     assert not report.references_ready
+
+
+def test_local_png_byte_limit_matches_image_uploader_and_avoids_decode(tmp_path):
+    source = _png(tmp_path, A)
+    # Create sparse trailing content without allocating a 13 MiB buffer.
+    with source.open("ab") as handle:
+        handle.truncate(12 * 1024 * 1024 + 1)
+    report = audit_reference_files(_project(refs=[A]), workspace=tmp_path)
+    assert _codes(report) == ["REFERENCE_TOO_MANY_BYTES"] * 2
+    assert not report.references_ready
