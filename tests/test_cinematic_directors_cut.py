@@ -298,6 +298,8 @@ def test_archived_cut_json_rejects_all_tampered_public_fields():
         ('edit_in_frame', 9),
         ('frame_count', 99),
         ('scene_changed', True),
+        ('scene_changed', 0),  # bool False must not compare equal to JSON integer 0
+        ('transition_in_declared', 1),  # bool True must not accept integer 1
         ('source_in_frame', True),
         ('source_out_frame_exclusive', -1),
         ('shot_id', ['non-hashable']),
