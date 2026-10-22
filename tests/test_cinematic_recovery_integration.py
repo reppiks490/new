@@ -262,3 +262,114 @@ def test_failed_or_corrupt_master_never_publishes_partial_asset(
     assert list(ctx.storage.list_video_records("video_master")) == []
     assert [file for file in (tmp_path / "video-assets").glob("*.mp4")] == [source]
     assert ctx.service.get_project(ctx.project.id).revision == project.revision
+
+
+def test_worker_submit_rejection_leaves_retryable_failed_job_and_no_active_orphan(
+    monkeypatch, tmp_path
+):
+    """Worker exhaustion after a successful link must fail visibly and retry."""
+    ctx = _setup(monkeypatch, tmp_path, count=1)
+    engine = importlib.import_module("app.video.engine")
+
+    class RejectPool:
+        def submit(self, *_args, **_kwargs):
+            raise RuntimeError("worker unavailable")
+
+    monkeypatch.setattr(ctx.jobs, "pool", RejectPool())
+    with pytest.raises(engine.EngineUnavailableError):
+        _batch(ctx, revision=2)
+
+    saved = ctx.service.get_project(ctx.project.id)
+    assert saved.revision == 3
+    failed_id = saved.scenes[0].shots[0].latest_job_id
+    assert failed_id
+    failure = ctx.storage.get_video_record("video_job", failed_id)
+    assert failure["status"] == "failed"
+    assert failure["stage"] == "Stopped"
+    assert "worker unavailable" not in str(failure).lower()
+    state = ctx.service.project_render_status(ctx.project.id)
+    assert (state["failed"], state["active"], state["succeeded"]) == (1, 0, 0)
+    assert state["ready_for_assembly"] is False
+
+    # A recovered worker retries the failed link instead of preserving a
+    # terminally unusable success state or producing two active jobs.
+    monkeypatch.setattr(ctx.jobs, "pool", ctx.pool)
+    retry = _batch(ctx, revision=3)
+    assert len(retry["jobs"]) == 1
+    assert retry["jobs"][0]["id"] != failed_id
+    assert retry["project"]["revision"] == 4
+    assert len(ctx.pool.submissions) == 1
+    state = ctx.service.project_render_status(ctx.project.id)
+    assert (state["failed"], state["active"], state["succeeded"]) == (0, 1, 0)
+
+
+def test_concurrent_same_revision_shot_submissions_only_one_wins(
+    monkeypatch, tmp_path
+):
+    """CAS race must cancel the losing queued job before GPU submission."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    ctx = _setup(monkeypatch, tmp_path, count=1)
+    target = ctx.project.scenes[0].shots[0]
+    barrier = threading.Barrier(2)
+    original_update = ctx.service.update_project
+
+    def synchronized_update(project_id, request):
+        if project_id == ctx.project.id and request.expected_revision == 2:
+            barrier.wait(timeout=20)
+        return original_update(project_id, request)
+
+    monkeypatch.setattr(ctx.service, "update_project", synchronized_update)
+
+    def attempt():
+        try:
+            result = ctx.service.render_shot(
+                ctx.project.id, SCENE_ID, target.shot_id,
+                ctx.requests.ShotRenderRequest(
+                    expected_revision=2, engine_name="fake"
+                ),
+            )
+            return ("ok", result["job"]["id"])
+        except ctx.service.ProjectRevisionConflict:
+            return ("conflict", None)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: attempt(), range(2)))
+
+    assert sorted(state for state, _ in outcomes) == ["conflict", "ok"]
+    records = ctx.storage.list_video_records("video_job")
+    assert len(records) == 2
+    assert sum(record["status"] == "queued" for record in records) == 1
+    assert sum(record["status"] == "failed" for record in records) == 1
+    assert len(ctx.pool.submissions) == 1
+    saved = ctx.service.get_project(ctx.project.id)
+    assert saved.revision == 3
+    assert saved.scenes[0].shots[0].latest_job_id == next(
+        job["id"] for job in records if job["status"] == "queued"
+    )
+    status = ctx.service.project_render_status(ctx.project.id)
+    assert (status["active"], status["failed"], status["succeeded"]) == (1, 0, 0)
+
+
+def test_missing_source_image_creates_no_job_or_revision_change(
+    monkeypatch, tmp_path
+):
+    """Failure before linking must neither consume a revision nor enqueue work."""
+    ctx = _setup(monkeypatch, tmp_path, count=1)
+    source = ctx.storage.video_asset_path(REFERENCE_ID, "png")
+    image_bytes = source.read_bytes()
+    source.unlink()
+
+    with pytest.raises(FileNotFoundError):
+        _batch(ctx, revision=2)
+    assert ctx.service.get_project(ctx.project.id).revision == 2
+    assert ctx.storage.list_video_records("video_job") == []
+    assert ctx.pool.submissions == []
+
+    # Make the original authorized source available; retry resumes normally.
+    source.write_bytes(image_bytes)
+    outcome = _batch(ctx, revision=2)
+    assert len(outcome["jobs"]) == 1
+    assert outcome["project"]["revision"] == 3
+    assert len(ctx.pool.submissions) == 1
