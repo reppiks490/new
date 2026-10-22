@@ -192,3 +192,11 @@ def test_zero_shots_is_not_ready_even_if_project_has_a_png(tmp_path):
     assert result.valid_unique_references == 0
     assert _codes(result) == ["NO_SHOTS"]
     assert not result.references_ready
+
+
+def test_pillow_decompression_bomb_guard_reports_neutral_size_error(tmp_path, monkeypatch):
+    _png(tmp_path, A, width=3, height=3)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1)
+    report = audit_reference_files(_project(refs=[A]), workspace=tmp_path)
+    assert _codes(report) == ["REFERENCE_TOO_MANY_PIXELS"] * 2
+    assert not report.references_ready
