@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import time
 import uuid
 
+from app.gpu_worker import gpu_pool
 from app.video.engine import (
     EngineUnavailableError,
     get_engine,
@@ -17,7 +17,7 @@ from app.video.storage import get_video_record, list_video_records, put_video_re
 from app.studio.storage import root as studio_root
 
 
-pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='video-gpu')
+pool = gpu_pool
 
 
 def _update_job(identifier: str, **changes) -> dict:
