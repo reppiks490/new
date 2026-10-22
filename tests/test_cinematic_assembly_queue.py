@@ -180,6 +180,44 @@ def test_assembly_history_pages_all_jobs_explicitly(monkeypatch, tmp_path):
         queue.list_master_assembly_jobs(project.id, limit=0)
 
 
+def test_cancel_queued_assembly_is_idempotent_durable_and_not_claimable(monkeypatch, tmp_path):
+    _, _, _, queue, project = _ready_project(monkeypatch, tmp_path)
+    monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
+    requests = importlib.import_module("app.video.cinematic_requests")
+    req = requests.AssembleMasterRequest(expected_revision=project.revision)
+    job = queue.enqueue_master_assembly(project.id, req)
+    cancelled = queue.cancel_queued_master_assembly(project.id, job["id"])
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["stage"] == "Cancelled"
+    assert queue.cancel_queued_master_assembly(project.id, job["id"]) == cancelled
+    assert queue._claim_next() is None
+    queue.recover_assembly_queue()
+    assert queue.get_master_assembly_job(project.id, job["id"])["status"] == "cancelled"
+    # Cancelling releases capacity and allows an explicit new request.
+    replacement = queue.enqueue_master_assembly(project.id, req)
+    assert replacement["id"] != job["id"]
+    assert replacement["status"] == "queued"
+
+
+def test_cancel_running_assembly_rejected_and_cross_project_hidden(monkeypatch, tmp_path):
+    _, _, _, queue, project = _ready_project(monkeypatch, tmp_path)
+    monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
+    requests = importlib.import_module("app.video.cinematic_requests")
+    job = queue.enqueue_master_assembly(
+        project.id, requests.AssembleMasterRequest(expected_revision=project.revision),
+    )
+    with pytest.raises(KeyError):
+        queue.cancel_queued_master_assembly("f" * 32, job["id"])
+    assert queue.get_master_assembly_job(project.id, job["id"])["status"] == "queued"
+    assert queue._claim_next()["id"] == job["id"]
+    with pytest.raises(queue.AssemblyCancellationConflict):
+        queue.cancel_queued_master_assembly(project.id, job["id"])
+    assert queue.get_master_assembly_job(project.id, job["id"])["status"] == "running"
+    queue._store_status(job["id"], status="succeeded", progress=100)
+    with pytest.raises(queue.AssemblyCancellationConflict):
+        queue.cancel_queued_master_assembly(project.id, job["id"])
+
+
 def test_async_assembly_api_is_authenticated_and_returns_202(monkeypatch, tmp_path):
     _, _, _, queue, project = _ready_project(monkeypatch, tmp_path)
     monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
@@ -205,6 +243,12 @@ def test_async_assembly_api_is_authenticated_and_returns_202(monkeypatch, tmp_pa
         assert listed.status_code == 200
         assert listed.json()["total"] == 1
         assert client.get(f"{prefix}/{'f' * 32}", headers=auth).status_code == 404
+        assert client.post(f"{prefix}/{job['id']}/cancel").status_code == 401
+        cancel = client.post(f"{prefix}/{job['id']}/cancel", headers=auth)
+        assert cancel.status_code == 200, cancel.text
+        assert cancel.json()["status"] == "cancelled"
+        assert client.get(f"{prefix}/{job['id']}", headers=auth).json()["status"] == "cancelled"
+        assert client.post(f"{prefix}/{'f' * 32}/cancel", headers=auth).status_code == 404
         assert client.post(prefix, json={"expected_revision": 2}, headers=auth).status_code == 409
         assert client.post(
             prefix,
