@@ -22,9 +22,21 @@ def _dedupe_ids(values: list[str]) -> list[str]:
     return ordered
 
 
+def _validate_reference_ids(values: list[str]) -> list[str]:
+    for value in values:
+        if len(value) != 32 or any(ch not in '0123456789abcdef' for ch in value):
+            raise ValueError('reference image ids must be lowercase 32-character hex values')
+    return _dedupe_ids(values)
+
+
+def _validate_prompt(value: str) -> str:
+    if not value.strip():
+        raise ValueError('master_prompt cannot be blank')
+    return value
+
+
 class ContinuityState(BaseModel):
     model_config = ConfigDict(extra='forbid')
-
     characters: Any | None = None
     wardrobe: Any | None = None
     props: Any | None = None
@@ -43,7 +55,6 @@ class ContinuityState(BaseModel):
 
 class ContinuityPatch(BaseModel):
     model_config = ConfigDict(extra='forbid')
-
     characters: Any | None = None
     wardrobe: Any | None = None
     props: Any | None = None
@@ -72,7 +83,6 @@ def merge_continuity(base: ContinuityState, patch: ContinuityPatch) -> Continuit
 
 class CinematicShot(BaseModel):
     model_config = ConfigDict(extra='forbid')
-
     shot_id: str = Field(pattern=_ID_PATTERN)
     ordinal: int = Field(ge=1)
     title: str = Field(min_length=1, max_length=160)
@@ -96,15 +106,11 @@ class CinematicShot(BaseModel):
     @field_validator('reference_image_ids')
     @classmethod
     def dedupe_reference_ids(cls, values: list[str]) -> list[str]:
-        for value in values:
-            if len(value) != 32 or any(ch not in '0123456789abcdef' for ch in value):
-                raise ValueError('reference image ids must be lowercase 32-character hex values')
-        return _dedupe_ids(values)
+        return _validate_reference_ids(values)
 
 
 class CinematicScene(BaseModel):
     model_config = ConfigDict(extra='forbid')
-
     scene_id: str = Field(pattern=_ID_PATTERN)
     ordinal: int = Field(ge=1)
     title: str = Field(min_length=1, max_length=160)
@@ -118,15 +124,12 @@ class CinematicScene(BaseModel):
     @field_validator('reference_image_ids')
     @classmethod
     def dedupe_reference_ids(cls, values: list[str]) -> list[str]:
-        for value in values:
-            if len(value) != 32 or any(ch not in '0123456789abcdef' for ch in value):
-                raise ValueError('reference image ids must be lowercase 32-character hex values')
-        return _dedupe_ids(values)
+        return _validate_reference_ids(values)
 
 
 class CinematicProject(BaseModel):
     model_config = ConfigDict(extra='forbid')
-
+    id: str | None = Field(default=None, pattern=_ID_PATTERN)
     revision: int = Field(ge=1)
     title: str = Field(min_length=1, max_length=160)
     master_prompt: str = Field(min_length=1, max_length=100_000)
@@ -143,17 +146,12 @@ class CinematicProject(BaseModel):
     @field_validator('master_prompt')
     @classmethod
     def reject_blank_master_prompt(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError('master_prompt cannot be blank')
-        return value
+        return _validate_prompt(value)
 
     @field_validator('reference_image_ids')
     @classmethod
     def dedupe_reference_ids(cls, values: list[str]) -> list[str]:
-        for value in values:
-            if len(value) != 32 or any(ch not in '0123456789abcdef' for ch in value):
-                raise ValueError('reference image ids must be lowercase 32-character hex values')
-        return _dedupe_ids(values)
+        return _validate_reference_ids(values)
 
     @model_validator(mode='after')
     def reject_duplicate_ids(self) -> 'CinematicProject':
@@ -164,3 +162,49 @@ class CinematicProject(BaseModel):
         if len(shot_ids) != len(set(shot_ids)):
             raise ValueError('duplicate shot_id values are not allowed')
         return self
+
+
+class ProjectCreateRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    title: str = Field(min_length=1, max_length=160)
+    master_prompt: str = Field(min_length=1, max_length=100_000)
+    target_duration_seconds: float = Field(default=600, ge=10, le=28_800)
+    delivery_fps: int = Field(default=24, ge=1, le=120)
+    delivery_resolution: DeliveryResolution = '1080p'
+    aspect_ratio: str = Field(default='16:9', min_length=3, max_length=16)
+    continuity_bible: ContinuityState = Field(default_factory=ContinuityState)
+    reference_image_ids: list[str] = Field(default_factory=list)
+
+    @field_validator('master_prompt')
+    @classmethod
+    def reject_blank_master_prompt(cls, value: str) -> str:
+        return _validate_prompt(value)
+
+    @field_validator('reference_image_ids')
+    @classmethod
+    def dedupe_reference_ids(cls, values: list[str]) -> list[str]:
+        return _validate_reference_ids(values)
+
+
+class ProjectUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    expected_revision: int = Field(ge=1)
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    master_prompt: str | None = Field(default=None, min_length=1, max_length=100_000)
+    target_duration_seconds: float | None = Field(default=None, ge=10, le=28_800)
+    delivery_fps: int | None = Field(default=None, ge=1, le=120)
+    delivery_resolution: DeliveryResolution | None = None
+    aspect_ratio: str | None = Field(default=None, min_length=3, max_length=16)
+    continuity_bible: ContinuityState | None = None
+    reference_image_ids: list[str] | None = None
+    scenes: list[CinematicScene] | None = None
+
+    @field_validator('master_prompt')
+    @classmethod
+    def reject_blank_master_prompt(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_prompt(value)
+
+    @field_validator('reference_image_ids')
+    @classmethod
+    def dedupe_reference_ids(cls, values: list[str] | None) -> list[str] | None:
+        return None if values is None else _validate_reference_ids(values)
