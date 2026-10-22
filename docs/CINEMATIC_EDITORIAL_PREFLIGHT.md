@@ -111,8 +111,9 @@ snapshot = cut.to_dict()
   addresses. Every interval is half-open `[in, out)`.
 - All offsets are **integer delivery-frame positions**. Frames must exist in
   the original editorial EDL, and every retained segment has at least one frame.
-- Repetitions and arbitrary reordering are deliberate. No frames are inserted,
-  dropped or stretched by the planner; it computes the sum of selected spans.
+- Repetitions and arbitrary reordering are deliberate. The only excluded
+  frames are those explicitly trimmed or omitted by the selected intervals;
+  no **additional** frames are inserted, dropped or stretched.
 - `scene_changed` and `continuity_changed_fields` flag visible editorial
   risks after reordering, without disclosing screenplay, dialogue, wardrobe
   descriptions, location names, or any continuity values.
@@ -123,6 +124,11 @@ snapshot = cut.to_dict()
   digest. A separately supplied source timeline is rejected unless it exactly
   matches a freshly computed source EDL. A cut digest protects reproducibility
   of metadata decisions, **not source media authenticity**.
+- Archived cut metadata is versioned (`schema_version=1`) and can be validated
+  with `verify_directors_cut(project, cut)`, which reconstructs and compares
+  every public field against the current project revision. Tampering or stale
+  revisions fail explicitly. This is **not** a cryptographic signature or a
+  verification that physical video frames exist.
 
 ### Safe next integration points
 
