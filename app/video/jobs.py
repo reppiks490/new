@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import time
 import uuid
+from collections.abc import Callable
 
 from app.gpu_worker import gpu_pool
 from app.video.engine import (
@@ -18,6 +20,8 @@ from app.studio.storage import root as studio_root
 
 
 pool = gpu_pool
+_ID_PATTERN = re.compile(r'^[a-f0-9]{32}$')
+_ALLOWED_JOB_METADATA = frozenset({'project_id', 'scene_id', 'shot_id', 'project_revision'})
 
 
 def _update_job(identifier: str, **changes) -> dict:
@@ -50,7 +54,34 @@ def _valid_mp4(path: Path) -> bool:
         return b'ftyp' in handle.read(64)
 
 
-def _job_record(request: VideoGenerationRequest, engine_name: str) -> dict:
+def _safe_metadata(metadata: dict | None) -> dict:
+    if not metadata:
+        return {}
+    unknown = set(metadata) - _ALLOWED_JOB_METADATA
+    if unknown:
+        raise ValueError(f'Unsupported video job metadata fields: {sorted(unknown)!r}')
+    value: dict = {}
+    for field in ('project_id', 'scene_id', 'shot_id'):
+        identifier = metadata.get(field)
+        if identifier is None:
+            continue
+        if not isinstance(identifier, str) or not _ID_PATTERN.fullmatch(identifier):
+            raise ValueError(f'{field} must be a lowercase 32-character hex identifier')
+        value[field] = identifier
+    if 'project_revision' in metadata:
+        revision = metadata['project_revision']
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise ValueError('project_revision must be a positive integer')
+        value['project_revision'] = revision
+    return value
+
+
+def _job_record(
+    request: VideoGenerationRequest,
+    engine_name: str,
+    *,
+    metadata: dict | None = None,
+) -> dict:
     return {
         'created': time.time(),
         'status': 'queued',
@@ -66,18 +97,41 @@ def _job_record(request: VideoGenerationRequest, engine_name: str) -> dict:
         'motion_strength': request.motion_strength,
         'camera_motion': request.camera_motion,
         'prompt_chars': len(request.prompt),
+        **_safe_metadata(metadata),
     }
 
 
-def enqueue_video_job(request: VideoGenerationRequest) -> dict:
-    engine = select_engine(request.engine_profile)
+def enqueue_video_job(
+    request: VideoGenerationRequest,
+    *,
+    engine_name: str | None = None,
+    metadata: dict | None = None,
+    before_submit: Callable[[str, dict], None] | None = None,
+) -> dict:
+    engine = get_engine(engine_name) if engine_name else select_engine(request.engine_profile)
     validate_request_for_engine(request, engine.capabilities())
     source_path = video_asset_path(request.image_id, 'png')
     if not source_path.is_file():
         raise FileNotFoundError('Uploaded source image was not found')
 
     identifier = uuid.uuid4().hex
-    job = put_video_record('video_job', _job_record(request, engine.name), identifier=identifier)
+    job = put_video_record(
+        'video_job',
+        _job_record(request, engine.name, metadata=metadata),
+        identifier=identifier,
+    )
+    try:
+        if before_submit is not None:
+            before_submit(identifier, job)
+    except Exception:
+        _update_job(
+            identifier,
+            status='failed',
+            stage='Cancelled',
+            error='Video render was cancelled before execution because project state changed.',
+        )
+        raise
+
     try:
         pool.submit(execute_video_job, identifier, request, engine.name)
     except RuntimeError as exc:
