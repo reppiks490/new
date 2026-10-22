@@ -94,10 +94,12 @@ def test_real_ffmpeg_master_has_decodable_ordered_video_and_verified_bytes(
     assert project.revision == 2
 
     linked = []
+    source_paths = []
     for index, (color, fps) in enumerate((("red", 24), ("blue", 30))):
         asset_id = f"{index + 100:032x}"
         source = storage.video_asset_path(asset_id, "mp4")
         _synthetic_clip(ffmpeg, source, color=color, fps=fps)
+        source_paths.append(source)
         job = storage.put_video_record("video_job", {
             "status": "succeeded",
             "stage": "Ready",
@@ -142,6 +144,9 @@ def test_real_ffmpeg_master_has_decodable_ordered_video_and_verified_bytes(
     assert master["project_revision"] == 3
     assert master["size_bytes"] == output.stat().st_size
     assert master["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert master["source_asset_hashes"] == [
+        hashlib.sha256(source.read_bytes()).hexdigest() for source in source_paths
+    ]
     assert service.get_project(project.id).revision == 3
 
     probe = json.loads(_run([
@@ -174,3 +179,18 @@ def test_real_ffmpeg_master_has_decodable_ordered_video_and_verified_bytes(
     assert master["actual_video_probe_verified"] is True
     assert master["probe"]["probe_metadata_verified"] is True
     assert master["probe"]["full_decode_verified"] is False
+
+    # A source file changing under the same opaque asset ID must invalidate
+    # the cached master. This verifies byte-addressed provenance, not labels.
+    _synthetic_clip(ffmpeg, source_paths[1], color="green", fps=30)
+    replaced = service.assemble_project_master(
+        project.id,
+        requests.AssembleMasterRequest(
+            expected_revision=project.revision, ffmpeg_path="ffmpeg",
+        ),
+    )
+    assert replaced["id"] != master["id"]
+    assert replaced["source_digest"] != master["source_digest"]
+    assert replaced["source_asset_hashes"] != master["source_asset_hashes"]
+    assert replaced["sha256"] != master["sha256"]
+    assert len(storage.list_video_records("video_master")) == 2
