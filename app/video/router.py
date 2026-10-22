@@ -9,14 +9,20 @@ from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.video.cinematic_models import ProjectCreateRequest, ProjectUpdateRequest
-from app.video.cinematic_requests import CompileProjectRequest, ShotRenderRequest
+from app.video.cinematic_requests import (
+    AssembleMasterRequest, BatchRenderRequest, CompileProjectRequest, ShotRenderRequest,
+)
 from app.video.cinematic_service import (
+    MasterAssemblyNotReady,
     ProjectRevisionConflict,
+    assemble_project_master,
     build_render_plan,
     compile_project,
     create_project,
     get_project,
     list_projects,
+    project_render_status,
+    render_project_missing,
     render_shot,
     update_project,
 )
@@ -217,6 +223,57 @@ def cinematic_shot_render(
         raise HTTPException(503, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+
+@router.get('/projects/{project_id}/render-status')
+def cinematic_project_render_status(project_id: str):
+    try:
+        return project_render_status(project_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project not found') from exc
+
+
+@router.post('/projects/{project_id}/render-missing')
+def cinematic_render_missing(project_id: str, request: BatchRenderRequest):
+    try:
+        return render_project_missing(project_id, request)
+    except ProjectRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, 'Cinematic project or engine not found') from exc
+    except (FileNotFoundError, UnsupportedEngineControl, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (EngineUnavailableError, RuntimeError) as exc:
+        raise HTTPException(503, 'Local render worker unavailable or unable to schedule shot') from exc
+
+
+@router.get('/projects/{project_id}/masters')
+def cinematic_project_masters(project_id: str):
+    try:
+        get_project(project_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project not found') from exc
+    return [
+        record for record in list_video_records('video_master')
+        if record.get('project_id') == project_id
+    ]
+
+
+@router.post('/projects/{project_id}/assemble')
+def cinematic_assemble_project(project_id: str, request: AssembleMasterRequest):
+    try:
+        return assemble_project_master(project_id, request)
+    except ProjectRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except MasterAssemblyNotReady as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, 'Cinematic project not found') from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(503, 'Local FFmpeg master assembly failed; check worker diagnostics') from exc
 
 
 @router.get('/jobs')

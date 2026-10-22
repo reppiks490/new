@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 
 import pytest
@@ -180,6 +181,20 @@ def test_master_assembly_persists_ordered_master_record_without_mutating_project
         return Result()
 
     monkeypatch.setattr(service, "_run_master_ffmpeg", fake_run)
+    def fake_probe(command, **kwargs):
+        seen["probe_command"] = command
+        class Result:
+            returncode = 0
+            stdout = json.dumps({
+                "streams": [{
+                    "codec_type": "video", "codec_name": "h264",
+                    "width": 3840, "height": 2160, "avg_frame_rate": "120/1",
+                    "nb_frames": "1200", "duration": "10.0",
+                }],
+                "format": {"duration": "10.0"},
+            })
+        return Result()
+    monkeypatch.setattr(service, "_run_master_ffprobe", fake_probe)
     before_revision = project.revision
     result = service.assemble_project_master(
         project.id,
@@ -193,5 +208,142 @@ def test_master_assembly_persists_ordered_master_record_without_mutating_project
     assert storage.video_asset_path(result["asset_id"], "mp4").is_file()
     assert service.get_project(project.id).revision == before_revision
     assert seen["command"][0] == "ffmpeg"
+    assert seen["command"][seen["command"].index("-r") + 1] == "120"
+    assert seen["command"][seen["command"].index("-fps_mode") + 1] == "cfr"
+    graph = seen["command"][seen["command"].index("-filter_complex") + 1]
+    assert "concat=n=2:v=1:a=0[v]" in graph
+    assert "scale=3840:2160" in graph
+    assert graph.count("tpad=stop_mode=clone:stop_duration=5.0") == 2
+    assert graph.count("trim=duration=5.0") == 2
+    assert result["timeline_seconds"] == 10
+    assert result["actual_video_probe_verified"] is True
+    assert result["probe"]["full_decode_verified"] is False
+    assert result["probe"]["frame_count"] == 1200
+    assert result["probe"]["width"] == 3840
+    assert seen["probe_command"][0] == "ffprobe"
+    assert result["source_asset_hashes"]
+    assert len(result["source_asset_hashes"]) == 2
     masters = [item for item in storage.list_video_records("video_master") if item["project_id"] == project.id]
     assert masters and masters[0]["asset_id"] == result["asset_id"]
+
+
+def test_render_status_does_not_claim_assembly_ready_when_successful_job_media_is_missing(monkeypatch, tmp_path):
+    _, service, storage, project = _project(monkeypatch, tmp_path, shots=1)
+    shot = project.scenes[0].shots[0]
+    absent_asset = "f" * 32
+    job = storage.put_video_record(
+        "video_job", {
+            "status": "succeeded",
+            "project_id": project.id,
+            "scene_id": SCENE,
+            "shot_id": shot.shot_id,
+            "asset_id": absent_asset,
+        },
+    )
+    scene = project.scenes[0].model_copy(update={
+        "shots": [shot.model_copy(update={"latest_job_id": job["id"]})],
+    })
+    service.update_project(
+        project.id,
+        importlib.import_module("app.video.cinematic_models").ProjectUpdateRequest(
+            expected_revision=2, scenes=[scene],
+        ),
+    )
+    result = service.project_render_status(project.id)
+    assert result["total_shots"] == 1
+    assert result["succeeded"] == 1
+    assert result["missing_output_assets"] == 1
+    assert result["ready_for_assembly"] is False
+
+
+def test_batch_rerenders_successful_shot_whose_mp4_was_lost(monkeypatch, tmp_path):
+    models, service, storage, project = _project(monkeypatch, tmp_path, shots=1)
+    shot = project.scenes[0].shots[0]
+    old = storage.put_video_record(
+        "video_job", {
+            "status": "succeeded", "project_id": project.id, "scene_id": SCENE,
+            "shot_id": shot.shot_id, "asset_id": "f" * 32,
+        },
+    )
+    scene = project.scenes[0].model_copy(update={
+        "shots": [shot.model_copy(update={"latest_job_id": old["id"]})],
+    })
+    project = service.update_project(
+        project.id, models.ProjectUpdateRequest(expected_revision=2, scenes=[scene]),
+    )
+    engine = importlib.import_module("app.video.engine")
+    jobs = importlib.import_module("app.video.jobs")
+    engine._ENGINE_REGISTRY.clear()
+    engine.register_engine(engine.FakeVideoEngine())
+    submitted = []
+    class CapturePool:
+        def submit(self, fn, *args, **kwargs):
+            submitted.append((fn, args, kwargs))
+            return object()
+    monkeypatch.setattr(jobs, "pool", CapturePool())
+    requests = importlib.import_module("app.video.cinematic_requests")
+    result = service.render_project_missing(
+        project.id,
+        requests.BatchRenderRequest(expected_revision=3, engine_name="fake"),
+    )
+    assert result["skipped"] == 0
+    assert len(result["jobs"]) == 1
+    assert len(submitted) == 1
+    refreshed = service.get_project(project.id)
+    assert refreshed.revision == 4
+    assert refreshed.scenes[0].shots[0].latest_job_id != old["id"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("codec_name", "hevc"),
+    ("width", 1280),
+    ("avg_frame_rate", "60/1"),
+    ("nb_frames", "240"),
+])
+def test_master_probe_rejects_wrong_codec_resolution_fps_or_frame_count(
+    monkeypatch, tmp_path, field, value,
+):
+    _, service, _, project = _project(monkeypatch, tmp_path, shots=2)
+    stream = {
+        "codec_type": "video", "codec_name": "h264", "width": 3840,
+        "height": 2160, "avg_frame_rate": "120/1", "nb_frames": "1200",
+    }
+    stream[field] = value
+    class Probe:
+        returncode = 0
+        stdout = json.dumps({"streams": [stream], "format": {"duration": "10"}})
+    monkeypatch.setattr(service, "_run_master_ffprobe", lambda *a, **kw: Probe())
+    with pytest.raises(RuntimeError, match="Master|frame count"):
+        service._verify_master_probe(
+            tmp_path / "master.mp4", project=project, shot_count=2,
+            expected_seconds=10, ffprobe_path="ffprobe",
+        )
+
+
+@pytest.mark.parametrize("duration", ["0", "5", "nan", "inf"])
+def test_master_probe_rejects_invalid_or_truncated_duration(monkeypatch, tmp_path, duration):
+    _, service, _, project = _project(monkeypatch, tmp_path, shots=2)
+    class Probe:
+        returncode = 0
+        stdout = json.dumps({
+            "streams": [{
+                "codec_type": "video", "codec_name": "h264", "width": 3840,
+                "height": 2160, "avg_frame_rate": "120/1", "nb_frames": "1200",
+            }],
+            "format": {"duration": duration},
+        })
+    monkeypatch.setattr(service, "_run_master_ffprobe", lambda *a, **kw: Probe())
+    with pytest.raises(RuntimeError, match="Master"):
+        service._verify_master_probe(
+            tmp_path / "master.mp4", project=project, shot_count=2,
+            expected_seconds=10, ffprobe_path="ffprobe",
+        )
+
+
+def test_assembly_path_cannot_execute_client_selected_binary():
+    from pydantic import ValidationError
+    requests = importlib.import_module("app.video.cinematic_requests")
+    for candidate in ("cmd.exe", "/bin/sh", "C:\\Windows\\System32\\cmd.exe", "powershell", "ffmpeg; echo"):
+        with pytest.raises(ValidationError):
+            requests.AssembleMasterRequest(expected_revision=1, ffmpeg_path=candidate)
+    assert requests.AssembleMasterRequest(expected_revision=1, ffmpeg_path="ffmpeg.exe").ffmpeg_path == "ffmpeg.exe"
