@@ -93,7 +93,9 @@ def _reference_status(directory: Path, identifier: str) -> str | None:
             image.load()
     except PermissionError:
         return "REFERENCE_FILE_UNREADABLE"
-    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        return "REFERENCE_TOO_MANY_PIXELS"
+    except (OSError, ValueError, UnidentifiedImageError):
         return "REFERENCE_IMAGE_INVALID"
     return None
 
