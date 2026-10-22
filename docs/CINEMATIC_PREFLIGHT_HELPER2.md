@@ -101,3 +101,51 @@ owns an independent acceptance oracle: neither implementation is replaced.
 At addition time, branch inherited four master-assembly test failures from
 the original feature baseline. Those four functions were implemented by lead
 PR #8 and must be integrated non-destructively. Never skip their tests.
+
+
+## Helper 2 extension — trusted-local reference integrity preflight
+
+The additive module app/video/cinematic_reference_preflight.py offers a third,
+explicitly opt-in check: audit_reference_files(project, workspace=trusted_local_path).
+It reads existing local PNGs (unlike the two pure-metadata checks) but has
+**no network calls, no external services, no project writes, and no directory
+creation**. Do not expose the workspace argument as an arbitrary remote user
+supplied path; it must be a **server-selected, trusted local studio workspace**.
+
+The auditor examines **every distinct inherited image ID** exactly once, maps
+errors to every affected shot, and rejects:
+
+- missing or unreadable normalized PNG files;
+- invalid/corrupt/truncated PNG contents;
+- files with the wrong actual encoded format despite a .png filename;
+- images beyond the existing 20-megapixel upload bound;
+- unsafe symlinks or traversals in the workspace's asset directory;
+- missing workspace/directory, empty timelines or shots with no reference IDs.
+
+Reference IDs are guarded again in case an in-memory Pydantic model_copy
+bypassed normal validation. Results disclose only neutral error codes and
+opaque scene/shot IDs—never private pixel contents, file paths, source IDs,
+screensplays, engine details or content hashes. Repeated references are decoded
+only once, with diagnostics still reported on *every* affected shot.
+
+Example server-side usage:
+
+~~~python
+from pathlib import Path
+from app.video.cinematic_reference_preflight import audit_reference_files
+
+source_report = audit_reference_files(project, workspace=Path(trusted_studio_workspace))
+all_preflight_metadata_passed = (
+    audit_timeline(project).structurally_ready
+    and audit_engine_capabilities(project, selected_capabilities).capability_ready
+    and source_report.references_ready
+)
+~~~
+
+**Critical evidence boundary:** File readiness is a moment-in-time observation,
+not a durable guarantee that assets stay unchanged between inspection and
+render. The service must perform its own authoritative path, existence and
+capability validation at enqueue time. A genuine render, source hash/probe,
+FFmpeg playback and the owner's iPhone verification remain distinct release
+gates. This check does not duplicate Helper 3's frame EDL or Helper 4's
+independent frame oracle, and does not change lead's service/router.
