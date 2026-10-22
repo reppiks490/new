@@ -208,3 +208,32 @@ class ProjectUpdateRequest(BaseModel):
     @classmethod
     def dedupe_reference_ids(cls, values: list[str] | None) -> list[str] | None:
         return None if values is None else _validate_reference_ids(values)
+
+
+class RenderPlan(BaseModel):
+    model_config = ConfigDict(extra='forbid', frozen=True)
+    project_id: str = Field(pattern=_ID_PATTERN)
+    project_revision: int = Field(ge=1)
+    scene_id: str = Field(pattern=_ID_PATTERN)
+    shot_id: str = Field(pattern=_ID_PATTERN)
+    engine_name: str = Field(min_length=1, max_length=160)
+    engine_profile: EngineProfile
+    prompt: str = Field(min_length=1, max_length=20_000)
+    negative_prompt: str = Field(default='', max_length=10_000)
+    effective_continuity: ContinuityState
+    reference_image_ids: list[str] = Field(default_factory=list)
+    source_image_id: str | None = Field(default=None, pattern=_ID_PATTERN)
+    duration_seconds: float = Field(gt=0, le=30)
+    seed: int = Field(ge=0, le=2**32 - 1)
+    motion_strength: float | None = Field(default=None, ge=0, le=1)
+    camera_motion: str | None = None
+    generation_fps: int = Field(ge=1, le=120)
+    generation_resolution: DeliveryResolution
+    delivery_fps: int = Field(ge=1, le=120)
+    delivery_resolution: DeliveryResolution
+    previous_bridge_asset_url: str | None = None
+
+    @field_validator('reference_image_ids')
+    @classmethod
+    def dedupe_reference_ids(cls, values: list[str]) -> list[str]:
+        return _validate_reference_ids(values)
