@@ -107,3 +107,33 @@ def test_foreign_origin_cannot_create_project_with_correct_token(monkeypatch, tm
         projects = client.get("/api/video/projects", headers=authorized)
         assert projects.status_code == 200
         assert projects.json() == []
+
+
+@pytest.mark.parametrize(
+    ("extension", "media_type"),
+    [("png", "image/png"), ("mp4", "video/mp4")],
+)
+def test_private_media_assets_require_bearer_and_disallow_token_in_query(
+    monkeypatch, tmp_path, extension, media_type
+):
+    server = _server(monkeypatch, tmp_path)
+    storage = importlib.import_module("app.video.storage")
+    asset_id = "a" * 32
+    filename = f"{asset_id}.{extension}"
+    private_bytes = b"PRIVATE_MEDIA_SENTINEL_NEVER_IN_ERROR_RESPONSES"
+    storage.video_asset_path(asset_id, extension).write_bytes(private_bytes)
+    route = f"/api/video/assets/{filename}"
+    with TestClient(server.app) as client:
+        no_token = client.get(route)
+        bad_token = client.get(route, headers={"Authorization": "Bearer wrong"})
+        query_token = client.get(route, params={"token": TOKEN})
+        authorized = client.get(route, headers={"Authorization": f"Bearer {TOKEN}"})
+
+    for rejected in (no_token, bad_token, query_token):
+        assert rejected.status_code == 401
+        assert private_bytes not in rejected.content
+        assert TOKEN not in rejected.text
+    assert authorized.status_code == 200
+    assert authorized.content == private_bytes
+    assert authorized.headers["content-type"].startswith(media_type)
+    assert authorized.headers["cache-control"] == "no-store"
