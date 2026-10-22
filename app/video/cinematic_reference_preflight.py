@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 _ID = re.compile(r"^[a-f0-9]{32}$")
 # Align with the image uploader's 20 MP source-image boundary.
 _MAX_PIXELS = 20_000_000
+_MAX_BYTES = 12 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,10 @@ def _reference_status(directory: Path, identifier: str) -> str | None:
             return "REFERENCE_PATH_UNSAFE"
         if not path.is_file():
             return "REFERENCE_FILE_MISSING"
+        # Keep local inspection within the same byte limit as image uploads,
+        # before attempting a potentially expensive decode.
+        if path.stat().st_size > _MAX_BYTES:
+            return "REFERENCE_TOO_MANY_BYTES"
         with Image.open(path) as image:
             if image.format != "PNG":
                 return "REFERENCE_FORMAT_INVALID"
