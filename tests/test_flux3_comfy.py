@@ -18,17 +18,21 @@ def _request():
 def _minimal_workflow():
     return {
         "nodes": [
+            {"id": 1, "type": "UNETLoader", "widgets_values": ["flux3-image-klein-int8-convrot.safetensors", "default"], "widgets_values_named": {"unet_name": "flux3-image-klein-int8-convrot.safetensors", "weight_dtype": "default"}},
+            {"id": 2, "type": "CLIPLoader", "widgets_values": ["qwen3vl_4b_int8_convrot.safetensors", "flux3", "default"], "widgets_values_named": {"clip_name": "qwen3vl_4b_int8_convrot.safetensors", "type": "flux3", "device": "default"}},
+            {"id": 3, "type": "VAELoader", "widgets_values": ["flux2-vae.safetensors"], "widgets_values_named": {"vae_name": "flux2-vae.safetensors"}},
             {"id": 7, "type": "KSampler", "widgets_values": [123, "randomize", 16, 1, "euler", "simple", 1], "widgets_values_named": {"seed": 123, "control_after_generate": "randomize"}},
             {"id": 9, "type": "SaveImage", "widgets_values": ["sample"], "widgets_values_named": {"filename_prefix": "sample"}},
             {"id": 11, "type": "LoadImage", "widgets_values": ["sample.png", "image"], "widgets_values_named": {"image": "sample.png", "upload": "image"}},
             {"id": 33, "type": "CreateBoundingBoxes", "widgets_values": [1360, 752, [{"x": 1}], [{"id": 1}]], "widgets_values_named": {"width": 1360, "height": 752, "editor_state": [{"x": 1}], "last_incoming": [{"id": 1}]}},
+            {"id": 46, "type": "CLIPLoader", "widgets_values": ["qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors", "flux3", "default"], "widgets_values_named": {"clip_name": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors", "type": "flux3", "device": "default"}},
             {"id": 49, "type": "Flux3LayoutPrompt", "widgets_values": ["sample prompt"], "widgets_values_named": {"prompt": "sample prompt"}},
         ],
         "links": [],
     }
 
 
-def _prepare_comfy(tmp_path: Path):
+def _prepare_comfy(tmp_path: Path, *, current_name: bool = False):
     home = tmp_path / "ComfyUI"
     for relative in [
         "input",
@@ -38,8 +42,13 @@ def _prepare_comfy(tmp_path: Path):
         "models/vae",
     ]:
         (home / relative).mkdir(parents=True, exist_ok=True)
+    diffusion = (
+        "models/diffusion_models/flux3_image_klein_sd_int8_convrot.safetensors"
+        if current_name
+        else "models/diffusion_models/flux3-image-klein-int8-convrot.safetensors"
+    )
     for relative in [
-        "models/diffusion_models/flux3-image-klein-int8-convrot.safetensors",
+        diffusion,
         "models/text_encoders/qwen3vl_4b_int8_convrot.safetensors",
         "models/text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
         "models/vae/flux2-vae.safetensors",
@@ -47,44 +56,74 @@ def _prepare_comfy(tmp_path: Path):
         (home / relative).write_bytes(b"fixture")
     workflow = tmp_path / "workflow.json"
     workflow.write_text(json.dumps(_minimal_workflow()), encoding="utf-8")
-    return home, workflow
+    return home, workflow, Path(diffusion).name
 
 
 def test_comfy_adapter_pins_official_low_vram_contract():
     from app.image.adapters import flux3_comfy as module
 
     assert module.COMFY_WORKFLOW_REVISION == "9afccb38bb9173575411189a75f4fc6cc8acd06c"
-    assert module.COMFY_MODEL_FILES == (
+    assert module.COMFY_DIFFUSION_MODEL_CANDIDATES == (
+        "models/diffusion_models/flux3_image_klein_sd_int8_convrot.safetensors",
         "models/diffusion_models/flux3-image-klein-int8-convrot.safetensors",
+    )
+    assert module.COMFY_REQUIRED_MODEL_FILES == (
         "models/text_encoders/qwen3vl_4b_int8_convrot.safetensors",
         "models/text_encoders/qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
         "models/vae/flux2-vae.safetensors",
     )
 
 
-def test_patch_workflow_sets_private_input_prompt_seed_and_clears_sample_boxes():
+def test_resolve_model_files_accepts_current_and_legacy_distilled_names(tmp_path):
+    from app.image.adapters.flux3_comfy import resolve_model_files
+
+    current_home, _, current_name = _prepare_comfy(tmp_path / "current", current_name=True)
+    legacy_home, _, legacy_name = _prepare_comfy(tmp_path / "legacy", current_name=False)
+
+    assert resolve_model_files(current_home)["diffusion"] == current_name
+    assert resolve_model_files(legacy_home)["diffusion"] == legacy_name
+
+
+def test_patch_workflow_sets_private_inputs_models_prompt_seed_and_clears_sample_boxes():
     from app.image.adapters.flux3_comfy import patch_workflow
 
-    patched = patch_workflow(_minimal_workflow(), source_name="private-source.png", prompt="change only the jacket", seed=77, output_prefix="private_result")
-    by_type = {node["type"]: node for node in patched["nodes"]}
+    patched = patch_workflow(
+        _minimal_workflow(),
+        source_name="private-source.png",
+        prompt="change only the jacket",
+        seed=77,
+        output_prefix="private_result",
+        model_files={
+            "diffusion": "flux3_image_klein_sd_int8_convrot.safetensors",
+            "text_encoder": "qwen3vl_4b_int8_convrot.safetensors",
+            "prompt_upsampler": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
+            "vae": "flux2-vae.safetensors",
+        },
+    )
+    by_id = {node["id"]: node for node in patched["nodes"]}
 
-    assert by_type["LoadImage"]["widgets_values"][0] == "private-source.png"
-    assert by_type["LoadImage"]["widgets_values_named"]["image"] == "private-source.png"
-    assert by_type["Flux3LayoutPrompt"]["widgets_values"][0] == "change only the jacket"
-    assert by_type["Flux3LayoutPrompt"]["widgets_values_named"]["prompt"] == "change only the jacket"
-    assert by_type["KSampler"]["widgets_values"][:2] == [77, "fixed"]
-    assert by_type["KSampler"]["widgets_values_named"]["seed"] == 77
-    assert by_type["KSampler"]["widgets_values_named"]["control_after_generate"] == "fixed"
-    assert by_type["CreateBoundingBoxes"]["widgets_values"][2:] == [[], []]
-    assert by_type["CreateBoundingBoxes"]["widgets_values_named"]["editor_state"] == []
-    assert by_type["CreateBoundingBoxes"]["widgets_values_named"]["last_incoming"] == []
-    assert by_type["SaveImage"]["widgets_values"][0] == "private_result"
+    assert by_id[1]["widgets_values"][0] == "flux3_image_klein_sd_int8_convrot.safetensors"
+    assert by_id[1]["widgets_values_named"]["unet_name"] == "flux3_image_klein_sd_int8_convrot.safetensors"
+    assert by_id[2]["widgets_values"][0] == "qwen3vl_4b_int8_convrot.safetensors"
+    assert by_id[46]["widgets_values"][0] == "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors"
+    assert by_id[3]["widgets_values"][0] == "flux2-vae.safetensors"
+    assert by_id[11]["widgets_values"][0] == "private-source.png"
+    assert by_id[11]["widgets_values_named"]["image"] == "private-source.png"
+    assert by_id[49]["widgets_values"][0] == "change only the jacket"
+    assert by_id[49]["widgets_values_named"]["prompt"] == "change only the jacket"
+    assert by_id[7]["widgets_values"][:2] == [77, "fixed"]
+    assert by_id[7]["widgets_values_named"]["seed"] == 77
+    assert by_id[7]["widgets_values_named"]["control_after_generate"] == "fixed"
+    assert by_id[33]["widgets_values"][2:] == [[], []]
+    assert by_id[33]["widgets_values_named"]["editor_state"] == []
+    assert by_id[33]["widgets_values_named"]["last_incoming"] == []
+    assert by_id[9]["widgets_values"][0] == "private_result"
 
 
-def test_comfy_generate_runs_local_only_and_cleans_private_artifacts(tmp_path, monkeypatch):
+def test_comfy_generate_runs_local_only_patches_current_model_name_and_cleans_private_artifacts(tmp_path, monkeypatch):
     from app.image.adapters import flux3_comfy as module
 
-    home, workflow = _prepare_comfy(tmp_path)
+    home, workflow, diffusion_name = _prepare_comfy(tmp_path, current_name=True)
     source = tmp_path / "source.png"
     output = tmp_path / "final.png"
     Image.new("RGB", (48, 32), (20, 30, 40)).save(source)
@@ -136,6 +175,8 @@ def test_comfy_generate_runs_local_only_and_cleans_private_artifacts(tmp_path, m
     assert output.is_file()
     with Image.open(output) as image:
         assert image.format == "PNG"
+    patched_nodes = {node["id"]: node for node in captured["runtime_workflow"]["nodes"]}
+    assert patched_nodes[1]["widgets_values"][0] == diffusion_name
     command = captured["command"]
     assert "--where" in command and command[command.index("--where") + 1] == "local"
     assert "--wait" in command
