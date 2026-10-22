@@ -208,6 +208,8 @@ def test_master_assembly_persists_ordered_master_record_without_mutating_project
     assert storage.video_asset_path(result["asset_id"], "mp4").is_file()
     assert service.get_project(project.id).revision == before_revision
     assert seen["command"][0] == "ffmpeg"
+    assert seen["command"][seen["command"].index("-r") + 1] == "120"
+    assert seen["command"][seen["command"].index("-fps_mode") + 1] == "cfr"
     graph = seen["command"][seen["command"].index("-filter_complex") + 1]
     assert "concat=n=2:v=1:a=0[v]" in graph
     assert "scale=3840:2160" in graph
