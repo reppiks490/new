@@ -168,6 +168,23 @@ def test_real_ffmpeg_master_has_decodable_ordered_video_and_verified_bytes(
     # Decoding every frame detects container-only signatures and broken media.
     _run([ffmpeg, "-nostdin", "-v", "error", "-i", str(output), "-f", "null", "-"])
 
+    # Validate actual shot *content* and order, not only metadata or source IDs.
+    # Sample the middle of each authored five-second shot through the decoder.
+    def sampled_pixel(seconds: float) -> tuple[int, int, int]:
+        decoded = subprocess.run([
+            ffmpeg, "-nostdin", "-v", "error", "-ss", str(seconds),
+            "-i", str(output), "-frames:v", "1",
+            "-vf", "scale=1:1", "-f", "rawvideo",
+            "-pix_fmt", "rgb24", "pipe:1",
+        ], capture_output=True, timeout=60, check=True)
+        assert len(decoded.stdout) == 3
+        return tuple(decoded.stdout)
+
+    first = sampled_pixel(1.0)
+    second = sampled_pixel(7.0)
+    assert first[0] > 100 and first[0] > first[2] + 60, first
+    assert second[2] > 100 and second[2] > second[0] + 60, second
+
     # Repeated requests must not silently allocate a second master for unchanged sources.
     again = service.assemble_project_master(
         project.id,
