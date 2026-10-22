@@ -149,3 +149,52 @@ capability validation at enqueue time. A genuine render, source hash/probe,
 FFmpeg playback and the owner's iPhone verification remain distinct release
 gates. This check does not duplicate Helper 3's frame EDL or Helper 4's
 independent frame oracle, and does not change lead's service/router.
+
+
+## Helper 2 extension — unified preflight dossier
+
+Module: app/video/cinematic_preflight_dossier.py
+Tests: tests/test_cinematic_preflight_dossier.py
+Entrypoint: audit_project_preflight(project, capabilities=None, trusted_workspace=None)
+
+This read-only aggregator does **not** duplicate the established structural,
+engine and file auditors. It combines their diagnostics, reports stage-level
+error/warning counts, preserves full finding detail, and tracks actual inspection
+coverage. The stages are **timeline**, **engine_capability** and
+**reference_files**, each in one of **passed / blocked / not_checked**.
+
+Rules:
+- Timeline audit always runs.
+- Engine capability audit runs only when the caller explicitly provides a
+  candidate engine's capabilities (no implicit engine discovery/GPU/model call).
+- Private PNG file inspection runs only when trusted server code supplies
+  a local workspace path (never a remote client-controlled path).
+- Neither omitted stage can silently be treated as passing, even when a
+  previous result was green.
+- All three must be evaluated and pass to make preflight_passed true.
+- Errors do not short-circuit other audits. Distinct failures remain visible
+  so the user can resolve all known constraints together.
+- The report is a snapshot of the project at a particular revision; it
+  does not persist observations, authorize generation or prove a playable film.
+- Findings contain only neutral codes, counts and opaque scene/shot IDs.
+  There is no prompt, continuity value, image ID, path, asset hash or engine
+  detail in the report.
+
+Integration example (trusted backend only):
+
+~~~python
+from app.video.cinematic_preflight_dossier import audit_project_preflight
+
+# Both optional arguments must come from trusted server-side configuration.
+report = audit_project_preflight(
+    project, capabilities=selected_engine_capabilities,
+    trusted_workspace=trusted_studio_workspace,
+)
+response = report.as_dict()
+~~~
+
+The user interface can display a conservative status gauge per stage and list
+remaining problems, without substituting these statuses for render-time
+permission, media integrity, CUDA availability, licensing, real ffprobe/decode,
+or iPhone privacy/playing validation. The independent EDL from Helper 3,
+acceptance oracle from Helper 4, and master render state from lead are separate.
