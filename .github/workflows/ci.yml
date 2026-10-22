@@ -56,7 +56,19 @@ jobs:
       - name: Run browser privacy tests
         # Python test failures must not suppress independent browser checks.
         if: ${{ !cancelled() && matrix.python-version == '3.11' }}
-        run: node --test tests/*.mjs
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          node --test tests/*.mjs | tee test-results/node-browser.tap
+
+      - name: Publish browser test evidence
+        if: ${{ always() && matrix.python-version == '3.11' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-browser-${{ github.run_attempt }}
+          path: test-results/node-browser.tap
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Publish Python test evidence
         if: always()
