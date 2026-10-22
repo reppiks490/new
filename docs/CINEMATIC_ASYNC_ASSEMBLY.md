@@ -63,6 +63,11 @@ names \`ffmpeg\` and \`ffmpeg.exe\`.
   the worker must not publish a success artifact.
 - The completed master is still validated by the synchronous assembly
   service's SHA-256, ffprobe, timeline and project-revision gates.
+- Before a queue job can transition to `succeeded`, the worker also requires
+  a ready master record, a verified ffprobe evidence object, valid opaque
+  identifiers, a 64-hex SHA-256, and an exactly matching private MP4 URL.
+  Malformed or unverified results fail closed with a neutral message; no
+  output URL or checksum is published as a successful queue artifact.
 - There is no assertion that code will continue executing while the user's
   laptop or its local backend is powered off.
 
