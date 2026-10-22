@@ -8,10 +8,13 @@ from app.video.cinematic_models import (
     CinematicScene,
     CinematicShot,
     ContinuityState,
+    DeliveryResolution,
     ProjectCreateRequest,
     ProjectUpdateRequest,
+    RenderPlan,
     merge_continuity,
 )
+from app.video.models import EngineCapabilities
 from app.video.storage import (
     compare_and_swap_video_project,
     get_video_record,
@@ -19,6 +22,15 @@ from app.video.storage import (
     put_video_record,
     video_asset_path,
 )
+
+
+_RESOLUTION_HEIGHT = {
+    '480p': 480,
+    '720p': 720,
+    '1080p': 1080,
+    '1440p': 1440,
+    '2160p': 2160,
+}
 
 
 class ProjectRevisionConflict(RuntimeError):
@@ -140,3 +152,104 @@ def find_shot(scene: CinematicScene, shot_id: str) -> CinematicShot:
         if shot.shot_id == shot_id:
             return shot
     raise KeyError(shot_id)
+
+
+def select_native_fps(delivery_fps: int, supported_fps: list[int]) -> int:
+    if not supported_fps:
+        raise ValueError('engine declares no supported FPS values')
+    supported = sorted(set(int(value) for value in supported_fps))
+    at_or_below = [value for value in supported if value <= delivery_fps]
+    return max(at_or_below) if at_or_below else min(supported)
+
+
+def select_native_resolution(
+    delivery_resolution: DeliveryResolution,
+    supported_resolutions: list[str],
+) -> DeliveryResolution:
+    if not supported_resolutions:
+        raise ValueError('engine declares no supported resolutions')
+    invalid = [value for value in supported_resolutions if value not in _RESOLUTION_HEIGHT]
+    if invalid:
+        raise ValueError(f'engine declares unsupported resolution labels: {invalid!r}')
+    target = _RESOLUTION_HEIGHT[delivery_resolution]
+    supported = sorted(set(supported_resolutions), key=_RESOLUTION_HEIGHT.__getitem__)
+    at_or_below = [value for value in supported if _RESOLUTION_HEIGHT[value] <= target]
+    chosen = max(at_or_below, key=_RESOLUTION_HEIGHT.__getitem__) if at_or_below else supported[0]
+    return chosen  # type: ignore[return-value]
+
+
+def build_render_plan_from_objects(
+    project: CinematicProject,
+    scene: CinematicScene,
+    shot: CinematicShot,
+    capabilities: EngineCapabilities,
+    *,
+    require_assets: bool = True,
+) -> RenderPlan:
+    if project.id is None:
+        raise ValueError('project must have a persisted id before rendering')
+    if not capabilities.available:
+        raise RuntimeError(f'engine {capabilities.name!r} is not available')
+    if shot.engine_profile not in capabilities.profiles:
+        raise ValueError(f'engine profile {shot.engine_profile!r} is not supported by {capabilities.name}')
+    if not capabilities.min_duration_seconds <= shot.duration_seconds <= capabilities.max_duration_seconds:
+        raise ValueError(
+            f'shot duration {shot.duration_seconds} is outside engine range '
+            f'{capabilities.min_duration_seconds}..{capabilities.max_duration_seconds}'
+        )
+    if shot.motion_strength is not None and not capabilities.supports_motion_strength:
+        raise ValueError(f'motion_strength is not supported by {capabilities.name}')
+    if shot.camera_motion is not None and shot.camera_motion not in capabilities.camera_motion_presets:
+        raise ValueError(f'camera_motion {shot.camera_motion!r} is not supported by {capabilities.name}')
+
+    references = resolve_reference_ids(project, scene, shot, require_assets=require_assets)
+    continuity = resolve_effective_continuity(project, scene, shot)
+    generation_fps = select_native_fps(project.delivery_fps, capabilities.supported_fps)
+    generation_resolution = select_native_resolution(
+        project.delivery_resolution,
+        list(capabilities.supported_resolutions),
+    )
+    return RenderPlan(
+        project_id=project.id,
+        project_revision=project.revision,
+        scene_id=scene.scene_id,
+        shot_id=shot.shot_id,
+        engine_name=capabilities.name,
+        engine_profile=shot.engine_profile,
+        prompt=shot.prompt,
+        negative_prompt=shot.negative_prompt,
+        effective_continuity=continuity,
+        reference_image_ids=references,
+        source_image_id=references[0] if references else None,
+        duration_seconds=shot.duration_seconds,
+        seed=shot.seed,
+        motion_strength=shot.motion_strength,
+        camera_motion=shot.camera_motion,
+        generation_fps=generation_fps,
+        generation_resolution=generation_resolution,
+        delivery_fps=project.delivery_fps,
+        delivery_resolution=project.delivery_resolution,
+    )
+
+
+def build_render_plan(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    *,
+    engine_name: str | None = None,
+    require_assets: bool = True,
+) -> RenderPlan:
+    from app.video.engine import get_engine, select_engine
+
+    project = get_project(project_id)
+    scene = find_scene(project, scene_id)
+    shot = find_shot(scene, shot_id)
+    engine = get_engine(engine_name) if engine_name else select_engine(shot.engine_profile)
+    return build_render_plan_from_objects(
+        project,
+        scene,
+        shot,
+        engine.capabilities(),
+        require_assets=require_assets,
+    )
