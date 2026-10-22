@@ -31,8 +31,8 @@ class EditorialClip:
     end_frame: int
     duration_frames: int
     continuity_changed_fields: tuple[str, ...]
-    transition_in: str | None
-    transition_out: str | None
+    transition_in_declared: bool
+    transition_out_declared: bool
 
 
 @dataclass(frozen=True)
@@ -132,8 +132,8 @@ def preflight_editorial_timeline(project: 'CinematicProject') -> EditorialTimeli
                     end_frame=end,
                     duration_frames=end - start,
                     continuity_changed_fields=_changed_fields(previous_state, state),
-                    transition_in=shot.transition_in,
-                    transition_out=shot.transition_out,
+                    transition_in_declared=bool(shot.transition_in),
+                    transition_out_declared=bool(shot.transition_out),
                 )
             )
             previous_state = state
