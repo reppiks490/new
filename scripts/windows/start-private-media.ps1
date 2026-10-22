@@ -22,7 +22,13 @@ foreach ($Required in @($ComfyPython,$ComfyCli,$WorkflowPath,$StudioPython)) {
 New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
 if (-not (Test-Path $TokenFile)) {
     $bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    }
+    finally {
+        $rng.Dispose()
+    }
     $token = -join ($bytes | ForEach-Object { $_.ToString('x2') })
     Set-Content -Path $TokenFile -Value $token -NoNewline -Encoding ascii
 }
