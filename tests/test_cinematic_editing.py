@@ -285,3 +285,39 @@ def test_no_prompt_or_transition_value_leaks_to_edl_metadata():
     assert 'A silent cinematic action' not in payload
     assert report.clips[0].transition_in_declared
     assert report.clips[0].transition_out_declared
+
+
+def test_persisted_six_hundred_second_compiled_project_has_identical_edl_after_reload(monkeypatch, tmp_path):
+    """Integration proof that the real service/compiler preserve an editorial EDL."""
+    from app.video import cinematic_requests, cinematic_service
+    from app.video.cinematic_models import ProjectCreateRequest
+
+    monkeypatch.setenv('CHARACTER3D_STUDIO_WORKSPACE', str(tmp_path))
+    original = cinematic_service.create_project(
+        ProjectCreateRequest(
+            title='Ten-minute filmed sequence',
+            master_prompt='SCENE 1: Rooftop\\nA traveler approaches the rooftop door.',
+            target_duration_seconds=600,
+            delivery_fps=120,
+            delivery_resolution='2160p',
+        )
+    )
+    compiled, diagnostics = cinematic_service.compile_project(
+        original.id,
+        cinematic_requests.CompileProjectRequest(
+            expected_revision=original.revision,
+            preferred_shot_seconds=9,
+            engine_max_duration_seconds=9,
+        ),
+    )
+    edl = preflight_editorial_timeline(compiled)
+    assert diagnostics['shot_count'] == len(edl.clips) == 67
+    assert len(edl.scenes) >= 1
+    assert edl.actual_frames == edl.target_frames == 72000
+    assert edl.frame_difference == 0
+    assert edl.clips[-1].end_timecode_exclusive == '00:10:00:00'
+    assert edl.timeline_digest_sha256 == preflight_editorial_timeline(
+        cinematic_service.get_project(original.id)
+    ).timeline_digest_sha256
+    assert edl.clip_at_frame(71999) == edl.clips[-1]
+    assert cinematic_service.get_project(original.id).revision == compiled.revision
