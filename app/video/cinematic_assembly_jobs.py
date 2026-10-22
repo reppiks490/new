@@ -169,7 +169,8 @@ def _claim_next() -> dict | None:
             return None
         identifier, raw = row
         payload = json.loads(raw)
-        payload.update(status="running", stage="Assembling", progress=10,
+        # FFmpeg progress is not instrumented yet: do not invent a percentage.
+        payload.update(status="running", stage="Assembling", progress=None,
                        started_at=_now(), updated_at=_now())
         db.execute(
             "UPDATE records SET data=?,updated=? WHERE id=? AND kind=?",
