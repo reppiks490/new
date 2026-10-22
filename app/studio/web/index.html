@@ -5,6 +5,7 @@
   <meta name="theme-color" content="#111720"><title>Forma · 3D Studio</title>
   <link rel="stylesheet" href="/studio/style.css">
   <link rel="stylesheet" href="/studio/video-studio.css">
+  <link rel="stylesheet" href="/studio/image-studio.css">
   <script type="importmap">{"imports":{"three":"/studio/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -17,6 +18,7 @@
       <button data-tab="models" class="selected"><span>▦</span>Models</button>
       <button data-tab="body"><span>◉</span>Body</button>
       <button data-tab="create"><span>✦</span>Create</button>
+      <button data-tab="image"><span>▧</span>Image</button>
       <button data-tab="video"><span>▶</span>Video</button>
       <button data-tab="wardrobe"><span>◇</span>Wardrobe</button>
       <button data-tab="details"><span>⌘</span>Details</button>
@@ -28,14 +30,16 @@
     <main id="viewport" aria-label="3D preview">
       <div class="viewport-bar"><div><span class="eyebrow">WORKSPACE /</span><strong id="view-label">Choose a model</strong></div><span id="mode-badge" class="badge">Model library</span></div>
       <canvas id="canvas" tabindex="0" aria-label="3D view. Arrow keys orbit, plus and minus zoom, F frames the model."></canvas>
+      <section id="image-workspace" aria-label="Private image studio" hidden></section>
       <section id="video-workspace" aria-label="Private video studio" hidden></section>
       <div class="view-controls"><button id="frame">Frame</button><button id="portrait">Portrait</button><button id="front">Front</button><button id="side">Side</button><button id="back">Back</button><button id="wire" aria-pressed="false">Wireframe</button><button id="snapshot">Snapshot</button></div>
       <div class="viewport-footer"><span id="mesh-stats">No model loaded</span><span>Orbit · drag &nbsp; Pan · right-drag &nbsp; Zoom · scroll</span></div>
     </main>
   </div>
   <footer><span id="status" role="status" aria-live="polite">Loading studio…</span><span id="backend-status">Browser workspace</span></footer>
-  <dialog id="connection-dialog"><form method="dialog"><h2>Connect a worker</h2><p>Your model library lives on the Python worker. AI generation also needs provider credentials. Local GLB import works independently.</p><label>Backend URL<input id="backend-url" type="url" placeholder="https://your-worker.example.com"></label><label>Studio access token<input id="backend-token" type="password" autocomplete="off"></label><p class="hint">Use a private HTTPS worker. The token stays in this tab's memory.</p><div class="row"><button value="cancel">Cancel</button><button id="connect-confirm" value="connect" class="primary">Connect</button></div></form></dialog>
+  <dialog id="connection-dialog"><form method="dialog"><h2>Connect a worker</h2><p>Your private image and video generation runs on the connected local worker. Legacy provider-backed 3D generation may still require provider credentials.</p><label>Backend URL<input id="backend-url" type="url" placeholder="https://your-worker.example.com"></label><label>Studio access token<input id="backend-token" type="password" autocomplete="off"></label><p class="hint">Use a private HTTPS worker. The token stays in this tab's memory.</p><div class="row"><button value="cancel">Cancel</button><button id="connect-confirm" value="connect" class="primary">Connect</button></div></form></dialog>
   <script type="module" src="/studio/app.js"></script>
+  <script type="module" src="/studio/image-studio.js"></script>
   <script type="module" src="/studio/video-studio.js"></script>
 </body>
 </html>
