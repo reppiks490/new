@@ -223,3 +223,48 @@ def verify_directors_cut(
         raise TimelineValidationError(
             'director cut snapshot does not match current project metadata'
         )
+
+
+def restore_directors_cut(
+    project: 'CinematicProject', snapshot: dict
+) -> DirectorsCut:
+    """Safely restore JSON-decoded metadata against authoritative project state.
+
+    No untrusted serialized dataclass is accepted verbatim. Shot identifiers
+    and local cut ranges are extracted, the entire cut is reconstructed from
+    the current project, and every serialized field must match the canonical
+    regenerated form. Unknown keys, stale revisions, changed annotations,
+    forged hashes, invalid bounds and non-JSON-native representations fail.
+    This is a metadata conformance check, never media authenticity proof.
+    """
+    if type(snapshot) is not dict or type(snapshot.get('schema_version')) is not int:
+        raise TimelineValidationError('director cut snapshot has an invalid schema')
+    if snapshot['schema_version'] != 1:
+        raise TimelineValidationError('unsupported director cut snapshot schema')
+
+    segments = snapshot.get('segments')
+    if type(segments) is not list or not segments:
+        raise TimelineValidationError('director cut snapshot needs a nonempty segments array')
+    selected: list[CutSelection] = []
+    for item in segments:
+        if type(item) is not dict:
+            raise TimelineValidationError('director cut snapshot has an invalid segment')
+        shot_id = item.get('shot_id')
+        start = item.get('source_in_frame')
+        end = item.get('source_out_frame_exclusive')
+        if (
+            type(shot_id) is not str
+            or type(start) is not int
+            or type(end) is not int
+        ):
+            raise TimelineValidationError('director cut snapshot has invalid source offsets')
+        selected.append(CutSelection(shot_id, start, end))
+    regenerated = plan_directors_cut(project, selected)
+    # JSON transforms dataclass tuple fields into arrays. Compare the precise
+    # serialized representation, so hidden extra keys or altered flags fail.
+    canonical = json.loads(json.dumps(regenerated.to_dict()))
+    if snapshot != canonical:
+        raise TimelineValidationError(
+            'director cut snapshot does not match current project metadata'
+        )
+    return regenerated
