@@ -34,9 +34,15 @@ _ENGINE_REGISTRY: dict[str, ImageToImageEngine] = {}
 
 
 def _ensure_builtin_engines() -> None:
+    # Prefer the direct reference runner when a high-VRAM GPU can support it.
+    # On 8 GB-class GPUs, the official ComfyUI int8 workflow becomes the
+    # production path once its local worker/model files are ready.
     if 'flux3_klein_local' not in _ENGINE_REGISTRY:
         from app.image.adapters.flux3_klein import Flux3KleinLocalEngine
         register_engine(Flux3KleinLocalEngine())
+    if 'flux3_klein_comfy_int8' not in _ENGINE_REGISTRY:
+        from app.image.adapters.flux3_comfy import Flux3KleinComfyEngine
+        register_engine(Flux3KleinComfyEngine())
 
 
 def register_engine(engine: ImageToImageEngine, *, replace: bool = False) -> None:
