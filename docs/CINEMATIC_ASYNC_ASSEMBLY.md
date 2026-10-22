@@ -30,7 +30,10 @@ authentication and normal same-origin/CORS protections:
    \`queued\`, \`running\`, \`succeeded\`, \`failed\`.
 4. \`GET /api/video/projects/{project_id}/assembly-jobs?limit=50&offset=0\` —
    paginated history with \`total\` and \`has_more\`.
-5. Once \`succeeded\`, the job includes the opaque \`asset_url\` of a
+5. \`POST /api/video/projects/{project_id}/assembly-jobs/{job_id}/cancel\` —
+   idempotently cancels a **queued** assembly. Returns HTTP 409 if the job
+   is already running or finished; it never claims to kill FFmpeg.
+6. Once \`succeeded\`, the job includes the opaque \`asset_url\` of a
    validated master MP4, which must be retrieved using the **same private
    bearer-header fetch** as the existing video assets (never a tokenized URL).
 
@@ -50,6 +53,7 @@ names \`ffmpeg\` and \`ffmpeg.exe\`.
   history is explicitly paginated.
 - The local CPU executor drains queued jobs oldest-first. The queue has a
   documented bounded outstanding capacity of 32, returning HTTP 429 once full.
+- \`cancelled\` jobs are excluded from dispatch and terminal history is preserved.
 - At application startup, \`queued\` jobs are dispatched. Formerly \`running\`
   jobs become \`failed/Interrupted\`, because a killed FFmpeg process cannot be
   safely declared complete or automatically resumed in-place. The user can
