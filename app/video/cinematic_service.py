@@ -15,7 +15,7 @@ from app.video.cinematic_models import (
     RenderPlan,
     merge_continuity,
 )
-from app.video.cinematic_requests import CompileProjectRequest
+from app.video.cinematic_requests import CompileProjectRequest, ShotRenderRequest
 from app.video.models import EngineCapabilities
 from app.video.storage import (
     compare_and_swap_video_project,
@@ -289,3 +289,20 @@ def build_render_plan(
         engine.capabilities(),
         require_assets=require_assets,
     )
+
+
+def pack_engine_prompt(plan: RenderPlan, *, max_chars: int = 2000) -> str:
+    from app.video.cinematic_rendering import pack_engine_prompt as implementation
+
+    return implementation(plan, max_chars=max_chars)
+
+
+def render_shot(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    request: ShotRenderRequest,
+) -> dict:
+    from app.video.cinematic_rendering import render_shot as implementation
+
+    return implementation(project_id, scene_id, shot_id, request)
