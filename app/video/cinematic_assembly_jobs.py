@@ -32,6 +32,10 @@ class AssemblyQueueFull(RuntimeError):
     pass
 
 
+class AssemblyCancellationConflict(RuntimeError):
+    """Only a queued assembly can be cancelled safely."""
+
+
 def _now() -> float:
     return time.time()
 
@@ -121,6 +125,41 @@ def get_master_assembly_job(project_id: str, identifier: str) -> dict:
     if job.get("project_id") != project_id:
         raise KeyError(identifier)
     return job
+
+
+def cancel_queued_master_assembly(project_id: str, identifier: str) -> dict:
+    """Atomically cancel an unclaimed job without touching FFmpeg.
+
+    Both cancellation and _claim_next take BEGIN IMMEDIATE, so the queue
+    never reports an already-claimed running encode as cancelled.
+    """
+    now = _now()
+    with connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT data FROM records WHERE id=? AND kind=?",
+            (identifier, _KIND),
+        ).fetchone()
+        if row is None:
+            raise KeyError(identifier)
+        payload = json.loads(row[0])
+        if payload.get("project_id") != project_id:
+            raise KeyError(identifier)
+        if payload.get("status") == "cancelled":
+            return {"id": identifier, **payload}
+        if payload.get("status") != "queued":
+            raise AssemblyCancellationConflict(
+                "Assembly has already started or finished; it cannot be cancelled via the queue."
+            )
+        payload.update(
+            status="cancelled", stage="Cancelled", progress=0,
+            error=None, finished_at=now, updated_at=now,
+        )
+        db.execute(
+            "UPDATE records SET data=?,updated=? WHERE id=? AND kind=?",
+            (json.dumps(payload, allow_nan=False), now, identifier, _KIND),
+        )
+    return {"id": identifier, **payload}
 
 
 def list_master_assembly_jobs(
