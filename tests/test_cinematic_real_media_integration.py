@@ -27,7 +27,10 @@ def _require_video_tools() -> tuple[str, str]:
     ffprobe = shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
         message = "Real-media acceptance requires both local ffmpeg and ffprobe"
-        if os.environ.get("CI") == "true":
+        # The dedicated real-media job opts in and provisions FFmpeg + FFprobe.
+        # Standard Python matrix runs may lack system media binaries; skipping
+        # there never constitutes real-media release evidence.
+        if os.environ.get("CINEMATIC_REQUIRE_REAL_MEDIA") == "1":
             pytest.fail(message)
         pytest.skip(message)
     return ffmpeg, ffprobe
