@@ -428,6 +428,67 @@ def _run_master_ffmpeg(command: list[str], **kwargs):
     return subprocess.run(command, **kwargs)
 
 
+def _run_master_ffprobe(command: list[str], **kwargs):
+    """Probe runner seam; tests may stub it without making a real-media claim."""
+    return subprocess.run(command, **kwargs)
+
+
+def _verify_master_probe(
+    output_path, *, project: CinematicProject, shot_count: int, expected_seconds: float,
+    ffprobe_path: str,
+) -> dict:
+    """Fail closed when final media metadata disagrees with the delivery plan.
+
+    ffprobe verifies stream metadata, not artistic quality or frame decode.
+    A real decoding/visual playback QA gate remains mandatory for release.
+    """
+    command = [
+        ffprobe_path, '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries',
+        'stream=codec_type,codec_name,width,height,avg_frame_rate,nb_frames,duration:format=duration',
+        '-of', 'json', str(output_path),
+    ]
+    result = _run_master_ffprobe(
+        command, capture_output=True, text=True, timeout=120, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError('ffprobe rejected the assembled master')
+    try:
+        info = json.loads(result.stdout)
+        stream = next(item for item in info['streams'] if item.get('codec_type') == 'video')
+        width = int(stream['width'])
+        height = int(stream['height'])
+        fps = Fraction(stream['avg_frame_rate'])
+        frames = int(stream['nb_frames'])
+        duration = float(info.get('format', {}).get('duration') or stream['duration'])
+    except (KeyError, TypeError, ValueError, StopIteration, ZeroDivisionError, IndexError) as exc:
+        raise RuntimeError('ffprobe did not provide complete valid video metadata') from exc
+    expected_width, expected_height = _master_size(project)
+    if (width, height) != (expected_width, expected_height):
+        raise RuntimeError('Master dimensions do not match the requested delivery dimensions')
+    if fps != project.delivery_fps:
+        raise RuntimeError('Master FPS does not match the requested delivery FPS')
+    if stream.get('codec_name') != 'h264':
+        raise RuntimeError('Master codec does not match the FFmpeg H.264 delivery profile')
+    if not math.isfinite(duration) or duration <= 0 or frames <= 0:
+        raise RuntimeError('Master duration or video frame count is invalid')
+    tolerance_frames = max(2, shot_count + 1)
+    if abs(frames - expected_seconds * project.delivery_fps) > tolerance_frames:
+        raise RuntimeError('Master frame count does not match the authored timeline')
+    if abs(duration - expected_seconds) > max(0.1, tolerance_frames / project.delivery_fps):
+        raise RuntimeError('Master duration does not match the authored timeline')
+    return {
+        'codec': stream['codec_name'],
+        'width': width,
+        'height': height,
+        'fps': str(fps),
+        'frame_count': frames,
+        'duration_seconds': duration,
+        'probe_metadata_verified': True,
+        'full_decode_verified': False,
+    }
+
+
 def _master_size(project: CinematicProject) -> tuple[int, int]:
     # The selected label expresses height; width follows the aspect ratio.
     height = _RESOLUTION_HEIGHT[project.delivery_resolution]
@@ -462,9 +523,19 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         )
 
     source_ids = [job['asset_id'] for _, _, job in sources]
+    source_hashes = []
+    for identifier in source_ids:
+        with video_asset_path(identifier, 'mp4').open('rb') as source_file:
+            source_hashes.append(hashlib.file_digest(source_file, 'sha256').hexdigest())
+    # Hash actual media bytes and timeline controls, not just opaque file IDs.
+    source_identity = [
+        project.id, project.revision, project.delivery_resolution,
+        project.delivery_fps, project.aspect_ratio,
+        [(shot.shot_id, shot.duration_seconds, job['id'], digest)
+         for (_, shot, job), digest in zip(sources, source_hashes)],
+    ]
     fingerprint = hashlib.sha256(
-        ('|'.join([project.id or '', str(project.revision), *source_ids,
-                   project.delivery_resolution, str(project.delivery_fps)])).encode('utf-8')
+        json.dumps(source_identity, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
     ).hexdigest()
     for existing in list_video_records('video_master'):
         if existing.get('project_id') != project_id or existing.get('source_digest') != fingerprint:
@@ -473,8 +544,12 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             path = video_asset_path(existing['asset_id'], 'mp4')
         except (KeyError, ValueError, TypeError):
             continue
-        if path.is_file() and path.stat().st_size >= 12:
-            return existing
+        if (existing.get('probe_metadata_verified') and path.is_file()
+                and path.stat().st_size >= 12):
+            with path.open('rb') as cached_file:
+                cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
+            if cached_hash == existing.get('sha256'):
+                return existing
 
     width, height = _master_size(project)
     output_id = uuid.uuid4().hex
@@ -513,6 +588,16 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         from app.video.jobs import _valid_mp4
         if not _valid_mp4(output_path):
             raise RuntimeError('FFmpeg did not create a valid MP4 container')
+        total_seconds = sum(shot.duration_seconds for _, shot, _ in sources)
+        ffprobe_path = 'ffprobe.exe' if request.ffmpeg_path == 'ffmpeg.exe' else 'ffprobe'
+        probe = _verify_master_probe(
+            output_path, project=project, shot_count=len(sources),
+            expected_seconds=total_seconds, ffprobe_path=ffprobe_path,
+        )
+        # Do not advertise a freshly finished master against an edited project.
+        latest_revision = get_project(project_id).revision
+        if latest_revision != project.revision:
+            raise ProjectRevisionConflict(project_id, project.revision, latest_revision)
         with output_path.open('rb') as handle:
             digest = hashlib.file_digest(handle, 'sha256').hexdigest()
         record = put_video_record('video_master', {
@@ -524,13 +609,15 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             'source_shot_ids': [shot.shot_id for _, shot, _ in sources],
             'timeline_seconds': sum(shot.duration_seconds for _, shot, _ in sources),
             'source_job_ids': [job['id'] for _, _, job in sources],
+            'source_asset_hashes': source_hashes,
             'asset_id': output_id,
             'asset_url': f'/api/video/assets/{output_id}.mp4',
             'sha256': digest,
             'size_bytes': output_path.stat().st_size,
             'delivery_fps': project.delivery_fps,
             'delivery_resolution': project.delivery_resolution,
-            'actual_video_probe_verified': False,
+            'actual_video_probe_verified': True,
+            'probe': probe,
             'has_audio': False,
             'created_at': _utcnow().isoformat(),
         })
