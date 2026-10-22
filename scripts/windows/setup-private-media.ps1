@@ -61,8 +61,9 @@ function Invoke-HfDownloadCandidate {
         [Parameter(Mandatory=$true)][string]$RelativePath
     )
     Write-Host "Trying official diffusion checkpoint: $RelativePath"
-    & $HfExe download black-forest-labs/flux-3-image-klein-comfy $RelativePath --local-dir $ModelRoot
-    return ($LASTEXITCODE -eq 0)
+    & $HfExe download black-forest-labs/flux-3-image-klein-comfy $RelativePath --local-dir $ModelRoot | Out-Host
+    $ExitCode = $LASTEXITCODE
+    return ($ExitCode -eq 0)
 }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
