@@ -344,6 +344,7 @@ def project_render_status(project_id: str) -> dict:
     project = get_project(project_id)
     counts = {'missing': 0, 'active': 0, 'failed': 0, 'succeeded': 0}
     shots: list[dict] = []
+    missing_assets = 0
     for scene in project.scenes:
         for shot in scene.shots:
             job = _linked_shot_job(project, scene, shot)
@@ -357,6 +358,13 @@ def project_render_status(project_id: str) -> dict:
             else:
                 category = 'missing'
             counts[category] += 1
+            if category == 'succeeded':
+                try:
+                    asset_path = video_asset_path(job['asset_id'], 'mp4')
+                    if not asset_path.is_file() or asset_path.stat().st_size < 12:
+                        missing_assets += 1
+                except (KeyError, TypeError, ValueError, OSError):
+                    missing_assets += 1
             shots.append({
                 'scene_id': scene.scene_id,
                 'shot_id': shot.shot_id,
@@ -368,7 +376,8 @@ def project_render_status(project_id: str) -> dict:
         'project_revision': project.revision,
         'total_shots': len(shots),
         **counts,
-        'ready_for_assembly': bool(shots) and counts['succeeded'] == len(shots),
+        'missing_output_assets': missing_assets,
+        'ready_for_assembly': bool(shots) and counts['succeeded'] == len(shots) and not missing_assets,
         'shots': shots,
     }
 
@@ -467,12 +476,14 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
     output_id = uuid.uuid4().hex
     output_path = video_asset_path(output_id, 'mp4')
     filters = []
-    for index, _ in enumerate(sources):
+    for index, (_, shot, _) in enumerate(sources):
         filters.append(
             f'[{index}:v:0]fps={project.delivery_fps},'
             f'scale={width}:{height}:force_original_aspect_ratio=decrease,'
             f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,'
-            f'setsar=1,format=yuv420p,setpts=PTS-STARTPTS[v{index}]'
+            f'setsar=1,format=yuv420p,'
+            f'tpad=stop_mode=clone:stop_duration={shot.duration_seconds},'
+            f'trim=duration={shot.duration_seconds},setpts=PTS-STARTPTS[v{index}]'
         )
     filters.append(
         ''.join(f'[v{index}]' for index in range(len(sources)))
@@ -507,6 +518,7 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             'source_digest': fingerprint,
             'source_shot_count': len(sources),
             'source_shot_ids': [shot.shot_id for _, shot, _ in sources],
+            'timeline_seconds': sum(shot.duration_seconds for _, shot, _ in sources),
             'source_job_ids': [job['id'] for _, _, job in sources],
             'asset_id': output_id,
             'asset_url': f'/api/video/assets/{output_id}.mp4',
