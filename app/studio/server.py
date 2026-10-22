@@ -10,12 +10,15 @@ from app.studio.parameters import WEB
 from app.studio.router import router
 from app.video.router import router as video_router
 from app.video.jobs import interrupt_active_video_jobs
+from app.image.router import router as image_router
+from app.image.jobs import interrupt_active_image_jobs
 from app.studio import storage
 
 @asynccontextmanager
 async def lifespan(app):
     storage.interrupt_active_jobs()
     interrupt_active_video_jobs()
+    interrupt_active_image_jobs()
     yield
 
 app = FastAPI(title='Forma 3D Studio', version='1.6.0', lifespan=lifespan)
@@ -43,6 +46,7 @@ async def private_api(request: Request, call_next):
 
 app.include_router(router)
 app.include_router(video_router)
+app.include_router(image_router)
 app.mount('/studio', StaticFiles(directory=WEB), name='studio')
 
 @app.get('/')
