@@ -78,7 +78,7 @@ class EditorialTimeline:
         """
         if type(frame) is not int or frame < 0 or frame >= self.actual_frames:
             raise IndexError('frame position is outside the editorial timeline')
-        index = bisect_right([clip.end_frame for clip in self.clips], frame)
+        index = bisect_right(self.clips, frame, key=lambda clip: clip.end_frame)
         if index >= len(self.clips):
             raise IndexError('frame position has no associated clip')
         return self.clips[index]
@@ -161,7 +161,6 @@ def preflight_editorial_timeline(project: 'CinematicProject') -> EditorialTimeli
             warnings.append(f'Scene {scene.scene_id} ordinal does not match sequence position')
         if not scene.shots:
             warnings.append(f'Scene {scene.scene_id} contains no shots')
-        scene_total = Decimal(0)
         scene_start_frame = _round_frames(cumulative, fps)
         scene_continuity = merge_continuity(project.continuity_bible, scene.continuity_patch)
 
@@ -171,7 +170,6 @@ def preflight_editorial_timeline(project: 'CinematicProject') -> EditorialTimeli
             duration = _seconds(shot.duration_seconds, f'shot {shot.shot_id}')
             start = _round_frames(cumulative, fps)
             cumulative += duration
-            scene_total += duration
             end = _round_frames(cumulative, fps)
             if end <= start:
                 raise TimelineValidationError(
