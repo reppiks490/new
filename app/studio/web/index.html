@@ -5,6 +5,7 @@
   <meta name="theme-color" content="#111720"><title>Forma · 3D Studio</title>
   <link rel="stylesheet" href="/studio/style.css">
   <link rel="stylesheet" href="/studio/video-studio.css">
+  <link rel="stylesheet" href="/studio/cinematic-studio.css">
   <link rel="stylesheet" href="/studio/image-studio.css">
   <script type="importmap">{"imports":{"three":"/studio/vendor/three.module.js"}}</script>
 </head>
@@ -40,6 +41,6 @@
   <dialog id="connection-dialog"><form method="dialog"><h2>Connect a worker</h2><p>Your private image and video generation runs on the connected local worker. Legacy provider-backed 3D generation may still require provider credentials.</p><label>Backend URL<input id="backend-url" type="url" placeholder="https://your-worker.example.com"></label><label>Studio access token<input id="backend-token" type="password" autocomplete="off"></label><p class="hint">Use a private HTTPS worker. The token stays in this tab's memory.</p><div class="row"><button value="cancel">Cancel</button><button id="connect-confirm" value="connect" class="primary">Connect</button></div></form></dialog>
   <script type="module" src="/studio/app.js"></script>
   <script type="module" src="/studio/image-studio.js"></script>
-  <script type="module" src="/studio/video-studio.js"></script>
+  <script type="module" src="/studio/cinematic-launcher.js"></script>
 </body>
 </html>
