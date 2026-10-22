@@ -82,11 +82,17 @@ jobs:
 
       - name: Boot container and smoke-test /health
         run: |
+          set -Eeuo pipefail
+          cleanup() {
+            echo "=== Container diagnostics (including failed health checks) ==="
+            docker logs c3d 2>&1 || true
+            docker rm -f c3d >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
           docker run -d --name c3d -p 8000:8000 character3d-masterbuild:ci
           for i in $(seq 1 20); do
             if curl -sf http://localhost:8000/health; then break; fi
             sleep 1
           done
+          # The last probe is authoritative; a failed health check fails CI.
           curl -sf http://localhost:8000/health
-          docker logs c3d
-          docker stop c3d
