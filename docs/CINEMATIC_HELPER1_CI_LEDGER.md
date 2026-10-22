@@ -30,6 +30,16 @@ Helper Bot 1 owns build verification and test evidence: Python 3.11/3.12 matrix 
 
 Do not mark these tests passing until an immutable GitHub CI run has executed the branch head.
 
+## Browser regression exposed by the independent matrix
+
+The new CI behavior was exercised by workflow **39859950662** at helper commit `90564c43618f57f8f81585bc54a4a2e050d3e372`:
+
+- Python 3.11 executed to completion instead of being cancelled.
+- The Python 3.11 and 3.12 pytest JUnit artifacts both uploaded successfully.
+- Docker succeeded.
+- The Node browser suite actually executed after a Python failure, exposing **43 passed, 1 failed**. The sole failure was a legacy assertion in `tests/test_video_privacy.mjs` expecting an eager `/studio/video-studio.js` script tag. The actual UI now uses `cinematic-launcher.js` to lazy-import `./video-studio.js`.
+- The test now verifies the real launcher and dynamic module link. This is a test-contract correction, not a hidden failure exemption. **Fresh CI on the new head is still required** before claiming the browser suite green.
+
 ## Acceptance gates before combining branches
 
 - [ ] Confirm the Python 3.11 leg executes to completion rather than being cancelled when Python 3.12 fails.
