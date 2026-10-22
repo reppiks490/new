@@ -544,8 +544,9 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             path = video_asset_path(existing['asset_id'], 'mp4')
         except (KeyError, ValueError, TypeError):
             continue
-        if (existing.get('probe_metadata_verified') and path.is_file()
-                and path.stat().st_size >= 12):
+        probe = existing.get('probe')
+        if (isinstance(probe, dict) and probe.get('probe_metadata_verified') is True
+                and path.is_file() and path.stat().st_size >= 12):
             with path.open('rb') as cached_file:
                 cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
             if cached_hash == existing.get('sha256'):
