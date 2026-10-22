@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -31,5 +32,4 @@ class AssembleMasterRequest(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
     expected_revision: int = Field(ge=1)
-    ffmpeg_path: str = Field(default='ffmpeg', pattern=r'^ffmpeg(?:\.exe)?
-)
+    ffmpeg_path: Literal['ffmpeg', 'ffmpeg.exe'] = 'ffmpeg'
