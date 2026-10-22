@@ -42,7 +42,8 @@ frames are half-open intervals, so clip `[0, 1200)` contributes precisely
   only changed **field names** are reported, not sensitive field values.
 - Project content, prompts, source-media URLs and credentials never enter the
   EDL.
-- Transition descriptors are annotations only. They **do not** assert that a
+- Transition intent is reduced to presence flags, never free-text values. These
+  flags **do not** assert that a
   video crossfade, cut, frame bridge, or any other physical effect was rendered.
 - Neither an EDL nor the absence of warnings establishes asset integrity,
   audio sync, codec compatibility, render success, or readiness to assemble.
