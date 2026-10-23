@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Iterable
 
 from app.video.cinematic_compiler import compile_project_prompt
@@ -14,6 +15,7 @@ from app.video.cinematic_models import (
     ProjectUpdateRequest,
     RenderPlan,
     merge_continuity,
+    MAX_FILM_DURATION_SECONDS,
 )
 from app.video.cinematic_requests import CompileProjectRequest, ShotRenderRequest
 from app.video.models import EngineCapabilities
@@ -45,12 +47,23 @@ class ProjectRevisionConflict(RuntimeError):
         )
 
 
+class FilmDurationExceeded(ValueError):
+    """The authored target or actual shot timeline exceeds the current limit."""
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _project_payload(project: CinematicProject) -> dict:
     return project.model_dump(mode='json', exclude={'id'})
+
+
+def enforce_film_duration(project: CinematicProject) -> None:
+    """Keep legacy projects readable while blocking overlong edits and work."""
+    actual = sum((Decimal(str(shot.duration_seconds)) for scene in project.scenes for shot in scene.shots), Decimal(0))
+    if project.target_duration_seconds > MAX_FILM_DURATION_SECONDS or actual > Decimal(MAX_FILM_DURATION_SECONDS) + Decimal('0.000001'):
+        raise FilmDurationExceeded('Film duration cannot exceed 600 seconds (10 minutes). Shorten the target and shot timeline before rendering.')
 
 
 def create_project(request: ProjectCreateRequest) -> CinematicProject:
@@ -69,6 +82,7 @@ def create_project(request: ProjectCreateRequest) -> CinematicProject:
         created_at=now,
         updated_at=now,
     )
+    enforce_film_duration(project)
     record = put_video_record('video_project', _project_payload(project))
     return CinematicProject.model_validate(record)
 
@@ -92,6 +106,7 @@ def update_project(project_id: str, request: ProjectUpdateRequest) -> CinematicP
     data['revision'] = current.revision + 1
     data['updated_at'] = _utcnow()
     candidate = CinematicProject.model_validate(data)
+    enforce_film_duration(candidate)
     payload = _project_payload(candidate)
 
     updated, actual_revision, record = compare_and_swap_video_project(
@@ -111,6 +126,8 @@ def compile_project(
     project = get_project(project_id)
     if project.revision != request.expected_revision:
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
+
+    enforce_film_duration(project)
 
     engine_cap = request.engine_max_duration_seconds
     if request.engine_name:
@@ -222,6 +239,7 @@ def build_render_plan_from_objects(
     *,
     require_assets: bool = True,
 ) -> RenderPlan:
+    enforce_film_duration(project)
     if project.id is None:
         raise ValueError('project must have a persisted id before rendering')
     if not capabilities.available:
@@ -394,6 +412,7 @@ def project_render_status(project_id: str) -> dict:
 def render_project_missing(project_id: str, request: BatchRenderRequest) -> dict:
     """Submit unscheduled/failed shots in order; never duplicate active jobs."""
     project = get_project(project_id)
+    enforce_film_duration(project)
     if project.revision != request.expected_revision:
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
     submitted: list[dict] = []
@@ -505,6 +524,7 @@ def _master_size(project: CinematicProject) -> tuple[int, int]:
 def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> dict:
     """Concatenate ordered local shot videos into a separate, hashed master."""
     project = get_project(project_id)
+    enforce_film_duration(project)
     if project.revision != request.expected_revision:
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
 

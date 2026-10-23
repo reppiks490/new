@@ -19,6 +19,7 @@ from app.video.cinematic_requests import (
 )
 from app.video.cinematic_service import (
     MasterAssemblyNotReady,
+    FilmDurationExceeded,
     ProjectRevisionConflict,
     assemble_project_master,
     build_render_plan,
@@ -292,6 +293,8 @@ def queue_cinematic_master_assembly(project_id: str, request: AssembleMasterRequ
         raise HTTPException(409, str(exc)) from exc
     except AssemblyQueueFull as exc:
         raise HTTPException(429, str(exc)) from exc
+    except FilmDurationExceeded as exc:
+        raise HTTPException(422, str(exc)) from exc
     except (KeyError, ValueError) as exc:
         raise HTTPException(404, 'Cinematic project not found') from exc
     except RuntimeError as exc:
