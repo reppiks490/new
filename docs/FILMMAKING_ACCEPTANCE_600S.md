@@ -30,6 +30,11 @@ branches and open validation/provenance proposals remain unchanged.
   model controls. Those limits must remain visible in any precision claim.
 - Runtime probe executed here: **no NVIDIA GPU, no CUDA model runtime, no local
   model weights, engine unavailable**. FFmpeg and FFprobe are available.
+- Connected cloud account checks: Runway authenticated successfully but exposes
+  no video models on its Free workspace; the available activation path was
+  displayed without purchasing anything. Hugging Face authenticated successfully
+  as a non-Pro account, but its jobs tool returned `UNAVAILABLE` before any
+  job could be listed or started. No paid GPU job or model generation was run.
 - WAN 3.0 superiority has not been tested or established. Primary-source
   benchmark research was blocked by an exhausted Firecrawl account and a
   Tavily connection requiring reauthentication; neither result is evidence of
