@@ -70,6 +70,7 @@ test('verified ready master only exposes exact private asset path, not arbitrary
     }),{projectId:PROJECT,jobId:JOB});
     assert.equal(tampered.assetUrl,null);
     assert.equal(assemblyStatusSummary(tampered).ready,false);
+    assert.equal(assemblyStatusSummary(tampered).status,'Master verification unavailable');
   }
 });
 
