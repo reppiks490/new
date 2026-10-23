@@ -216,3 +216,17 @@ test('quick-hide aborts a pending authenticated request before any response byte
   assert.equal(aborted,1);
   assert.deepEqual(issued,[]);
 });
+
+
+test('oversize header aborts the authenticated network transfer before body allocation',async()=>{
+  let requestSignal=null;
+  const fixture=fakeResponse({reported:2000,bytes:500});
+  const {preview,issued}=setup({
+    limit:1000,
+    request:async(_path,{signal})=>{requestSignal=signal;return fixture.response;},
+  });
+  await assert.rejects(preview.open(VERIFIED),/too large/i);
+  assert.equal(fixture.reads(),0);
+  assert.equal(requestSignal?.aborted,true);
+  assert.deepEqual(issued,[]);
+});
