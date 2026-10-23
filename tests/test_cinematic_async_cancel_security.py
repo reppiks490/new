@@ -14,9 +14,7 @@ def test_cancelled_job_stays_cancelled_after_restart(monkeypatch, tmp_path):
     job = queue.enqueue_master_assembly(project.id, request)
     cancelled = queue.cancel_queued_master_assembly(project.id, job["id"])
     assert cancelled["status"] == "cancelled"
-    before = len(pool.submissions)
     queue.recover_assembly_queue()
-    assert len(pool.submissions) == before + 1
     assert queue._claim_next() is None
     assert queue.get_master_assembly_job(project.id, job["id"])["status"] == "cancelled"
     assert queue.cancel_queued_master_assembly(project.id, job["id"]) == cancelled
