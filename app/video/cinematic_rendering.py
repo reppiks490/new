@@ -163,7 +163,14 @@ def render_shot(
             ),
         )
 
+    provenance_digest = service._shot_render_provenance_digest(
+        project, scene, shot,
+        engine_name=plan.engine_name,
+        native_fps=plan.generation_fps,
+        native_resolution=plan.generation_resolution,
+    )
     metadata = {
+        'render_intent_sha256': provenance_digest,
         'project_id': project_id,
         'scene_id': scene_id,
         'shot_id': shot_id,

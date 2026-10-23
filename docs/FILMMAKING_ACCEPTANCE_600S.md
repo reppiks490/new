@@ -9,8 +9,11 @@ and an evidence gate, not a claim that the target has been achieved.
 ## Current implementation and observed limits
 
 This continuation uses the frozen cinematic integration snapshot
-`2c771a134e7153c7498c1d9d3529e5574b695ca7` in an isolated worktree. Other source
-branches and open validation/provenance proposals remain unchanged.
+`2c771a134e7153c7498c1d9d3529e5574b695ca7` in an isolated worktree. A subsequent
+integration candidate selectively incorporates the provenance, launcher privacy
+and mobile-client proposals without changing their source branches. See
+[the resumed proof ledger](FILMMAKING_PROOF_PROGRESS_20261023.md) for its scope,
+test evidence and remaining gates.
 
 - `cinematic_models.py`, `cinematic_service.py`, and `cinematic_assembly_jobs.py`
   now limit new edits and actual shot timelines to **600 seconds** before work.
@@ -55,8 +58,9 @@ filmmaking system or replace it with an unvalidated integration.
    execution identity and hashes; a fixture engine cannot satisfy this gate.
 3. A generated/edited project at up to 600 seconds, with verified source-image
    bytes and shot/render-input freshness, resumable jobs, and private retrieval.
-   Reconcile the outstanding render-provenance and client reconnect proposals
-   on the exact combined commit before sign-off.
+   Verify the integrated render-provenance and client reconnect code on the
+   combined commit. Wire and verify master assembly in the production UI;
+   the existing master-client module alone does not establish that flow.
 4. The resulting MP4 fully decodes; FFprobe confirms actual dimensions, FPS,
    duration and frame count against the requested delivery. Clearly identify
    rescaling, repeated frames or interpolation separately from native generation.
