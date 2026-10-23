@@ -143,8 +143,10 @@ def test_two_same_revision_assemble_calls_publish_only_one_master(monkeypatch, t
     # one published master, not two expensive encodes and duplicate records.
     masters = [item for item in storage.list_video_records("video_master")
                if item.get("project_id") == project.id]
+    assert len(masters) == 1, (
+        f"Concurrent identical assembly published {len(masters)} ready master records"
+    )
     assert len(calls) == 1, (
         f"Concurrent identical assembly executed FFmpeg {len(calls)} times"
     )
-    assert len(masters) == 1
     assert results[0]["id"] == results[1]["id"] == masters[0]["id"]
