@@ -81,3 +81,76 @@ migrations. The lead's merge/target branch is not rewritten. Merge only after
 fresh *combined-head* Python 3.11/3.12, browser regression and Docker CI
 succeed and security/release blockers are separately dispositioned. This helper
 does not own the lead branch or the CI repair.
+
+
+## Non-destructive director's-cut planning (integration extension)
+
+The optional `app/video/cinematic_directors_cut.py` adds a purely editorial
+composer. It never writes the project, touches job records, reads source media,
+modifies file paths, invokes render engines or claims the final video exists.
+
+```python
+from app.video.cinematic_directors_cut import CutSelection, plan_directors_cut
+from app.video.cinematic_service import get_project
+
+project = get_project(project_id)
+first, second = project.scenes[0].shots[:2]
+cut = plan_directors_cut(project, [
+    CutSelection(first.shot_id, source_in_frame=0, source_out_frame_exclusive=48),
+    CutSelection(second.shot_id),  # full clip
+    CutSelection(first.shot_id, source_in_frame=48),  # intentional reuse
+])
+print(cut.frame_count, cut.cut_digest_sha256)
+print(cut.segment_at_frame(0).shot_id)
+snapshot = cut.to_dict()
+```
+
+### Frame conventions
+
+- Source in/out offsets are local to the chosen shot, **not** global frame
+  addresses. Every interval is half-open `[in, out)`.
+- All offsets are **integer delivery-frame positions**. Frames must exist in
+  the original editorial EDL, and every retained segment has at least one frame.
+- Repetitions and arbitrary reordering are deliberate. The only excluded
+  frames are those explicitly trimmed or omitted by the selected intervals;
+  no **additional** frames are inserted, dropped or stretched.
+- `scene_changed` and `continuity_changed_fields` flag visible editorial
+  risks after reordering, without disclosing screenplay, dialogue, wardrobe
+  descriptions, location names, or any continuity values.
+- Transition presence is only propagated if the selected segment includes
+  the original clip's start/end boundary. These are *intent flags*, never
+  automatic optical transitions or assurance that media processing occurred.
+- Each cut binds to the original project ID/revision and source timeline
+  digest. A separately supplied source timeline is rejected unless it exactly
+  matches a freshly computed source EDL. A cut digest protects reproducibility
+  of metadata decisions, **not source media authenticity**.
+- Archived cut metadata is versioned (`schema_version=1`) and can be validated
+  with `verify_directors_cut(project, cut)`, which reconstructs and compares
+  every public field against the current project revision. Tampering or stale
+  revisions fail explicitly. This is **not** a cryptographic signature or a
+  verification that physical video frames exist.
+- For storage/reload, serialize `cut.to_dict()` to JSON, parse the saved JSON,
+  then call `restore_directors_cut(project, decoded_payload)`. The loader
+  reconstructs canonical shot selections from current authoritative project
+  state and rejects changed fields, injected keys, altered hashes, malformed
+  frame offsets or obsolete revisions. Serialized object data is never blindly
+  trusted or executed. This still cannot establish media authenticity.
+
+### Safe next integration points
+
+An authenticated mobile project editor can preview a cut's metadata, require
+explicit user confirmation to save it as a named edit version, and separately
+submit conform jobs that validate real source file FPS/duration/codec, media
+bytes and access permissions. No such conform worker or saved-cut endpoint is
+implemented here. In particular, a metadata-perfect cut is **not a finished
+film**, and director-cut planning must never silently enqueue generation or
+charge a provider.
+
+New extension files in integration PR #18:
+
+- `app/video/cinematic_directors_cut.py`
+- `tests/test_cinematic_directors_cut.py`
+
+These changes do not modify the original authorship PR #9, the lead's
+master-assembly source, or Helper 1/2/4 code. Full current-head CI must pass
+before integration.

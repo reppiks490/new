@@ -198,3 +198,31 @@ remaining problems, without substituting these statuses for render-time
 permission, media integrity, CUDA availability, licensing, real ffprobe/decode,
 or iPhone privacy/playing validation. The independent EDL from Helper 3,
 acceptance oracle from Helper 4, and master render state from lead are separate.
+
+
+## Creative-control honesty / ignored-intent diagnostics
+
+The engine-capability preflight now distinguishes two independent questions:
+
+1. Is the stored shot technically compatible with the selected video engine?
+2. Which creative settings are **not actually forwarded** by the current
+   single-image VideoGenerationRequest and therefore cannot be claimed as
+   applied during generation?
+
+Nonblocking, privacy-safe warning codes identify:
+- ADDITIONAL_REFERENCES_NOT_IMAGE_INPUTS: one source image is submitted;
+  additional inherited image references remain stored metadata, not image inputs.
+- SHOT_REFERENCE_NOT_PRIMARY_SOURCE: a shot-specific image reference does not
+  include the inherited first image selected for actual generation.
+  This warning is suppressed if the chosen primary image is also in the
+  shot-local references (even when the same ID is inherited and repeated).
+- LENS_CONTROL_NOT_FORWARDED: lens_mm is authored but not a generation input.
+- FRAMING_NOT_FORWARDED: framing is authored but not a generation input.
+- TRANSITION_NOT_SHOT_GENERATION: transitions may be useful to editorial
+  finishing, but are not submitted as shot-generation controls.
+
+**Important:** warnings do not reduce compatible_shots when the request is
+otherwise legal. A real profile, duration or unsupported motion-control error
+still blocks capability_ready. The warnings' raw authored values are never
+reported. Do not interpret a warning-free preflight as evidence that a model
+understands story continuity or generates professional quality.

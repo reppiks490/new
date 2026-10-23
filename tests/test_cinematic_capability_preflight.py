@@ -173,3 +173,70 @@ def test_capability_scan_scales_to_hundreds_of_shots_without_truncation():
     assert report.capability_ready
     assert report.shot_count == 480
     assert report.compatible_shots == 480
+
+
+def test_unforwarded_lens_framing_transition_and_extra_references_are_warnings():
+    project = _project()
+    first = project.scenes[0].shots[0]
+    first.reference_image_ids = ["b" * 32, "c" * 32]
+    first.lens_mm = 85.0
+    first.framing = "PRIVATE INSPECTOR FRAMING"
+    first.transition_in = "PRIVATE TRANSITION IN"
+    first.transition_out = "PRIVATE TRANSITION OUT"
+    report = audit_engine_capabilities(project, FakeVideoEngine().capabilities())
+    assert report.capability_ready
+    assert report.shot_count == report.compatible_shots == 2
+    assert _codes(report) == [
+        "ADDITIONAL_REFERENCES_NOT_IMAGE_INPUTS",
+        "SHOT_REFERENCE_NOT_PRIMARY_SOURCE",
+        "LENS_CONTROL_NOT_FORWARDED",
+        "FRAMING_NOT_FORWARDED",
+        "TRANSITION_NOT_SHOT_GENERATION",
+    ]
+    assert all(f.severity == "warning" and f.shot_id == first.shot_id for f in report.findings)
+    serialized = json.dumps(report.as_dict())
+    assert "PRIVATE INSPECTOR FRAMING" not in serialized
+    assert "PRIVATE TRANSITION IN" not in serialized
+    assert "PRIVATE TRANSITION OUT" not in serialized
+    assert "b" * 32 not in serialized
+
+
+def test_local_reference_is_primary_when_no_inherited_images():
+    project = _project()
+    project.reference_image_ids = []
+    project.scenes[0].shots[0].reference_image_ids = ["b" * 32]
+    report = audit_engine_capabilities(project, FakeVideoEngine().capabilities())
+    assert report.capability_ready
+    assert not report.findings
+
+
+def test_duplicate_image_ids_do_not_report_phantom_extra_inputs():
+    project = _project()
+    project.scenes[0].shots[0].reference_image_ids = [REF]
+    report = audit_engine_capabilities(project, FakeVideoEngine().capabilities())
+    assert report.capability_ready
+    assert _codes(report) == []
+
+
+def test_unforwarded_control_warning_does_not_hide_real_engine_errors():
+    project = _project()
+    first = project.scenes[0].shots[0]
+    first.framing = "Close"
+    first.camera_motion = "orbit"
+    report = audit_engine_capabilities(project, FakeVideoEngine().capabilities())
+    assert not report.capability_ready
+    assert report.compatible_shots == 1
+    assert _codes(report) == [
+        "SHOT_CAMERA_MOTION_UNSUPPORTED",
+        "FRAMING_NOT_FORWARDED",
+    ]
+
+
+def test_all_shots_have_accurate_warning_coverage_without_sample_ceiling():
+    project = _project(shots=480)
+    project.reference_image_ids = [REF, "b" * 32]
+    report = audit_engine_capabilities(project, FakeVideoEngine().capabilities())
+    assert report.capability_ready
+    assert report.compatible_shots == report.shot_count == 480
+    assert len(report.findings) == 480
+    assert all(f.severity == "warning" for f in report.findings)
