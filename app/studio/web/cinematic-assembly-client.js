@@ -161,16 +161,37 @@ export function createCinematicAssemblyClient({api,sleep=defaultSleep}={}){
     });
   }
 
-  async function findActive(projectId,{pageSize=200}={}){
+  async function findActive(projectId,{pageSize=200,maxPasses=3,signal}={}){
     validInteger(pageSize,'page size',1,200);
-    let offset=0;
-    while(true){
-      const page=await list(projectId,{limit:pageSize,offset});
-      const active=page.jobs.find(item=>ACTIVE.has(item.status));
-      if(active)return active;
-      if(!page.hasMore)return null;
-      offset+=page.jobs.length;
+    validInteger(maxPasses,'reconnect passes',1,10);
+    // Updated timestamps can reorder offset-paginated results mid-scan.
+    // A duplicate identity or changing total signals a non-snapshot page set.
+    // Never report "no active job" on a detected unstable scan.
+    for(let pass=0;pass<maxPasses;pass++){
+      let offset=0,expectedTotal=null,unstable=false;
+      const seen=new Set();
+      while(true){
+        ensureNotAborted(signal);
+        const page=await list(projectId,{limit:pageSize,offset});
+        ensureNotAborted(signal);
+        if(expectedTotal!==null && page.total!==expectedTotal){
+          unstable=true;
+          break;
+        }
+        expectedTotal=page.total;
+        for(const item of page.jobs){
+          if(seen.has(item.id)){unstable=true;break;}
+          seen.add(item.id);
+        }
+        if(unstable)break;
+        const active=page.jobs.find(item=>ACTIVE.has(item.status));
+        if(active)return active;
+        if(!page.hasMore)return null;
+        offset+=page.jobs.length;
+      }
     }
+    // Fail closed: this fallback is not an atomic queue-state snapshot.
+    throw new Error('Assembly history changed during reconnect; retry when stable');
   }
 
   async function waitForTerminal(projectId,jobId,{
