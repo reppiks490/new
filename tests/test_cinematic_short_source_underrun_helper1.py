@@ -77,7 +77,7 @@ def test_short_source_cannot_be_published_as_fully_rendered_master(monkeypatch, 
           "-i", str(output), "-map", "0:v:0", "-an", "-f", "null", "-"])
     sample = _run([
         ffmpeg, "-nostdin", "-v", "error", "-i", str(output),
-        "-vf", r"select=eq(n\\,28)+eq(n\\,45),scale=8:8",
+        "-vf", r"select=eq(n\,28)+eq(n\,45),scale=8:8",
         "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]).stdout
     assert len(sample) == 2 * 8 * 8 * 3, "Fixture did not decode both late master frames"
