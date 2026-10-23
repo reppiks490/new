@@ -94,8 +94,17 @@ def audit_engine_capabilities(
         flag("error", "ENGINE_UNAVAILABLE")
 
     bounds = (capabilities.min_duration_seconds, capabilities.max_duration_seconds)
+    # A provider capability snapshot is normally Pydantic-validated, but
+    # model_copy(update=...) and adapter code can bypass that validation.
+    # Report malformed declarations neutrally rather than crashing preflight.
     valid_bounds = (
-        all(math.isfinite(v) and v > 0 for v in bounds)
+        all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value > 0
+            for value in bounds
+        )
         and bounds[0] <= bounds[1]
     )
     if not valid_bounds:
@@ -122,8 +131,9 @@ def audit_engine_capabilities(
             )
 
     native_resolution: str | None = None
-    if not capabilities.supported_resolutions or any(
-        item not in _NATIVE_RESOLUTIONS for item in capabilities.supported_resolutions
+    if not isinstance(capabilities.supported_resolutions, (list, tuple)) or not capabilities.supported_resolutions or any(
+        not isinstance(item, str) or item not in _NATIVE_RESOLUTIONS
+        for item in capabilities.supported_resolutions
     ):
         flag("error", "ENGINE_RESOLUTION_DECLARATION_INVALID")
     else:
