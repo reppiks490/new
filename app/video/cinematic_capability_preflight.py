@@ -22,6 +22,29 @@ _REQUEST_MIN_DURATION = 1.0
 _REQUEST_MAX_DURATION = 30.0
 _REQUEST_MAX_FPS = 60
 _NATIVE_RESOLUTIONS = frozenset({"480p", "720p", "1080p"})
+_DELIVERY_RESOLUTIONS = frozenset({"480p", "720p", "1080p", "1440p", "2160p"})
+_ENGINE_PROFILES = frozenset({"low_vram", "balanced", "high_quality"})
+_CAMERA_PRESETS = frozenset({
+    "static", "pan_left", "pan_right", "tilt_up", "tilt_down",
+    "zoom_in", "zoom_out", "orbit",
+})
+
+
+def _valid_choices(values: object, allowed: frozenset[str], *, allow_empty: bool = False) -> bool:
+    """Guard bypassed Pydantic validation without echoing provider values."""
+    return (
+        isinstance(values, (list, tuple))
+        and (allow_empty or bool(values))
+        and all(isinstance(value, str) and value in allowed for value in values)
+    )
+
+
+def _valid_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 @dataclass(frozen=True)
@@ -90,33 +113,63 @@ def audit_engine_capabilities(
     ) -> None:
         findings.append(CapabilityFinding(severity, code, scene_id, shot_id))
 
-    if not capabilities.available:
+    if not isinstance(capabilities.available, bool):
+        flag("error", "ENGINE_AVAILABILITY_DECLARATION_INVALID")
+    elif not capabilities.available:
         flag("error", "ENGINE_UNAVAILABLE")
+
+    profiles_valid = _valid_choices(capabilities.profiles, _ENGINE_PROFILES)
+    if not profiles_valid:
+        flag("error", "ENGINE_PROFILES_DECLARATION_INVALID")
+    profiles = capabilities.profiles if profiles_valid else ()
+
+    camera_valid = _valid_choices(
+        capabilities.camera_motion_presets, _CAMERA_PRESETS, allow_empty=True
+    )
+    if not camera_valid:
+        flag("error", "ENGINE_CAMERA_PRESETS_DECLARATION_INVALID")
+    camera_presets = capabilities.camera_motion_presets if camera_valid else ()
+
+    if not isinstance(capabilities.supports_motion_strength, bool):
+        flag("error", "ENGINE_MOTION_SUPPORT_DECLARATION_INVALID")
+
+    delivery_fps_valid = (
+        isinstance(project.delivery_fps, int)
+        and not isinstance(project.delivery_fps, bool)
+        and 1 <= project.delivery_fps <= 120
+    )
+    if not delivery_fps_valid:
+        flag("error", "PROJECT_DELIVERY_FPS_INVALID")
+    delivery_resolution_valid = (
+        isinstance(project.delivery_resolution, str)
+        and project.delivery_resolution in _DELIVERY_RESOLUTIONS
+    )
+    if not delivery_resolution_valid:
+        flag("error", "PROJECT_DELIVERY_RESOLUTION_INVALID")
 
     bounds = (capabilities.min_duration_seconds, capabilities.max_duration_seconds)
     # A provider capability snapshot is normally Pydantic-validated, but
     # model_copy(update=...) and adapter code can bypass that validation.
     # Report malformed declarations neutrally rather than crashing preflight.
     valid_bounds = (
-        all(
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and math.isfinite(value)
-            and value > 0
-            for value in bounds
-        )
+        all(_valid_number(value) and value > 0 for value in bounds)
         and bounds[0] <= bounds[1]
     )
     if not valid_bounds:
         flag("error", "ENGINE_DURATION_DECLARATION_INVALID")
 
     native_fps: int | None = None
-    if not capabilities.supported_fps or any(
-        not isinstance(v, int) or isinstance(v, bool) or v < 1
-        for v in capabilities.supported_fps
-    ):
+    fps_valid = (
+        isinstance(capabilities.supported_fps, (list, tuple))
+        and bool(capabilities.supported_fps)
+        and all(
+            isinstance(v, int) and not isinstance(v, bool) and v >= 1
+            for v in capabilities.supported_fps
+        )
+    )
+    if not fps_valid:
         flag("error", "ENGINE_FPS_DECLARATION_INVALID")
-    else:
+    elif delivery_fps_valid:
         native_fps = select_native_fps(
             project.delivery_fps, capabilities.supported_fps
         )
@@ -136,7 +189,7 @@ def audit_engine_capabilities(
         for item in capabilities.supported_resolutions
     ):
         flag("error", "ENGINE_RESOLUTION_DECLARATION_INVALID")
-    else:
+    elif delivery_resolution_valid:
         native_resolution = select_native_resolution(
             project.delivery_resolution, list(capabilities.supported_resolutions)
         )
@@ -158,10 +211,11 @@ def audit_engine_capabilities(
             shot_count += 1
             before = len(findings)
 
-            if shot.engine_profile not in capabilities.profiles:
+            if shot.engine_profile not in profiles:
                 flag("error", "SHOT_PROFILE_UNSUPPORTED", scene.scene_id, shot.shot_id)
             if (
                 not valid_bounds
+                or not _valid_number(shot.duration_seconds)
                 or shot.duration_seconds < max(_REQUEST_MIN_DURATION, bounds[0])
                 or shot.duration_seconds > min(_REQUEST_MAX_DURATION, bounds[1])
             ):
@@ -170,7 +224,7 @@ def audit_engine_capabilities(
                 flag("error", "SHOT_MOTION_STRENGTH_UNSUPPORTED", scene.scene_id, shot.shot_id)
             if (
                 shot.camera_motion is not None
-                and shot.camera_motion not in capabilities.camera_motion_presets
+                and shot.camera_motion not in camera_presets
             ):
                 flag("error", "SHOT_CAMERA_MOTION_UNSUPPORTED", scene.scene_id, shot.shot_id)
 
