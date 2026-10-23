@@ -8,7 +8,7 @@ const VERIFIED=Object.freeze({status:'succeeded',verified:true,assetUrl:MEDIA});
 function setup({response,limit=80*1024*1024,request}={}){
   let next=0;
   const calls=[],issued=[],revoked=[];
-  const fetchMedia=request||async path=>{calls.push(path);return response;};
+  const fetchMedia=request||(async path=>{calls.push(path);return response;});
   const preview=createCinematicMasterPreview({
     fetchMedia,
     maxBytes:limit,
