@@ -145,7 +145,7 @@ def test_deleted_selected_shot_fails_closed_and_preserves_all_diagnostics():
 
 def test_reduced_shot_duration_does_not_clamp_or_silently_drop_frames():
     old = _project()
-    new = _change_shot(old, 1, duration_seconds=1)
+    new = _change_shot(old, 1, duration_seconds=0.25)
     preview = preview_directors_cut_migration(old, new, _cut(old))
     assert preview.status == 'blocked'
     assert preview.blocked_segments == 2
