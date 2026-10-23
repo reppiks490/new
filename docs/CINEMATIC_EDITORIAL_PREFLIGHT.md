@@ -154,3 +154,63 @@ New extension files in integration PR #18:
 These changes do not modify the original authorship PR #9, the lead's
 master-assembly source, or Helper 1/2/4 code. Full current-head CI must pass
 before integration.
+
+
+## Revision impact: avoid stale-shot reuse after edits
+
+`app/video/cinematic_revision_impact.py` provides a conservative, read-only
+`analyze_cinematic_revision(before, after)` report for an older and newer
+revision of **the same persisted project**. It does not retrieve records,
+read files or ask a render engine to run.
+
+```python
+from app.video.cinematic_revision_impact import analyze_cinematic_revision
+
+impact = analyze_cinematic_revision(old_project_snapshot, current_project)
+for shot in impact.shots:
+    if shot.requires_new_render:
+        print(shot.shot_id, shot.reason_codes)
+print(impact.requires_recompile, impact.requires_master_reassembly)
+```
+
+The comparison understands changes in shot-local prompts, negative prompts,
+durations, seeds, motion controls and profiles, inherited project/scene/shot
+continuity, *ordered* inherited image-reference IDs, scene-specific job linkage,
+scene/shot sequence and delivery FPS/resolution/aspect ratio. It reports opaque
+shot/scene IDs and neutral reasons, **never** raw prompts, media paths, image
+reference IDs, secret creative values or content-derived hashes.
+
+- Render-affecting changes are reported per shot. Newly added shots need
+  rendering; removed shots do not. Reordering an unchanged shot may require
+  re-assembly but does not, by itself, require generating it again.
+- Delivery FPS/resolution changes conservatively flag all retained shots,
+  because actual provider-native choices may depend on target delivery settings.
+  The report cannot prove a previous source is compatible without engine data.
+- Master screenplay changes and source/scene timing changes require
+  re-compilation review. They do not automatically claim unchanged compiled
+  shot prompts were affected; a new compilation can change shot IDs or prompts.
+- Edits to `lens_mm`, `framing`, or transition intent explicitly require
+  creative review, because the current generation adapter does not guarantee
+  applying these fields. Re-rendering alone is **not a substitute** for
+  implementing missing adapter or finishing effects.
+- Updated project titles, job-bookkeeping fields and timestamps do not
+  invalidate a rendered source by themselves.
+- `unchanged_render_input_shots` means **only** unchanged *known metadata
+  inputs*. It is never permission to reuse persisted footage or declare it
+  current. Image/media bytes can change under the same opaque asset ID; current
+  data files, prompt-packing rules, provider versions, external capabilities,
+  storage integrity, and job-link CAS checks are outside this advisory layer.
+
+The owner-controlled render queue must compare trusted current input and
+source-byte provenance, confirm project revision and job linkage atomically,
+and fail closed on stale inputs (see lead-owned issue #19). This module is an
+explicit planning/diagnostics aid for that work, not a replacement for it.
+
+Files introduced in this revision-impact extension:
+
+- `app/video/cinematic_revision_impact.py`
+- `tests/test_cinematic_revision_impact.py`
+
+The lead retains the authority and responsibility to implement safe actual
+job invalidation and render scheduling. There is no live/billable model call,
+database write, provider connection or new production endpoint in this patch.
