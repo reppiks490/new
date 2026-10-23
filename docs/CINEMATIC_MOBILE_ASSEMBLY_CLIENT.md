@@ -28,3 +28,33 @@ Do not persist the bearer token, screenplay, private images, or output video in 
 Run `node --test tests/test_cinematic_assembly_client.mjs` and the repository's complete Python/Node/Docker matrix. Mocked client tests prove protocol and privacy behavior, not real iPhone playback or GPU video generation.
 
 Remaining integration gate: wire the client to the cinematic inspector/timeline in a nonconflicting UI-owner branch; validate a real long-running FFmpeg master in the owner's private PC environment, including disconnect/reconnect, quick-hide, bearer fetch, cancellation before claim, and real video playback.
+
+## Bounded private preview (added after initial handoff)
+
+\`app/studio/web/cinematic-master-preview.js\` supplies
+\`createCinematicMasterPreview({fetchMedia,maxBytes,createObjectURL,revokeObjectURL})\`.
+
+- Pass a caller-owned **authenticated fetch function that returns a Response**.
+  Do not pass the old \`fetchPrivateAsset\` method that eagerly returns \`blob()\`,
+  because doing so defeats the early content-length safety check.
+- The input must be a sanitized, \`verified: true\` succeeded assembly job
+  from \`normalizeAssemblyJob\`, with the exact relative
+  \`/api/video/assets/{32-lowercase-hex}.mp4\` asset URL.
+- Require HTTP success, declared \`video/mp4\` Content-Type, valid exact
+  Content-Length and matching received Blob bytes before creating any object
+  URL. Refuse tokenized/external URLs, inconsistent metadata and unknown sizes.
+- Default bounded mobile-preview threshold: **80 MiB**, configurable within
+  finite, safe integer limits. This is a memory **admission guard**, not a
+  browser-memory measurement or adaptive hardware budget.
+- \`close()\` revokes any exposed object URL and invalidates in-flight reads.
+  Invoke it on Quick Hide, mode switch, project change, and workspace teardown.
+  A stale fetch must not resurrect playback after privacy controls activate.
+- Do not use this code as a substitute for a segmented bearer-authenticated
+  streaming/proxy delivery strategy for very large masters. A 600-second
+  4K master may legitimately exceed the bounded memory threshold, so
+  **full-length iPhone playback remains unimplemented/unverified**.
+
+Run \`node --test tests/test_cinematic_master_preview.mjs\` to exercise
+oversize refusal before \`blob()\`, MIME and length validation, generation races,
+and object-URL cleanup. Add owner-device memory, playback, and reconnect evidence
+before declaring large-master mobile preview usable.
