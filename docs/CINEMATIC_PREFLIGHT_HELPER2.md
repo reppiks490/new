@@ -248,3 +248,19 @@ are **still required**. A preflight pass is always an ephemeral snapshot, not
 permission to render or proof that an asset will remain unchanged. The
 independent tests cover nonblocking FIFO rejection, symlink insertion
 immediately before open and file replacement between image verification steps.
+
+
+## Defensive timeline identity uniqueness
+
+The structural preflight also rejects duplicate scene IDs and duplicate shot IDs
+across **all** scenes. Persistence normally rejects such duplicates during
+CinematicProject validation, but mutable models and in-memory model_copy
+operations can bypass revalidation. Duplicate identity values would make
+first-match scene/shot lookup, provenance and render-result association
+ambiguous. The report emits neutral DUPLICATE_SCENE_ID and
+DUPLICATE_SHOT_ID errors scoped to the affected opaque IDs and requires no
+mutation of the project. These are blocking data-integrity issues, not warnings.
+
+All repository preflight checks, including reference-file verification, remain
+separate from the lead's authoritative render-time validations. No other
+agent's ownership has changed.
