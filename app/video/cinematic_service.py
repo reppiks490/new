@@ -495,6 +495,7 @@ def project_render_status(project_id: str) -> dict:
     counts = {'missing': 0, 'active': 0, 'failed': 0, 'succeeded': 0}
     shots: list[dict] = []
     missing_assets = 0
+    legacy_unverified_shots = 0
     source_digests: dict[str, str] = {}
     for scene in project.scenes:
         for shot in scene.shots:
@@ -509,6 +510,10 @@ def project_render_status(project_id: str) -> dict:
             else:
                 category = 'missing'
             counts[category] += 1
+            if category == 'succeeded' and job is not None and not job.get('render_intent_sha256'):
+                # Historical jobs can be displayed for compatibility but do
+                # not carry authoritative SHA-256 input provenance.
+                legacy_unverified_shots += 1
             if category == 'succeeded' and not _job_has_local_render(job):
                 missing_assets += 1
             shots.append({
@@ -517,13 +522,16 @@ def project_render_status(project_id: str) -> dict:
                 'status': category,
                 'job_id': job['id'] if job else None,
             })
+    assembly_ready = bool(shots) and counts['succeeded'] == len(shots) and not missing_assets
     return {
         'project_id': project.id,
         'project_revision': project.revision,
         'total_shots': len(shots),
         **counts,
         'missing_output_assets': missing_assets,
-        'ready_for_assembly': bool(shots) and counts['succeeded'] == len(shots) and not missing_assets,
+        'legacy_unverified_shots': legacy_unverified_shots,
+        'ready_for_assembly': assembly_ready,
+        'ready_with_verified_render_provenance': assembly_ready and legacy_unverified_shots == 0,
         'shots': shots,
     }
 
