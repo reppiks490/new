@@ -47,7 +47,7 @@ class CinematicRevisionImpact:
     shots_requiring_render: int
     added_shots: int
     removed_shots: int
-    reused_unchanged_shots: int
+    unchanged_render_input_shots: int
     changed_shots: int
     reason_codes: tuple[str, ...]
     shots: tuple[ShotRevisionImpact, ...]
@@ -276,7 +276,7 @@ def analyze_cinematic_revision(
         shots_requiring_render=renders,
         added_shots=added,
         removed_shots=removed,
-        reused_unchanged_shots=unchanged,
+        unchanged_render_input_shots=unchanged,
         changed_shots=changed,
         reason_codes=tuple(reasons),
         shots=tuple(impacts),
