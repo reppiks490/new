@@ -1,0 +1,35 @@
+name: Cinematic async master binding QA
+
+on:
+  pull_request:
+    paths:
+      - "tests/test_cinematic_async_master_binding_helper1.py"
+      - ".github/workflows/cinematic-master-binding-qa.yml"
+      - "app/video/cinematic_assembly_jobs.py"
+      - "app/video/cinematic_service.py"
+  push:
+    branches:
+      - "chatgpt/helper1-async-master-binding-qa-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  master-binding:
+    name: binding contract (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install local QA requirements
+        run: python -m pip install -e ".[dev]"
+      - name: Reproduce foreign-project and revision result rejection
+        run: python -m pytest -q -W error tests/test_cinematic_async_master_binding_helper1.py
