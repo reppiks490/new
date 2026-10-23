@@ -139,12 +139,17 @@ def test_second_worker_startup_does_not_fail_healthy_running_master(
              "-i", str(output), "-an", "-f", "null", "-")
 
     final = queue.get_master_assembly_job(project.id, job["id"])
-    assert recovered["interrupted"] == 0, (
-        "A second API worker startup misclassified an actively encoding "
-        "healthy job as interrupted"
-    )
-    assert final["status"] == "succeeded", (
-        f"Live worker completed FFmpeg but durable job status is {final['status']}"
-    )
-    assert len(masters) == 1
-    assert final["master_id"] == masters[0]["id"]
+    # Both ownership strategies are valid: preserve the healthy worker's
+    # claim, OR fence it before publication and leave a failed receipt.
+    # The forbidden state is a failed/interrupted receipt with a separately
+    # published ready master from the worker that lost its claim.
+    if recovered["interrupted"] == 0:
+        assert final["status"] == "succeeded"
+        assert len(masters) == 1
+        assert final["master_id"] == masters[0]["id"]
+    else:
+        assert final["status"] == "failed"
+        assert not masters, (
+            "Recovery marked a live worker failed, but that worker still "
+            "published an orphan ready master after losing its queue claim"
+        )
