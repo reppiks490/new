@@ -9,6 +9,11 @@ import {createPrivacyController} from './privacy-mode.js';
 
 let activeState=null;
 let videoModulePromise=null;
+let navigationVersion=0;
+
+function isCurrent(state){return state===activeState&&!state.closed;}
+function isVisible(state){return isCurrent(state)&&!state.privacy.isQuickHidden();}
+function stateStatus(state,text){if(isVisible(state))setStatus(text);}
 
 function setStatus(text){
   const target=document.getElementById('status');
@@ -33,7 +38,8 @@ async function videoApi(path,options={}){
     ...(!(options.body instanceof FormData)?{'Content-Type':'application/json'}:{}),
     ...(options.headers||{}),
   };
-  const response=await fetch(`${origin}/api/video${path}`,{...options,headers,signal:AbortSignal.timeout(30000)});
+  const signal=AbortSignal.any([AbortSignal.timeout(30000),...(options.signal?[options.signal]:[])]);
+  const response=await fetch(`${origin}/api/video${path}`,{...options,headers,cache:'no-store',signal});
   if(!response.ok){
     let detail;
     try{detail=(await response.json()).detail;}catch{}
@@ -42,11 +48,11 @@ async function videoApi(path,options={}){
   return response.json();
 }
 
-async function fetchPrivateAsset(path){
+async function fetchPrivateAsset(path,signal){
   const {origin,token}=currentConnection();
   const response=await fetch(new URL(path,`${origin}/`).toString(),{
     headers:token?{'Authorization':`Bearer ${token}`}:{},
-    cache:'no-store',signal:AbortSignal.timeout(30000),
+    cache:'no-store',signal:AbortSignal.any([AbortSignal.timeout(30000),signal]),
   });
   if(!response.ok)throw new Error(`Private media request failed (${response.status})`);
   return response.blob();
@@ -58,20 +64,33 @@ function disposeResultUrl(state){
 }
 
 async function updateResultPreview(state,job){
-  if(!job?.asset_url)return;
+  if(!isVisible(state)||!job?.asset_url||state.previewController)return;
+  const controller=new AbortController();
+  state.previewController=controller;
   try{
-    const blob=await fetchPrivateAsset(job.asset_url);
-    if(state!==activeState)return;
+    const blob=await fetchPrivateAsset(job.asset_url,controller.signal);
+    if(!isVisible(state)||controller.signal.aborted||state.activeJob?.id!==job.id)return;
     disposeResultUrl(state);
     state.cinematicResultUrl=URL.createObjectURL(blob);
     renderAll(state);
-  }catch(error){setStatus(error.message);}
+  }catch(error){if(!controller.signal.aborted)stateStatus(state,error.message);}
+  finally{if(state.previewController===controller)state.previewController=null;}
 }
 
 async function pollCinematicJob(id,state){
-  if(!state||state.closed)return;
+  if(!isVisible(state))return;
+  if(state.jobController){
+    if(state.polledJobId===id)return;
+    state.jobController.abort();
+  }
+  if(state.pollTimer)clearTimeout(state.pollTimer);
+  state.pollTimer=null;
+  const controller=new AbortController();
+  state.jobController=controller;
+  state.polledJobId=id;
   try{
-    const job=await videoApi(`/jobs/${encodeURIComponent(id)}`);
+    const job=await videoApi(`/jobs/${encodeURIComponent(id)}`,{signal:controller.signal});
+    if(!isVisible(state)||controller.signal.aborted||state.activeJob?.id!==id)return;
     state.jobs=[job,...(state.jobs||[]).filter(item=>item.id!==id)];
     state.activeJob=job;
     renderAll(state);
@@ -80,16 +99,41 @@ async function pollCinematicJob(id,state){
       return;
     }
     if(job.status==='succeeded'){
-      setStatus('Shot render ready.');
+      stateStatus(state,'Shot render ready.');
       await updateResultPreview(state,job);
-    }else setStatus(job.error||'Shot render stopped.');
-  }catch(error){setStatus(error.message);}
+    }else stateStatus(state,job.error||'Shot render stopped.');
+  }catch(error){if(!controller.signal.aborted)stateStatus(state,error.message);}
+  finally{if(state.jobController===controller)state.jobController=null;}
+}
+
+function suspendPresentation(state){
+  if(state.pollTimer)clearTimeout(state.pollTimer);
+  state.pollTimer=null;
+  state.jobController?.abort();state.jobController=null;
+  state.previewController?.abort();state.previewController=null;
+  for(const video of document.getElementById('video-workspace')?.querySelectorAll('video')||[]){
+    video.pause?.();video.removeAttribute?.('src');video.load?.();
+  }
+  disposeResultUrl(state);
+}
+
+function resumePresentation(state){
+  if(!isVisible(state)||!state.loaded)return;
+  const job=state.activeJob;
+  if(['queued','running'].includes(job?.status)&&!state.pollTimer)return pollCinematicJob(job.id,state);
+  if(job?.asset_url&&!state.cinematicResultUrl)return updateResultPreview(state,job);
 }
 
 function dependencies(state){
   return {
-    api:videoApi,
-    setStatus,
+    api:async(path,options={})=>{
+      if(!isCurrent(state))throw new DOMException('Workspace closed','AbortError');
+      const signal=AbortSignal.any([state.controller.signal,...(options.signal?[options.signal]:[])]);
+      const result=await videoApi(path,{...options,signal});
+      if(!isCurrent(state))throw new DOMException('Workspace closed','AbortError');
+      return result;
+    },
+    setStatus:text=>stateStatus(state,text),
     pollJob:pollCinematicJob,
     onExit:()=>openQuickGenerate(),
   };
@@ -117,14 +161,26 @@ function decorateResult(state){
   const dock=document.createElement('section');
   dock.className='cinematic-result-dock';
   const status=`${job.stage||job.status||'Queued'}${Number.isFinite(Number(job.progress))?` · ${Number(job.progress)}%`:''}`;
-  dock.innerHTML=`<div><span class="eyebrow">LATEST SHOT /</span><strong>${status}</strong></div>${state.cinematicResultUrl?`<video playsinline controls preload="metadata" src="${state.cinematicResultUrl}"></video>`:''}${job.error?`<p class="video-error"></p>`:''}`;
+  dock.innerHTML=`<div><span class="eyebrow">LATEST SHOT /</span><strong></strong></div>${state.cinematicResultUrl?`<video class="${state.privacy.shouldBlurMedia('preview')?'privacy-blurred':''}" playsinline controls preload="metadata" src="${state.cinematicResultUrl}"></video><button id="cinematic-reveal-preview">${state.privacy.isRevealed('preview')?'Hide result':'Reveal result'}</button>`:''}${job.error?`<p class="video-error"></p>`:''}`;
+  dock.querySelector('strong').textContent=status;
+  const reveal=dock.querySelector('#cinematic-reveal-preview');
+  if(reveal)reveal.onclick=()=>state.privacy.toggleReveal('preview');
   if(job.error)dock.querySelector('.video-error').textContent=job.error;
   workspace.prepend(dock);
 }
 
 function renderAll(state){
-  if(!state||state.closed)return;
+  if(!state||!isCurrent(state))return;
   if(state.privacy.isQuickHidden()){renderNeutral(state);return;}
+  if(state.connectionError){
+    const inspector=document.getElementById('inspector');
+    const workspace=document.getElementById('video-workspace');
+    inspector.innerHTML='<h1>Cinematic Studio</h1><div class="notice"></div><button id="cinematic-connect" class="wide">Open connection settings</button>';
+    inspector.querySelector('.notice').textContent=state.connectionError.message;
+    workspace.innerHTML='<div class="video-empty-stage">Connect the private worker to use Cinematic Studio.</div>';
+    inspector.querySelector('#cinematic-connect').onclick=()=>document.getElementById('connection-dialog')?.showModal();
+    return;
+  }
   const deps=dependencies(state);
   renderCinematicInspector(state,deps);
   renderCinematicWorkspace(state,deps);
@@ -146,11 +202,13 @@ function prepareVideoShell(){
 }
 
 async function closeCinematic(){
+  navigationVersion++;
   const state=activeState;
   activeState=null;
   if(!state)return;
   state.closed=true;
-  if(state.pollTimer)clearTimeout(state.pollTimer);
+  state.controller.abort();
+  suspendPresentation(state);
   for(const cleanup of state.cleanups||[]){try{cleanup();}catch{}}
   disposeResultUrl(state);
   exitCinematicProjectMode(state);
@@ -159,44 +217,59 @@ async function closeCinematic(){
 }
 
 async function openCinematic(){
+  const closing=closeCinematic();
+  const version=navigationVersion;
+  await closing;
+  const video=await getVideoModule();
+  if(version!==navigationVersion)return;
   const shell=prepareVideoShell();
   if(!shell)return;
-  const video=await getVideoModule();
   video.exitVideoStudio?.();
-  await closeCinematic();
   prepareVideoShell();
   const state={
     capabilities:null,jobs:[],activeJob:null,pollTimer:null,cleanups:[],closed:false,
-    cinematic:null,privacy:null,cinematicResultUrl:null,
+    cinematic:null,privacy:null,cinematicResultUrl:null,controller:new AbortController(),
+    previewController:null,jobController:null,loaded:false,connectionError:null,
   };
-  state.privacy=createPrivacyController({onChange:()=>renderAll(state)});
+  state.privacy=createPrivacyController({onChange:()=>{
+    if(!isCurrent(state))return;
+    if(state.privacy.isQuickHidden()){suspendPresentation(state);setStatus('Private cinematic project is hidden.');}
+    renderAll(state);
+    void resumePresentation(state);
+  }});
   state.cleanups.push(state.privacy.attachVisibilityGuard());
   state.cleanups.push(state.privacy.attachIdleGuard());
   activeState=state;
   shell.workspace.__cinematicState=state;
   try{
-    const [capabilities,preferences,jobs]=await Promise.all([videoApi('/capabilities'),videoApi('/privacy'),videoApi('/jobs')]);
+    const {api}=dependencies(state);
+    const [capabilities,preferences,jobs]=await Promise.all([api('/capabilities'),api('/privacy'),api('/jobs')]);
+    if(!isCurrent(state))return;
     state.capabilities=capabilities;
     state.jobs=Array.isArray(jobs)?jobs:[];
     state.activeJob=state.jobs.find(job=>job.asset_url)||state.jobs[0]||null;
     state.privacy.setPreferences(preferences);
     await enterCinematicProjectMode(state,dependencies(state));
+    if(!isCurrent(state))return;
+    state.loaded=true;
     renderAll(state);
-    if(state.activeJob?.asset_url)await updateResultPreview(state,state.activeJob);
+    await resumePresentation(state);
   }catch(error){
-    shell.inspector.innerHTML=`<h1>Cinematic Studio</h1><div class="notice"></div><button id="cinematic-connect" class="wide">Open connection settings</button>`;
-    shell.inspector.querySelector('.notice').textContent=error.message;
-    shell.workspace.innerHTML='<div class="video-empty-stage">Connect the private worker to use Cinematic Studio.</div>';
-    shell.inspector.querySelector('#cinematic-connect').onclick=()=>document.getElementById('connection-dialog')?.showModal();
-    setStatus(error.message);
+    if(!isCurrent(state))return;
+    state.connectionError=error;
+    renderAll(state);
+    stateStatus(state,error.message);
   }
 }
 
 async function openQuickGenerate(){
-  await closeCinematic();
+  const closing=closeCinematic();
+  const version=navigationVersion;
+  await closing;
   const viewport=document.getElementById('viewport');
   viewport?.classList.remove('cinematic-mode');
   const video=await getVideoModule();
+  if(version!==navigationVersion)return;
   video.exitVideoStudio?.();
   await video.renderVideoStudio?.();
 }
