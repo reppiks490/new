@@ -10,6 +10,12 @@ function formatDuration(seconds){
 
 export function neutralProjectLabel(index){ return `Film Project ${Number(index)+1}`; }
 
+export function validateFilmDuration(seconds){
+  const value=Number(seconds);
+  if(!Number.isFinite(value)||value<10||value>600)throw new RangeError('Film duration must be between 10 and 600 seconds (10 minutes maximum).');
+  return value;
+}
+
 export function summarizeProject(project,index=0,preferences={}){
   const scenes=Array.isArray(project?.scenes)?project.scenes:[];
   const shots=scenes.reduce((sum,scene)=>sum+(scene?.shots?.length||0),0);
@@ -145,7 +151,7 @@ function renderProjectList(state,deps,inspector){
     <button id="cinematic-new" class="wide primary">New Film Project</button>
     ${mode.creating?`<div class="cinematic-form">
       <label>Title<input id="cinematic-new-title" maxlength="160" value="Untitled film"></label>
-      <label>Target minutes<input id="cinematic-new-minutes" type="number" min="0.17" max="480" step="0.5" value="10"></label>
+      <label>Target minutes (10 maximum)<input id="cinematic-new-minutes" type="number" min="0.17" max="10" step="0.01" value="10"></label>
       <label>Aspect ratio<select id="cinematic-new-aspect"><option>16:9</option><option>9:16</option><option>2.39:1</option><option>1:1</option></select></label>
       <div class="video-grid-2"><label>Delivery<select id="cinematic-new-resolution"><option>1080p</option><option>1440p</option><option selected>2160p</option></select></label><label>FPS target<input id="cinematic-new-fps" type="number" min="1" max="120" value="120"></label></div>
       <label>Master prompt<textarea id="cinematic-new-prompt" maxlength="100000" rows="12" placeholder="Write the entire story, or use SCENE 1: ... markers to control scene boundaries."></textarea></label>
@@ -159,10 +165,10 @@ function renderProjectList(state,deps,inspector){
     if(!prompt){deps.setStatus('Enter a master prompt.');return;}
     try{
       deps.setStatus('Creating cinematic project…');
-      const minutes=Number(inspector.querySelector('#cinematic-new-minutes').value)||10;
+      const minutes=Number(inspector.querySelector('#cinematic-new-minutes').value);
       const created=await deps.api('/projects',{method:'POST',body:JSON.stringify({
         title:inspector.querySelector('#cinematic-new-title').value.trim()||'Untitled film',
-        master_prompt:prompt,target_duration_seconds:Math.max(10,Math.round(minutes*60)),
+        master_prompt:prompt,target_duration_seconds:validateFilmDuration(minutes*60),
         delivery_fps:Number(inspector.querySelector('#cinematic-new-fps').value)||24,
         delivery_resolution:inspector.querySelector('#cinematic-new-resolution').value,
         aspect_ratio:inspector.querySelector('#cinematic-new-aspect').value,
@@ -184,7 +190,7 @@ export function renderCinematicInspector(state,deps){
   inspector.innerHTML=`<div class="cinematic-head"><div><span class="eyebrow">PROJECT /</span><h1>${escapeHtml(project.title)}</h1></div><button id="cinematic-all-projects">All Projects</button></div>
     <div class="cinematic-revision">Revision ${project.revision} · ${formatDuration(project.target_duration_seconds)} target</div>
     <label>Title<input id="cinematic-title" maxlength="160" value="${escapeHtml(project.title)}"></label>
-    <div class="video-grid-2"><label>Seconds<input id="cinematic-target-seconds" type="number" min="10" max="28800" value="${Number(project.target_duration_seconds)||600}"></label><label>Aspect<input id="cinematic-aspect" maxlength="16" value="${escapeHtml(project.aspect_ratio||'16:9')}"></label><label>Delivery<select id="cinematic-delivery-resolution">${['480p','720p','1080p','1440p','2160p'].map(value=>`<option ${value===project.delivery_resolution?'selected':''}>${value}</option>`).join('')}</select></label><label>FPS target<input id="cinematic-delivery-fps" type="number" min="1" max="120" value="${Number(project.delivery_fps)||24}"></label></div>
+    <div class="video-grid-2"><label>Seconds (600 maximum)<input id="cinematic-target-seconds" type="number" min="10" max="600" value="${Number(project.target_duration_seconds)||600}"></label><label>Aspect<input id="cinematic-aspect" maxlength="16" value="${escapeHtml(project.aspect_ratio||'16:9')}"></label><label>Delivery<select id="cinematic-delivery-resolution">${['480p','720p','1080p','1440p','2160p'].map(value=>`<option ${value===project.delivery_resolution?'selected':''}>${value}</option>`).join('')}</select></label><label>FPS target<input id="cinematic-delivery-fps" type="number" min="1" max="120" value="${Number(project.delivery_fps)||24}"></label></div>
     <label>Master prompt<textarea id="cinematic-master-prompt" maxlength="100000" rows="14">${escapeHtml(project.master_prompt)}</textarea></label>
     <div class="cinematic-counter">${String(project.master_prompt||'').length.toLocaleString()} / 100,000 chars</div>
     <button id="cinematic-save-project" class="wide">Save project settings</button>
@@ -201,7 +207,7 @@ export function renderCinematicInspector(state,deps){
       await persistProjectPatch(state,deps,{
         title:inspector.querySelector('#cinematic-title').value.trim()||project.title,
         master_prompt:inspector.querySelector('#cinematic-master-prompt').value,
-        target_duration_seconds:Number(inspector.querySelector('#cinematic-target-seconds').value)||project.target_duration_seconds,
+        target_duration_seconds:validateFilmDuration(inspector.querySelector('#cinematic-target-seconds').value),
         aspect_ratio:inspector.querySelector('#cinematic-aspect').value.trim()||'16:9',
         delivery_resolution:inspector.querySelector('#cinematic-delivery-resolution').value,
         delivery_fps:Number(inspector.querySelector('#cinematic-delivery-fps').value)||24,

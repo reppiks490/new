@@ -1,5 +1,19 @@
 # Cinematic Orchestrator — Verification Ledger
 
+## Continuation — 2026-10-23, ten-minute maximum and proof requirement
+
+The owner now requires a maximum film length of 600 seconds and real evidence
+before a filmmaking link is called fully capable. The duration policy covers
+new/updated targets, edited shot totals, compilation, native render plans,
+batch scheduling, synchronous assembly and async assembly admission. Legacy
+documents remain readable. The frontend rejects invalid selections rather than
+silently replacing them. See [the acceptance record](FILMMAKING_ACCEPTANCE_600S.md)
+for exact native-vs-delivery limits, observed unavailable GPU/model runtime,
+required live proof, and the pending backend choice. No superior-to-WAN or
+error-free arbitrary-prompt claim is accepted from the existing tests.
+
+---
+
 Branch: `feat/cinematic-orchestrator-v1`
 Spec: `docs/superpowers/specs/2026-10-22-cinematic-orchestrator-design.md`
 Plan: `docs/superpowers/plans/2026-10-22-cinematic-orchestrator-v1.md`

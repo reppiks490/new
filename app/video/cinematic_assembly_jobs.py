@@ -21,6 +21,7 @@ from app.video.cinematic_service import (
     assemble_project_master,
     get_project,
     project_render_status,
+    enforce_film_duration,
 )
 from app.video.storage import get_video_record
 
@@ -68,6 +69,7 @@ def enqueue_master_assembly(project_id: str, request: AssembleMasterRequest) -> 
     actual master assembly revalidates both when it executes.
     """
     project = get_project(project_id)
+    enforce_film_duration(project)
     if project.revision != request.expected_revision:
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
     status = project_render_status(project_id)
