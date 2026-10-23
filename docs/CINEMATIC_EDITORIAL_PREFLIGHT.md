@@ -196,7 +196,9 @@ reference IDs, secret creative values or content-derived hashes.
 - Updated project titles, job-bookkeeping fields and timestamps do not
   invalidate a rendered source by themselves.
 - `unchanged_render_input_shots` means **only** unchanged *known metadata
-  inputs*. It is never permission to reuse persisted footage or declare it
+  inputs*, including shots merely reordered or renamed. `changed_shots` counts
+  any detected metadata reason; these counts can overlap, so do not add them
+  together to estimate rendering cost. It is never permission to reuse persisted footage or declare it
   current. Image/media bytes can change under the same opaque asset ID; current
   data files, prompt-packing rules, provider versions, external capabilities,
   storage integrity, and job-link CAS checks are outside this advisory layer.
