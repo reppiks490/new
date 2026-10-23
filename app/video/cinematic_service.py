@@ -116,6 +116,53 @@ def _effective_shot_render_intent(
     }
 
 
+def _shot_render_provenance_digest(
+    project: CinematicProject,
+    scene: CinematicScene,
+    shot: CinematicShot,
+    *,
+    engine_name: str,
+    native_fps: int,
+    native_resolution: str,
+    source_digests: dict[str, str] | None = None,
+) -> str:
+    """Bind creative inputs and authentic reference-image bytes to a render.
+
+    The digest is versioned and never contains private text or image data in
+    its persisted form. A cache is valid only within one status/queue/assembly
+    operation; cross-request file changes must always be rehashed.
+    """
+    if not isinstance(engine_name, str) or not engine_name:
+        raise ValueError('Render engine identity is missing')
+    if type(native_fps) is not int or native_fps < 1:
+        raise ValueError('Native render FPS is invalid')
+    if not isinstance(native_resolution, str) or not native_resolution:
+        raise ValueError('Native render resolution is missing')
+    image_hashes: list[tuple[str, str]] = []
+    cache = source_digests if source_digests is not None else {}
+    for identifier in resolve_reference_ids(
+        project, scene, shot, require_assets=False,
+    ):
+        if identifier not in cache:
+            image_file = video_asset_path(identifier, 'png')
+            with image_file.open('rb') as handle:
+                cache[identifier] = hashlib.file_digest(handle, 'sha256').hexdigest()
+        image_hashes.append((identifier, cache[identifier]))
+    envelope = {
+        'format_version': 1,
+        'intent': _effective_shot_render_intent(project, scene, shot),
+        'source_image_sha256': image_hashes,
+        'engine': engine_name,
+        'generation_fps': native_fps,
+        'generation_resolution': native_resolution,
+        'prompt_pack_version': 1,
+    }
+    return hashlib.sha256(json.dumps(
+        envelope, sort_keys=True, ensure_ascii=True, allow_nan=False,
+        separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()
+
+
 def _invalidate_stale_shot_links(
     previous: CinematicProject, candidate: CinematicProject,
 ) -> CinematicProject:
@@ -399,6 +446,7 @@ class MasterAssemblyNotReady(RuntimeError):
 
 def _linked_shot_job(
     project: CinematicProject, scene: CinematicScene, shot: CinematicShot,
+    *, source_digests: dict[str, str] | None = None,
 ) -> dict | None:
     if not shot.latest_job_id:
         return None
@@ -412,8 +460,23 @@ def _linked_shot_job(
         or job.get('shot_id') != shot.shot_id
     ):
         return None
+    expected_digest = job.get('render_intent_sha256')
+    if expected_digest is not None:
+        # Modern cinematic jobs must match both authored intent and reference
+        # bytes, even when someone copies an old matching-ID job link.
+        try:
+            current_digest = _shot_render_provenance_digest(
+                project, scene, shot, engine_name=job['engine'],
+                native_fps=job['fps'], native_resolution=job['resolution'],
+                source_digests=source_digests,
+            )
+        except (KeyError, ValueError, TypeError, OSError, OverflowError):
+            return None
+        if expected_digest != current_digest:
+            return None
+    # Legacy manually imported jobs without provenance retain historical
+    # compatibility. They are NOT verified source-fresh and need migration.
     return job
-
 
 def _job_has_local_render(job: dict | None) -> bool:
     """Do not trust persisted succeeded state after a file is lost or truncated."""
@@ -432,9 +495,10 @@ def project_render_status(project_id: str) -> dict:
     counts = {'missing': 0, 'active': 0, 'failed': 0, 'succeeded': 0}
     shots: list[dict] = []
     missing_assets = 0
+    source_digests: dict[str, str] = {}
     for scene in project.scenes:
         for shot in scene.shots:
-            job = _linked_shot_job(project, scene, shot)
+            job = _linked_shot_job(project, scene, shot, source_digests=source_digests)
             state = job.get('status') if job is not None else None
             if state == 'succeeded':
                 category = 'succeeded'
@@ -471,9 +535,10 @@ def render_project_missing(project_id: str, request: BatchRenderRequest) -> dict
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
     submitted: list[dict] = []
     skipped = 0
+    source_digests: dict[str, str] = {}
     for scene in project.scenes:
         for shot in scene.shots:
-            job = _linked_shot_job(project, scene, shot)
+            job = _linked_shot_job(project, scene, shot, source_digests=source_digests)
             if job is not None and (
                 job.get('status') in {'queued', 'running'} or _job_has_local_render(job)
             ):
@@ -582,9 +647,10 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
 
     sources: list[tuple[CinematicScene, CinematicShot, dict]] = []
+    source_digests: dict[str, str] = {}
     for scene in project.scenes:
         for shot in scene.shots:
-            job = _linked_shot_job(project, scene, shot)
+            job = _linked_shot_job(project, scene, shot, source_digests=source_digests)
             if not _job_has_local_render(job):
                 continue
             sources.append((scene, shot, job))
