@@ -37,7 +37,7 @@ jobs:
             echo 'Using runner media binaries'
           else
             timeout 240s sudo apt-get update -qq -o Acquire::Retries=2 -o Acquire::http::Timeout=20
-            timeout 240s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
+            timeout 480s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
           fi
           ffmpeg -version | sed -n '1p'
           ffprobe -version | sed -n '1p'
