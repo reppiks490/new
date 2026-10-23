@@ -21,7 +21,7 @@ from app.studio.storage import root as studio_root
 
 pool = gpu_pool
 _ID_PATTERN = re.compile(r'^[a-f0-9]{32}$')
-_ALLOWED_JOB_METADATA = frozenset({'project_id', 'scene_id', 'shot_id', 'project_revision'})
+_ALLOWED_JOB_METADATA = frozenset({'project_id', 'scene_id', 'shot_id', 'project_revision', 'render_intent_sha256'})
 
 
 def _update_job(identifier: str, **changes) -> dict:
@@ -73,6 +73,11 @@ def _safe_metadata(metadata: dict | None) -> dict:
         if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
             raise ValueError('project_revision must be a positive integer')
         value['project_revision'] = revision
+    if 'render_intent_sha256' in metadata:
+        digest = metadata['render_intent_sha256']
+        if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+            raise ValueError('render_intent_sha256 must be a 64-character SHA-256 hex digest')
+        value['render_intent_sha256'] = digest
     return value
 
 
