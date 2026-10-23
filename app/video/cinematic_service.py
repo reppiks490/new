@@ -531,7 +531,7 @@ def project_render_status(project_id: str) -> dict:
         'missing_output_assets': missing_assets,
         'legacy_unverified_shots': legacy_unverified_shots,
         'ready_for_assembly': assembly_ready,
-        'ready_with_verified_render_provenance': assembly_ready and legacy_unverified_shots == 0,
+        'ready_with_matching_render_input_digests': assembly_ready and legacy_unverified_shots == 0,
         'shots': shots,
     }
 
