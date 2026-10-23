@@ -243,7 +243,11 @@ def analyze_cinematic_revision(
             creative_review = True
         if codes:
             changed += 1
-        else:
+        # A shot can move within the timeline or have its display title
+        # changed while retaining identical generation inputs. Count these
+        # separately from "no metadata fields changed" to avoid false
+        # resource-cost estimates for reorders.
+        if not rerender and not manual:
             unchanged += 1
         impacts.append(ShotRevisionImpact(
             shot_id, old_scene.scene_id, new_scene.scene_id, 'changed' if codes else 'unchanged',
