@@ -42,7 +42,12 @@ Remaining integration gate: wire the client to the cinematic inspector/timeline 
   \`/api/video/assets/{32-lowercase-hex}.mp4\` asset URL.
 - Require HTTP success, declared \`video/mp4\` Content-Type, valid exact
   Content-Length and matching received Blob bytes before creating any object
-  URL. Refuse tokenized/external URLs, inconsistent metadata and unknown sizes.
+  URL. On browsers with a ReadableStream response, incrementally enforce both
+  the declared byte count **and** the configured size cap while reading chunks,
+  cancel the network reader on Quick Hide, and refuse dishonest larger bodies.
+  Older browsers without stream support retain a stricter declared-size-gated
+  Blob fallback; full-body allocation cannot be eliminated in that fallback.
+  Refuse tokenized/external URLs, inconsistent metadata and unknown sizes.
 - Default bounded mobile-preview threshold: **80 MiB**, configurable within
   finite, safe integer limits. This is a memory **admission guard**, not a
   browser-memory measurement or adaptive hardware budget.
