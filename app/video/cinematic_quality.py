@@ -91,8 +91,16 @@ def audit_timeline(
     planned = Decimal(0)
     shot_count = 0
     source_count = 0
+    seen_scene_ids: set[str] = set()
+    seen_shot_ids: set[str] = set()
 
     for scene_number, scene in enumerate(project.scenes, start=1):
+        # The persisted model normally enforces uniqueness, but a caller can
+        # bypass Pydantic revalidation with model_copy()/in-memory edits.
+        # Reused IDs are unsafe for render lookups and provenance mapping.
+        if scene.scene_id in seen_scene_ids:
+            flag("error", "DUPLICATE_SCENE_ID", scene.scene_id)
+        seen_scene_ids.add(scene.scene_id)
         if scene.ordinal != scene_number:
             flag("warning", "SCENE_ORDER_MISMATCH", scene.scene_id)
 
@@ -112,6 +120,9 @@ def audit_timeline(
         previous_ordinal = 0
         for shot in scene.shots:
             shot_count += 1
+            if shot.shot_id in seen_shot_ids:
+                flag("error", "DUPLICATE_SHOT_ID", scene.scene_id, shot.shot_id)
+            seen_shot_ids.add(shot.shot_id)
             scene_planned += _seconds(shot.duration_seconds)
             if shot.ordinal <= previous_ordinal:
                 flag("warning", "SHOT_ORDER_MISMATCH", scene.scene_id, shot.shot_id)
