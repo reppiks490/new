@@ -62,7 +62,7 @@ def test_metadata_only_revision_never_claims_new_video_work():
     report = _impact(original, title='A changed private project title')
     assert report.project_id == original.id
     assert report.shots_requiring_render == 0
-    assert report.reused_unchanged_shots == 3
+    assert report.unchanged_render_input_shots == 3
     assert report.changed_shots == 0
     assert not report.requires_master_reassembly
     assert not report.requires_recompile
@@ -86,7 +86,7 @@ def test_actual_engine_input_changes_invalidate_only_affected_shot(field, new_va
     report = analyze_cinematic_revision(original, revised)
     assert report.shots_requiring_render == 1
     assert report.changed_shots == 1
-    assert report.reused_unchanged_shots == 2
+    assert report.unchanged_render_input_shots == 2
     assert report.requires_master_reassembly
     assert expected_reason in report.shots[1].reason_codes
     assert not report.shots[0].requires_new_render
@@ -111,7 +111,7 @@ def test_inherited_continuity_only_invalidates_nonoverridden_shots():
     report = analyze_cinematic_revision(old, revised)
     assert report.shots_requiring_render == 2
     assert [s.requires_new_render for s in report.shots] == [True, False, True]
-    assert report.reused_unchanged_shots == 1
+    assert report.unchanged_render_input_shots == 1
     assert not report.requires_creative_review
 
 
@@ -181,7 +181,7 @@ def test_aspect_ratio_and_delivery_target_affect_finishing_not_input_shots():
     assert changed.shots_requiring_render == 0
     assert changed.requires_master_reassembly
     assert changed.requires_recompile
-    assert changed.reused_unchanged_shots == 3
+    assert changed.unchanged_render_input_shots == 3
 
 
 def test_unforwarded_creative_controls_require_explicit_review():
@@ -235,7 +235,7 @@ def test_job_link_changes_are_not_mistaken_for_prompt_changes():
                             latest_rendered_project_revision=11)
     report = analyze_cinematic_revision(original, updated)
     assert report.shots_requiring_render == 0
-    assert report.reused_unchanged_shots == 3
+    assert report.unchanged_render_input_shots == 3
 
 
 def test_does_not_leak_creative_values_or_image_reference_ids():
@@ -281,6 +281,6 @@ def test_large_unbounded_640_shot_revision_remains_precise():
     report = analyze_cinematic_revision(original, revised)
     assert len(report.shots) == 640
     assert report.shots_requiring_render == 1
-    assert report.reused_unchanged_shots == 639
+    assert report.unchanged_render_input_shots == 639
     assert report.shots[-1].requires_new_render
     assert report.changed_shots == 1
