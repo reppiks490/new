@@ -24,7 +24,7 @@ from test_cinematic_assembly_queue import HoldingPool, _ready_project
 def test_queue_rechecks_current_project_revision_before_publishing_master(
     monkeypatch, tmp_path, edit,
 ):
-    service, _, storage, queue, project = _ready_project(monkeypatch, tmp_path)
+    _, service, storage, queue, project = _ready_project(monkeypatch, tmp_path)
     monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
     request_type = importlib.import_module(
         "app.video.cinematic_requests"
