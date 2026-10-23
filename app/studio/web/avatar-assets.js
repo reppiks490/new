@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {smoothSurface} from './subdivide.js';
+import {browserPerformanceProfile,limitBrowserTexture} from './browser-performance.js';
 
 // Authored MakeHuman accessories are bound to the original helper vertices.
 // Fit them after morphing, rather than stretching an object-space bounding box.
@@ -19,12 +20,17 @@ export async function loadAvatarAssets(){
   const paths=new Set(Object.values(index.textures||{}));
   for(const a of library.assets)for(const key of ['diffuse','normal'])if(a.material?.[key])paths.add(a.material[key]);
   const loader=new THREE.TextureLoader();
-  await Promise.all([...paths].map(async path=>{
+  const profile=browserPerformanceProfile();
+  const loadTexture=async path=>{
     const texture=await loader.loadAsync(base+path);
+    limitBrowserTexture(texture,profile.maxTextureSize);
     texture.colorSpace=path.includes('normal')?THREE.NoColorSpace:THREE.SRGBColorSpace;
     texture.anisotropy=4;texture.userData.sharedAvatarTexture=true;
     cache.set(path,texture);
-  }));
+  };
+  // Decode one full-size source at a time, then retain only its small canvas.
+  if(Number.isFinite(profile.maxTextureSize))for(const path of paths)await loadTexture(path);
+  else await Promise.all([...paths].map(loadTexture));
   library.textures=index.textures||{};
   return library;
 }

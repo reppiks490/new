@@ -6,6 +6,7 @@ import {applySkinColor,skinMaterial,fabricMaterial,finishGarment,eyeMaterial,add
 import {skinTexture,avatarAsset,addFittedAsset,visibleBodyIndices} from './avatar-assets.js';
 import {smoothSurface} from './subdivide.js';
 import {applyBodyEdits} from './body-edits.js';
+import {browserPerformanceProfile} from './browser-performance.js';
 
 export const MAX_GLB_BYTES=150*1024*1024;
 
@@ -54,12 +55,13 @@ export class StudioView {
     this.raycaster=new THREE.Raycaster();this.pointer=new THREE.Vector2();
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(38, 1, .01, 10000);
-    this.renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true, preserveDrawingBuffer:true});
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    const performance=browserPerformanceProfile();
+    this.renderer = new THREE.WebGLRenderer({canvas, antialias:performance.antialias, alpha:true, preserveDrawingBuffer:performance.preserveDrawingBuffer});
+    this.renderer.setPixelRatio(performance.pixelRatio);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.enabled=true;
+    this.renderer.shadowMap.enabled=performance.shadows;
     this.renderer.shadowMap.type=THREE.PCFSoftShadowMap;
     const environment=new THREE.Scene();environment.background=new THREE.Color('#535965');
     for(const [color,pos,scale] of [['#fff0dc',[-3,3,3],[2,3,1]],['#bfd5f3',[4,2,1],[1,4,2]],['#eee7e0',[0,5,-3],[3,1,2]]]){const panel=new THREE.Mesh(new THREE.BoxGeometry(...scale),new THREE.MeshBasicMaterial({color}));panel.position.set(...pos);environment.add(panel);}

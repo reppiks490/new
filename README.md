@@ -25,6 +25,12 @@ and image-upload generation (Hi3D) use the separately connected worker and its
 server-side provider credentials. Those live services have not been verified
 with paid credentials in this environment.
 
+On phones and small screens, startup waits for you to choose a model. In
+**Models**, select **Open editable browser base**, **Open saved default model**,
+or **Import from Files or Dropbox**. This avoids automatic large-model loads;
+phone previews use smaller textures and graphics buffers. See
+[`docs/MOBILE_STARTUP_FIX.md`](docs/MOBILE_STARTUP_FIX.md) for verification and limits.
+
 For remote worker access, set `CHARACTER3D_STUDIO_TOKEN` to a strong secret and
 `CHARACTER3D_STUDIO_ORIGINS` to the exact allowed browser origin. Use HTTPS.
 Enter the worker URL and token through **System → Connect worker**; the token
