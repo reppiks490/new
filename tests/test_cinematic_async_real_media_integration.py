@@ -189,3 +189,27 @@ def test_private_http_async_queue_yields_genuinely_decodable_mp4_and_reuses_cach
         assert after.json()["master_id"] == job["master_id"]
         assert len(storage.list_video_records("video_master")) == 1
         assert service.get_project(project.id).revision == project.revision
+
+        # Even without changing the opaque asset ID or project revision,
+        # a legitimate replacement of the source bytes must invalidate
+        # the assembly cache through source-file SHA-256 provenance.
+        replacement = storage.video_asset_path(f"{121:032x}", "mp4")
+        _run([
+            ffmpeg, "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=green:s=160x90:r=30:d=5",
+            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(replacement),
+        ])
+        third_submit = client.post(
+            base, json={"expected_revision": project.revision}, headers=bearer,
+        )
+        assert third_submit.status_code == 202, third_submit.text
+        queue._drain()
+        third = client.get(
+            f"{base}/{third_submit.json()['id']}", headers=bearer,
+        )
+        assert third.status_code == 200 and third.json()["status"] == "succeeded"
+        assert third.json()["master_id"] != job["master_id"]
+        assert third.json()["sha256"] != job["sha256"]
+        assert len(storage.list_video_records("video_master")) == 2
+        assert service.get_project(project.id).revision == project.revision
