@@ -28,13 +28,26 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install real FFmpeg and FFprobe
+      - name: Verify real FFmpeg and FFprobe (bounded package fallback)
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          # Ubuntu-hosted runners normally ship FFmpeg already. Unconditional
+          # apt-get downloads caused Python 3.11 to time out before the test
+          # in exact-head run 39933196241; preserve actual media verification.
+          if command -v ffmpeg >/dev/null 2>&1 \
+              && command -v ffprobe >/dev/null 2>&1 \
+              && ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264' >/dev/null; then
+            echo 'Using existing FFmpeg/FFprobe with libx264 support'
+          else
+            echo 'FFmpeg or libx264 missing; bounded package install fallback'
+            timeout 240s sudo apt-get update -qq -o Acquire::Retries=2 -o Acquire::http::Timeout=20
+            timeout 240s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
+          fi
+          command -v ffmpeg
+          command -v ffprobe
           ffmpeg -version | sed -n '1p'
           ffprobe -version | sed -n '1p'
+          ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264'
       - name: Install application and test dependencies
         run: python -m pip install -e '.[dev]'
       - name: Prove cached-master response is revision-consistent
