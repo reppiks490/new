@@ -637,10 +637,12 @@ def _verify_master_probe(
         raise RuntimeError('Master codec does not match the FFmpeg H.264 delivery profile')
     if not math.isfinite(duration) or duration <= 0 or frames <= 0:
         raise RuntimeError('Master duration or video frame count is invalid')
-    tolerance_frames = max(2, shot_count + 1)
-    if abs(frames - expected_seconds * project.delivery_fps) > tolerance_frames:
+    from app.video.cinematic_editing import preflight_editorial_timeline
+    planned_frames = preflight_editorial_timeline(project).actual_frames
+    if frames != planned_frames or frames > MAX_FILM_DURATION_SECONDS * project.delivery_fps:
         raise RuntimeError('Master frame count does not match the authored timeline')
-    if abs(duration - expected_seconds) > max(0.1, tolerance_frames / project.delivery_fps):
+    if (duration > MAX_FILM_DURATION_SECONDS + 0.001
+            or abs(duration - expected_seconds) > 0.5 / project.delivery_fps + 0.002):
         raise RuntimeError('Master duration does not match the authored timeline')
     return {
         'codec': stream['codec_name'],
@@ -689,6 +691,9 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             f'{incomplete} shot(s) are missing successful local render assets'
         )
 
+    from app.video.cinematic_editing import preflight_editorial_timeline
+    timeline = preflight_editorial_timeline(project)
+
     source_ids = [job['asset_id'] for _, _, job in sources]
     source_hashes = []
     for identifier in source_ids:
@@ -696,6 +701,7 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             source_hashes.append(hashlib.file_digest(source_file, 'sha256').hexdigest())
     # Hash actual media bytes and timeline controls, not just opaque file IDs.
     source_identity = [
+        'frame-accurate-master-v2', timeline.timeline_digest_sha256,
         project.id, project.revision, project.delivery_resolution,
         project.delivery_fps, project.aspect_ratio,
         [(shot.shot_id, shot.duration_seconds, job['id'], digest)
@@ -723,14 +729,14 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
     output_id = uuid.uuid4().hex
     output_path = video_asset_path(output_id, 'mp4')
     filters = []
-    for index, (_, shot, _) in enumerate(sources):
+    for index, clip in enumerate(timeline.clips):
         filters.append(
             f'[{index}:v:0]fps={project.delivery_fps},'
             f'scale={width}:{height}:force_original_aspect_ratio=decrease,'
             f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,'
             f'setsar=1,format=yuv420p,'
-            f'tpad=stop_mode=clone:stop_duration={shot.duration_seconds},'
-            f'trim=duration={shot.duration_seconds},setpts=PTS-STARTPTS[v{index}]'
+            f'tpad=stop_mode=clone:stop={clip.duration_frames},'
+            f'trim=end_frame={clip.duration_frames},setpts=PTS-STARTPTS[v{index}]'
         )
     filters.append(
         ''.join(f'[v{index}]' for index in range(len(sources)))
@@ -777,6 +783,9 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             'project_id': project_id,
             'project_revision': project.revision,
             'source_digest': fingerprint,
+            'assembly_version': 2,
+            'timeline_digest_sha256': timeline.timeline_digest_sha256,
+            'timeline_frames': timeline.actual_frames,
             'source_shot_count': len(sources),
             'source_shot_ids': [shot.shot_id for _, shot, _ in sources],
             'timeline_seconds': sum(shot.duration_seconds for _, shot, _ in sources),

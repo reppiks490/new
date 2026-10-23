@@ -30,12 +30,21 @@ policy. It is isolated from the deployed 3D studio and the original proposals.
   `bc84ab885f098ce03f80d0747dab2176128c7e4a`. Seven cases failed before integration
   and pass afterward. The older stable-pagination fixture used the same job ID
   twice; it now uses distinct IDs rather than weakening duplicate detection.
+- A subsequent real-media timing experiment reproduced fractional-cut drift:
+  four 2.525-second shots at 24 FPS produced 244 frames, while cumulative time
+  requires 242. Assembly now uses the existing editorial timeline's cumulative
+  frame allocations, frame-count trimming and padding. Probe validation requires
+  that exact count and rejects delivery duration beyond 600.001 seconds. A new
+  cache version prevents reuse of older masters with accumulated drift. Stored
+  master metadata includes the editorial timeline identity and frame count.
 
 ## Executed evidence
 
-- Video/cinematic Python suites: **331 passed**, warnings treated as errors.
+- Video/cinematic Python suites: **335 passed**, warnings treated as errors,
+  after the cumulative-frame correction and four added precision regressions.
 - Node browser/privacy suites: **81 passed** after the preview corrections.
-- Full local Python suite: **823 passed, 9 failed** in 196.92 seconds. All nine
+- Full local Python suite before the timing follow-up: **823 passed, 9 failed**
+  in 196.92 seconds. All nine
   failures are in the existing `tests/test_blender_live.py` suite, on this
   environment's Blender 4.3.2 build. Denoising fails with no OpenImageDenoise
   support; the system executable also returns zero after a Python script error.
@@ -60,10 +69,11 @@ policy. It is isolated from the deployed 3D studio and the original proposals.
   regression was identified. These are implementation checks, not creative
   quality, native inference or actual iPhone evidence.
 
-The complete local run preceded only the final added MP4 FPS/frame-count
-assertions; the real-media test was rerun with those assertions. No production
-code changed afterward. Final GitHub Python 3.11/3.12 and Docker results must be
-recorded separately; earlier proposal CI does not verify this combined change.
+The complete local run predates the cumulative-frame follow-up, which was then
+verified with the full video/cinematic suite. The dedicated real-media workflow
+now requires and runs the private queue and fractional-frame tests alongside the
+existing media test. Final GitHub Python 3.11/3.12, Docker and real-media results
+must be recorded separately; earlier proposal CI does not verify this change.
 
 ## Gates still open
 
