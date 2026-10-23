@@ -102,7 +102,7 @@ def test_new_cinematic_job_persists_digest_without_private_inputs(monkeypatch, t
     assert latest["succeeded"] == 1
     assert latest["ready_for_assembly"] is True
     assert latest["legacy_unverified_shots"] == 0
-    assert latest["ready_with_verified_render_provenance"] is True
+    assert latest["ready_with_matching_render_input_digests"] is True
 
 
 def test_changed_png_bytes_same_reference_id_invalidates_success_and_retries(
@@ -346,4 +346,4 @@ def test_legacy_job_remains_readable_but_is_not_reported_as_provenance_verified(
     assert state["succeeded"] == 1
     assert state["ready_for_assembly"] is True  # historical API compatibility
     assert state["legacy_unverified_shots"] == 1
-    assert state["ready_with_verified_render_provenance"] is False
+    assert state["ready_with_matching_render_input_digests"] is False
