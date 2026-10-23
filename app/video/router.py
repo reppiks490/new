@@ -9,6 +9,11 @@ from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.video.cinematic_models import ProjectCreateRequest, ProjectUpdateRequest
+from app.video.cinematic_assembly_jobs import (
+    AssemblyCancellationConflict, AssemblyQueueFull,
+    cancel_queued_master_assembly, enqueue_master_assembly,
+    get_master_assembly_job, list_master_assembly_jobs,
+)
 from app.video.cinematic_requests import (
     AssembleMasterRequest, BatchRenderRequest, CompileProjectRequest, ShotRenderRequest,
 )
@@ -274,6 +279,54 @@ def cinematic_assemble_project(project_id: str, request: AssembleMasterRequest):
         raise HTTPException(422, str(exc)) from exc
     except (RuntimeError, OSError) as exc:
         raise HTTPException(503, 'Local FFmpeg master assembly failed; check worker diagnostics') from exc
+
+
+@router.post('/projects/{project_id}/assembly-jobs', status_code=202)
+def queue_cinematic_master_assembly(project_id: str, request: AssembleMasterRequest):
+    """Return immediately with a durable job ID, never the actual MP4 bytes."""
+    try:
+        return enqueue_master_assembly(project_id, request)
+    except ProjectRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except MasterAssemblyNotReady as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except AssemblyQueueFull as exc:
+        raise HTTPException(429, str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project not found') from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, 'Local assembly worker not available; inspect queued jobs') from exc
+
+
+@router.get('/projects/{project_id}/assembly-jobs')
+def cinematic_assembly_jobs(project_id: str, limit: int = 50, offset: int = 0):
+    try:
+        get_project(project_id)
+        return list_master_assembly_jobs(project_id, limit=limit, offset=offset)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project not found or invalid pagination') from exc
+
+
+@router.get('/projects/{project_id}/assembly-jobs/{job_id}')
+def cinematic_assembly_job(project_id: str, job_id: str):
+    try:
+        get_project(project_id)
+        return get_master_assembly_job(project_id, job_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project or assembly job not found') from exc
+
+
+
+@router.post('/projects/{project_id}/assembly-jobs/{job_id}/cancel')
+def cinematic_cancel_queued_assembly(project_id: str, job_id: str):
+    """Cancel only queued work; never imply an active FFmpeg job was stopped."""
+    try:
+        get_project(project_id)
+        return cancel_queued_master_assembly(project_id, job_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project or assembly job not found') from exc
+    except AssemblyCancellationConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get('/jobs')
