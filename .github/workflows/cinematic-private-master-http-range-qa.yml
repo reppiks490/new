@@ -36,6 +36,15 @@ jobs:
               && ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264' >/dev/null; then
             echo 'Using runner media binaries'
           else
+            # Ubuntu 24.04's Azure mirror stalled fetching FFmpeg dependencies
+            # on the 3.12 leg (run 40021156974, exit 124 before pytest).
+            # Switch only this ephemeral runner to the official Ubuntu archive;
+            # retain apt signature verification and strict FFmpeg/ffprobe checks.
+            for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+              if [ -f "$sources" ]; then
+                sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu/#http://archive.ubuntu.com/ubuntu/#g' "$sources"
+              fi
+            done
             timeout 240s sudo apt-get update -qq -o Acquire::Retries=2 -o Acquire::http::Timeout=20
             timeout 480s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
           fi
