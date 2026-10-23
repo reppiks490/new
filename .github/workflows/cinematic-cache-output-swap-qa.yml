@@ -1,0 +1,47 @@
+name: Cinematic cached-output swap QA
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_cache_output_swap_helper1.py'
+      - 'app/video/cinematic_service.py'
+      - '.github/workflows/cinematic-cache-output-swap-qa.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-cache-output-swap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Verify genuine FFmpeg, FFprobe and libx264
+        run: |
+          set -euo pipefail
+          if command -v ffmpeg >/dev/null 2>&1 \
+              && command -v ffprobe >/dev/null 2>&1 \
+              && ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264' >/dev/null; then
+            echo 'Using runner media binaries'
+          else
+            timeout 240s sudo apt-get update -qq -o Acquire::Retries=2 -o Acquire::http::Timeout=20
+            timeout 240s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
+          fi
+          ffmpeg -version | sed -n '1p'
+          ffprobe -version | sed -n '1p'
+          ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264'
+      - name: Install Python test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Reject stale cached-output SHA after atomic MP4 replacement
+        run: python -m pytest -q -W error tests/test_cinematic_cache_output_swap_helper1.py
