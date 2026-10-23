@@ -1,0 +1,46 @@
+name: Cinematic mobile A/V timestamp real-media QA
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/cinematic_mobile_av_sync_preflight.py'
+      - 'tests/test_cinematic_mobile_av_sync_preflight_qa22.py'
+      - '.github/workflows/cinematic-mobile-av-sync-qa.yml'
+      - 'scripts/cinematic_mobile_audio_preflight.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  av-timing-real-media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require genuine FFmpeg and AAC encoders
+        run: |
+          set -euo pipefail
+          if command -v ffmpeg >/dev/null 2>&1 \
+              && command -v ffprobe >/dev/null 2>&1 \
+              && ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264' >/dev/null \
+              && ffmpeg -hide_banner -encoders 2>/dev/null | grep -E ' aac ' >/dev/null; then
+            echo 'Using runner media binaries'
+          else
+            timeout 240s sudo apt-get update -qq -o Acquire::Retries=2 -o Acquire::http::Timeout=20
+            timeout 240s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
+          fi
+          ffprobe -version
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Verify genuine synthetic aligned and delayed AAC timing
+        run: python -m pytest -q -W error tests/test_cinematic_mobile_av_sync_preflight_qa22.py
