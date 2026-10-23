@@ -216,3 +216,59 @@ Files introduced in this revision-impact extension:
 The lead retains the authority and responsibility to implement safe actual
 job invalidation and render scheduling. There is no live/billable model call,
 database write, provider connection or new production endpoint in this patch.
+
+
+## Director's-cut migration across project revisions (Helper 3)
+
+`app/video/cinematic_cut_migration.py` adds a **read-only rebase preview** for
+a previously verified cut when its source project has changed. It will not
+alter either stored project, rewrite an archive, delete footage, schedule
+render jobs, or infer that old source media can be reused.
+
+```python
+from app.video.cinematic_cut_migration import preview_directors_cut_migration
+
+# These must be complete, authoritative snapshots of the SAME project.
+# The saved cut must be the validated v1 cut from the older revision.
+preview = preview_directors_cut_migration(old_project, new_project, saved_cut)
+print(preview.status, preview.blocked_segments, preview.review_segments)
+if preview.status == 'portable':
+    # Still requires explicit operator action and *real* render-provenance checks.
+    candidate = preview.proposed_cut
+```
+
+Each original segment is categorized without sampling:
+
+- `portable`: source-shot ID still exists, the selected local frame interval
+  fits, the delivery FPS matches, and known render inputs/creative intent did
+  not change. The editor's selection *metadata* can move to the new revision.
+  This never means source media is current, decoded, or authorized for use.
+- `review_required`: selections are representable, but changing source render
+  inputs, creative controls, screenplay/scene compilation requirements, or
+  finishing aspect ratio calls for human review. A candidate cut may be
+  provided **for inspection only**; it must not automatically be saved or
+  passed to a conform job.
+- `blocked`: source-shot ID was removed, the exact integer-frame trim exceeds
+  its new duration, or the delivery FPS changed. There is no proposed cut,
+  and the planner never rescales offsets, substitutes a shot or drops a
+  segment silently.
+
+Repeated usages of the same shot are assessed per segment, preserving the
+editor's original cut order. The planner validates the old cut's canonical
+metadata against its original project first; an obsolete/corrupted archive
+cannot become a trusted new cut. The source project's revision must advance,
+and the identity must stay the same.
+
+**Boundary:** render-input and source-image byte identities remain controlled
+by lead issue #19. A metadata-portable cut is **not** proof that existing
+assets match the new creative prompt or are safe to assemble. Publishing or
+conforming requires current production provenance and authenticated owner
+confirmation, in addition to separate real FFmpeg/ffprobe/decode acceptance.
+
+Extension files:
+
+- `app/video/cinematic_cut_migration.py`
+- `tests/test_cinematic_cut_migration.py`
+
+No API, background worker, scheduler, GPU model, provider invocation, DB
+migration or user-facing controller is introduced by this contribution.
