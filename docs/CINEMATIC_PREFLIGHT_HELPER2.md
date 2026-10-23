@@ -226,3 +226,25 @@ otherwise legal. A real profile, duration or unsupported motion-control error
 still blocks capability_ready. The warnings' raw authored values are never
 reported. Do not interpret a warning-free preflight as evidence that a model
 understands story continuity or generates professional quality.
+
+
+## Single-file-handle reference inspection and race limitations
+
+The trusted-local PNG preflight uses a single file descriptor for decoding and
+PNG structure verification. File metadata is obtained from that open descriptor
+rather than trusting a separate pathname stat. Nonregular inputs (FIFOs,
+sockets, devices, directories) are rejected, with nonblocking file opening on
+platforms that support it. POSIX systems supporting O_NOFOLLOW also reject a
+symlink swapped in between the initial path check and the open itself.
+The two decoder reads refer to the same inode rather than two filename
+lookups, preventing inconsistent evidence from a filename replacement midway
+through inspection. All finding responses remain neutral and path-free.
+
+Security/evidence boundary: O_NOFOLLOW is not universally supported (notably
+some Windows environments), and this standalone audit does not pin every
+parent directory descriptor or protect against changes after returning. A
+trusted server-selected workspace and authoritative render-time source checks
+are **still required**. A preflight pass is always an ephemeral snapshot, not
+permission to render or proof that an asset will remain unchanged. The
+independent tests cover nonblocking FIFO rejection, symlink insertion
+immediately before open and file replacement between image verification steps.
