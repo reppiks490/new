@@ -121,3 +121,74 @@ test('size limit is validated and object URLs never contain bearer tokens',()=>{
     fetchMedia:async()=>null,maxBytes:-1,
   }),/limit/i);
 });
+
+
+test('bounded streaming reads exact byte count without calling eager response.blob()',async()=>{
+  let reads=0;
+  const pieces=[new Uint8Array(200),new Uint8Array(300)];
+  const response={
+    ok:true,
+    headers:{get:key=>key==='content-type'?'video/mp4':'500'},
+    body:{getReader:()=>({
+      read:async()=>{reads++;return pieces.length?{done:false,value:pieces.shift()}:{done:true};},
+      cancel:async()=>{},
+      releaseLock:()=>{},
+    })},
+    blob:async()=>{throw new Error('Unbounded Blob read forbidden');},
+  };
+  const {preview}=setup({response,limit:600});
+  assert.equal(await preview.open(VERIFIED),'blob:private-1');
+  assert.equal(reads,3);
+});
+
+test('dishonest Content-Length cannot make streaming exceed claimed size or preview budget',async()=>{
+  let cancellations=0;
+  let reads=0;
+  const response={
+    ok:true,
+    headers:{get:key=>key==='content-type'?'video/mp4':'800'},
+    body:{getReader:()=>({
+      read:async()=>{
+        reads++;
+        return {done:false,value:new Uint8Array(500)};
+      },
+      cancel:async()=>{cancellations++;},
+      releaseLock:()=>{},
+    })},
+    blob:async()=>{throw new Error('No allocation');},
+  };
+  const {preview,issued}=setup({response,limit:1000});
+  await assert.rejects(preview.open(VERIFIED),/content length|too large/i);
+  assert.equal(reads,2);
+  assert.ok(cancellations>=1);
+  assert.deepEqual(issued,[]);
+});
+
+test('closing during an active stream cancels the reader and prevents URL creation',async()=>{
+  let unblock;
+  const hold=new Promise(resolve=>{unblock=resolve;});
+  let cancels=0;
+  let reading=0;
+  const response={
+    ok:true,
+    headers:{get:key=>key==='content-type'?'video/mp4':'100'},
+    body:{getReader:()=>({
+      read:async()=>{
+        reading++;
+        await hold;
+        return {done:false,value:new Uint8Array(100)};
+      },
+      cancel:async()=>{cancels++;unblock();},
+      releaseLock:()=>{},
+    })},
+  };
+  const {preview,issued}=setup({response});
+  const pending=preview.open(VERIFIED);
+  // Resolve the Response microtask and allow its first streaming read.
+  for(let attempt=0;attempt<10 && !reading;attempt++)await Promise.resolve();
+  assert.equal(reading,1);
+  preview.close();
+  assert.equal(await pending,null);
+  assert.ok(cancels>=1);
+  assert.deepEqual(issued,[]);
+});
