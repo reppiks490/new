@@ -102,7 +102,8 @@ export function assemblyStatusSummary(job){
     ? String(Math.floor(job.progress))+'%' : null;
   return Object.freeze({
     label:'Film master',
-    status:STATUS_LABELS[job.status],
+    status:job.status==='succeeded' && !ready
+      ? 'Master verification unavailable' : STATUS_LABELS[job.status],
     progressLabel,
     terminal:TERMINAL.has(job.status),
     ready,
