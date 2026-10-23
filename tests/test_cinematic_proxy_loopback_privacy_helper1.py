@@ -109,6 +109,12 @@ def test_forwarded_remote_cannot_download_private_master_without_owner_token(
     server = importlib.import_module("app.studio.server")
     url = master["asset_url"]
 
+    # Control: the same external address directly is already rejected.
+    with TestClient(server.app, client=("198.51.100.24", 42001)) as remote:
+        direct = remote.get(url)
+        assert direct.status_code == 403
+        assert direct.content != payload
+
     # Current explicit policy allows genuinely local requests without a token.
     with TestClient(server.app, client=("127.0.0.1", 42000)) as local:
         local_result = local.get(url)
@@ -132,8 +138,3 @@ def test_forwarded_remote_cannot_download_private_master_without_owner_token(
         )
         assert proxied.content != payload
 
-    # Control: the same external address directly is already rejected.
-    with TestClient(server.app, client=("198.51.100.24", 42001)) as remote:
-        direct = remote.get(url)
-        assert direct.status_code == 403
-        assert direct.content != payload
