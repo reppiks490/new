@@ -161,6 +161,8 @@ def analyze_cinematic_revision(
         recompile = True
 
     impacts: list[ShotRevisionImpact] = []
+    old_positions = {shot_id: pos for pos, shot_id in enumerate(old_order)}
+    new_positions = {shot_id: pos for pos, shot_id in enumerate(new_order)}
     added = removed = unchanged = changed = renders = 0
     # New timeline order first; removed shots remain available for audit after it.
     ordered_ids = tuple(new_order) + tuple(x for x in old_order if x not in new)
@@ -232,7 +234,7 @@ def analyze_cinematic_revision(
             _codes_add(codes, 'SHOT_TITLE_METADATA_CHANGED')
         if old_shot.ordinal != new_shot.ordinal:
             _codes_add(codes, 'SHOT_ORDINAL_METADATA_CHANGED')
-        if old_order.index(shot_id) != new_order.index(shot_id):
+        if old_positions[shot_id] != new_positions[shot_id]:
             _codes_add(codes, 'SHOT_ORDER_CHANGED')
 
         if rerender:
