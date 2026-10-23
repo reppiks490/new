@@ -210,3 +210,72 @@ def test_local_png_byte_limit_matches_image_uploader_and_avoids_decode(tmp_path)
     report = audit_reference_files(_project(refs=[A]), workspace=tmp_path)
     assert _codes(report) == ["REFERENCE_TOO_MANY_BYTES"] * 2
     assert not report.references_ready
+
+
+def test_fifo_reference_is_rejected_without_blocking(tmp_path):
+    import os
+    if not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"):
+        pytest.skip("FIFO probe requires POSIX nonblocking open")
+    directory = tmp_path / "video-assets"
+    directory.mkdir()
+    os.mkfifo(directory / (A + ".png"))
+    report = audit_reference_files(_project(refs=[A]), workspace=tmp_path)
+    assert _codes(report) == ["REFERENCE_PATH_UNSAFE"] * 2
+    assert not report.references_ready
+
+
+def test_symlink_inserted_between_path_check_and_open_is_rejected(tmp_path, monkeypatch):
+    import os
+    import app.video.cinematic_reference_preflight as verifier
+
+    if not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("O_NOFOLLOW is not available on this platform")
+    source = _png(tmp_path, A)
+    outside = tmp_path / "PRIVATE_EXTERNAL.png"
+    Image.new("RGB", (2, 2)).save(outside)
+    original_open = os.open
+    attempted = False
+
+    def swap_just_before_open(path, flags, *args, **kwargs):
+        nonlocal attempted
+        if not attempted and Path(path) == source:
+            attempted = True
+            source.unlink()
+            source.symlink_to(outside)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(verifier.os, "open", swap_just_before_open)
+    report = audit_reference_files(_project(refs=[A]), workspace=tmp_path)
+    assert attempted
+    assert _codes(report) == ["REFERENCE_PATH_UNSAFE"] * 2
+    assert not report.references_ready
+    assert str(outside) not in json.dumps(report.as_dict())
+
+
+def test_both_png_validation_passes_use_one_original_inode(tmp_path, monkeypatch):
+    import app.video.cinematic_reference_preflight as verifier
+
+    source = _png(tmp_path, A)
+    outside = tmp_path / "PRIVATE_INVALID.png"
+    outside.write_bytes(b"PRIVATE_REPLACEMENT_NOT_A_PNG")
+    original_image_open = Image.open
+    opened = 0
+
+    def swap_after_decode(file, *args, **kwargs):
+        nonlocal opened
+        opened += 1
+        if opened == 2:
+            source.unlink()
+            source.symlink_to(outside)
+        return original_image_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(verifier.Image, "open", swap_after_decode)
+    report = audit_reference_files(_project(refs=[A]), workspace=tmp_path)
+    assert opened == 2
+    assert report.references_ready
+    assert report.unique_references == report.valid_unique_references == 1
+    # Readiness is ephemeral, and the next inspection correctly detects the
+    # path change instead of pretending that earlier evidence is durable.
+    second = audit_reference_files(_project(refs=[A]), workspace=tmp_path)
+    assert _codes(second) == ["REFERENCE_PATH_UNSAFE"] * 2
+    assert not second.references_ready
