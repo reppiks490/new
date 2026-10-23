@@ -35,6 +35,9 @@ Remaining integration gate: wire the client to the cinematic inspector/timeline 
 \`createCinematicMasterPreview({fetchMedia,maxBytes,createObjectURL,revokeObjectURL})\`.
 
 - Pass a caller-owned **authenticated fetch function that returns a Response**.
+  It receives `(relativePath, {signal})`; forward the supplied AbortSignal
+  to `fetch()` so Quick Hide cancels the HTTP request before headers or media
+  bytes arrive, in addition to cancelling active streamed reads.
   Do not pass the old \`fetchPrivateAsset\` method that eagerly returns \`blob()\`,
   because doing so defeats the early content-length safety check.
 - The input must be a sanitized, \`verified: true\` succeeded assembly job
