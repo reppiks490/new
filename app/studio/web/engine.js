@@ -7,6 +7,7 @@ import {skinTexture,avatarAsset,addFittedAsset,visibleBodyIndices} from './avata
 import {smoothSurface} from './subdivide.js';
 import {applyBodyEdits} from './body-edits.js';
 import {browserPerformanceProfile} from './browser-performance.js';
+import {mobileGeometryBudget,prepareMobileImages,mobileGLBPlugin} from './mobile-glb-import.js';
 
 export const MAX_GLB_BYTES=150*1024*1024;
 
@@ -14,7 +15,7 @@ function validateGLB(buffer){
   if(!(buffer instanceof ArrayBuffer)||buffer.byteLength<20||buffer.byteLength>MAX_GLB_BYTES)throw Error('Use a GLB file up to 150 MiB');
   const header=new DataView(buffer);
   if(header.getUint32(0,true)!==0x46546c67||header.getUint32(4,true)!==2||header.getUint32(8,true)!==buffer.byteLength)throw Error('Use a valid GLB 2.0 file');
-  let offset=12,doc=null,binaryBytes=0;
+  let offset=12,doc=null,binaryBytes=0,binaryOffset=0,binaryChunks=0;
   while(offset<buffer.byteLength){
     if(offset+8>buffer.byteLength)throw Error('Incomplete GLB chunk');
     const length=header.getUint32(offset,true),type=header.getUint32(offset+4,true);
@@ -22,10 +23,11 @@ function validateGLB(buffer){
     if(offset===12){
       if(type!==0x4e4f534a||length>16*1024*1024)throw Error('Invalid or oversized GLB metadata');
       doc=JSON.parse(new TextDecoder().decode(new Uint8Array(buffer,offset+8,length)));
-    }else if(type===0x004e4942)binaryBytes+=length;
+    }else if(type===0x004e4942){binaryBytes+=length;binaryOffset=offset+8;binaryChunks++;}
     offset+=8+length;
   }
   if(!doc||doc.asset?.version!=='2.0')throw Error('Use a valid GLB 2.0 asset');
+  if(binaryChunks>1)throw Error('GLB contains multiple binary chunks');
   for(const entry of [...(doc.images||[]),...(doc.buffers||[])])if(entry.uri&&!entry.uri.startsWith('data:'))throw Error('GLB external references are not supported');
   let totalBytes=0;
   for(const b of doc.buffers||[]){
@@ -39,6 +41,7 @@ function validateGLB(buffer){
     if(!Number.isSafeInteger(start)||start<0||!Number.isSafeInteger(b.byteLength)||b.byteLength<0||size===undefined||start+b.byteLength>size)throw Error('GLB buffer view is out of bounds');
   }
   for(const accessor of doc.accessors||[])if(!Number.isSafeInteger(accessor.count)||accessor.count<0||accessor.count>20000000)throw Error('Unsupported GLB accessor size');
+  return {document:doc,buffer,binaryOffset};
 }
 
 function disposeObject(object){
@@ -98,7 +101,7 @@ export class StudioView {
   resize(){const {width,height}=this.renderer.domElement.parentElement.getBoundingClientRect();this.renderer.setSize(width,height,false);this.camera.aspect=width/Math.max(1,height);this.camera.updateProjectionMatrix();this.invalidate();}
   replace(object, reframe=false){
     if(this.object){this.scene.remove(this.object);disposeObject(this.object);}
-    this.animations=[];this.morphControls=[];this.sculptSelection=null;this.sculptOperations=[];
+    this.animations=[];this.morphControls=[];this.sculptSelection=null;this.sculptOperations=[];this.importInfo=null;
     this.object=object;this.scene.add(object);
     this.setWire(this.wire||false);
     let triangles=0;object.traverse(o=>{if(o.isMesh){triangles+=(o.geometry.index?.count||o.geometry.attributes.position.count)/3;o.castShadow=true;o.receiveShadow=true;}});
@@ -112,11 +115,23 @@ export class StudioView {
   setWire(value){this.wire=value;this.object?.traverse(o=>{for(const m of [].concat(o.material||[]))m.wireframe=value;});this.invalidate();}
   async export(){if(!this.object)throw Error('No model to export');return new GLTFExporter().parseAsync(this.object,{binary:true,animations:this.animations||[]});}
   async import(buffer){
-    validateGLB(buffer);
-    const gltf=await new GLTFLoader().parseAsync(buffer,'');
+    const container=validateGLB(buffer),profile=browserPerformanceProfile(),loader=new GLTFLoader();
+    let prepared,gltf;
     try{
-      let meshes=0;
+      if(profile.deferStartupModel){
+        mobileGeometryBudget(container.document);
+        if((container.document.extensionsRequired||[]).some(name=>['KHR_draco_mesh_compression','EXT_meshopt_compression','KHR_texture_basisu'].includes(name)))throw Error('This compressed model needs a desktop-prepared phone copy.');
+        prepared=await prepareMobileImages(container,{maxEdge:profile.maxTextureSize});
+        loader.register(mobileGLBPlugin(container,prepared,THREE));
+        // Parsing the inspected document avoids GLTFLoader's full BIN copy;
+        // the plugin supplies bounded embedded buffer views on demand.
+        gltf=await loader.parseAsync(container.document,'');
+      }else gltf=await loader.parseAsync(buffer,'');
+    }catch(error){prepared?.dispose();throw error;}
+    try{
+      let meshes=0;const usedImages=new Set();
       gltf.scene.traverse(o=>{
+        for(const material of [].concat(o.material||[]))for(const value of Object.values(material))if(value?.isTexture)usedImages.add(value.source?.data);
         if(!o.isMesh)return;meshes++;
         const positions=o.geometry.attributes.position;
         if(!positions||!positions.count)throw Error('Model contains an empty mesh');
@@ -124,7 +139,9 @@ export class StudioView {
       });
       const bounds=new THREE.Box3().setFromObject(gltf.scene),size=bounds.getSize(new THREE.Vector3());
       if(!meshes||bounds.isEmpty()||![...bounds.min.toArray(),...bounds.max.toArray()].every(Number.isFinite)||Math.max(size.x,size.y,size.z)>1e6||Math.max(size.x,size.y,size.z)<1e-6)throw Error('Model has invalid or unsupported scene bounds');
+      prepared?.retain(usedImages);
       this.replace(gltf.scene,true);this.animations=gltf.animations||[];
+      this.importInfo=prepared?{mobile:true,reducedImages:prepared.reducedImages,maxTextureSize:prepared.maxEdge}:null;
       let meshIndex=0;
       gltf.scene.traverse(o=>{
         if(!o.isMesh)return;
@@ -137,7 +154,7 @@ export class StudioView {
         }
       });
       return {animations:this.animations.length,morphs:this.morphControls.length};
-    }catch(error){if(this.object!==gltf.scene)disposeObject(gltf.scene);throw error;}
+    }catch(error){if(this.object!==gltf.scene){disposeObject(gltf.scene);prepared?.dispose();}throw error;}
   }
   getMorphControls(){return (this.morphControls||[]).map(({object,index,...control})=>({...control,value:object.morphTargetInfluences[index]}));}
   pickSurface(clientX,clientY){
