@@ -1,9 +1,8 @@
-"""HTTP cancellation security regression for cinematic assembly jobs."""
-
-from __future__ import annotations
+"""Cancellation route regression for asynchronous cinematic jobs."""
 
 
-def test_cancel_endpoint_is_present():
+def test_cancel_route_supports_post_only():
     from app.video.router import router
-    paths = {route.path for route in router.routes}
-    assert '/projects/{project_id}/assembly-jobs/{job_id}/cancel' in paths
+    matching = [r for r in router.routes if r.path.endswith('/assembly-jobs/{job_id}/cancel')]
+    assert len(matching) == 1
+    assert matching[0].methods == {'POST'}
