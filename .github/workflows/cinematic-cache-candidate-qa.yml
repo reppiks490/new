@@ -1,0 +1,39 @@
+name: Cinematic cache candidate integrity QA
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_cache_candidate_fallback_qa8.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/studio/storage.py'
+      - 'app/video/storage.py'
+      - '.github/workflows/cinematic-cache-candidate-qa.yml'
+  workflow_dispatch:
+
+jobs:
+  real-cache-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install local FFmpeg and FFprobe
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | sed -n '1p'
+          ffprobe -version | sed -n '1p'
+      - name: Install project and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Check older verified candidate after corrupt newest
+        run: python -m pytest -q -W error tests/test_cinematic_cache_candidate_fallback_qa8.py
