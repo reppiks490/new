@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import errno
+import os
 import re
+import stat
 from typing import TYPE_CHECKING
 
 from PIL import Image, UnidentifiedImageError
@@ -77,30 +80,49 @@ def _reference_status(directory: Path, identifier: str) -> str | None:
         return "REFERENCE_ID_INVALID"
     path = directory / (identifier + ".png")
     try:
-        # Check the normalized file path; never resolve user-provided relative paths.
+        # Reject visible symlinks up front; O_NOFOLLOW additionally prevents
+        # a symlink swapped in between this check and the actual os.open.
         if path.is_symlink() or not path.resolve().is_relative_to(directory):
             return "REFERENCE_PATH_UNSAFE"
-        if not path.is_file():
-            return "REFERENCE_FILE_MISSING"
-        # Keep local inspection within the same byte limit as image uploads,
-        # before attempting a potentially expensive decode.
-        if path.stat().st_size > _MAX_BYTES:
-            return "REFERENCE_TOO_MANY_BYTES"
-        with Image.open(path) as image:
-            if image.format != "PNG":
-                return "REFERENCE_FORMAT_INVALID"
-            if image.width * image.height > _MAX_PIXELS:
-                return "REFERENCE_TOO_MANY_PIXELS"
-            image.verify()
-        # verify() examines container integrity; load() also catches truncated
-        # image data in the source pixel stream.
-        with Image.open(path) as image:
-            image.load()
+
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as source:
+            metadata = os.fstat(source.fileno())
+            # Nonblocking open plus fstat excludes FIFOs, devices and sockets.
+            if not stat.S_ISREG(metadata.st_mode):
+                return "REFERENCE_PATH_UNSAFE"
+            if metadata.st_size > _MAX_BYTES:
+                return "REFERENCE_TOO_MANY_BYTES"
+            # Both the decoder and PNG integrity verifier read the *same*
+            # opened inode, never two filename lookups that could be swapped.
+            with Image.open(source) as image:
+                if image.format != "PNG":
+                    return "REFERENCE_FORMAT_INVALID"
+                if image.width * image.height > _MAX_PIXELS:
+                    return "REFERENCE_TOO_MANY_PIXELS"
+                image.load()
+            source.seek(0)
+            with Image.open(source) as image:
+                image.verify()
+    except FileNotFoundError:
+        return "REFERENCE_FILE_MISSING"
     except PermissionError:
         return "REFERENCE_FILE_UNREADABLE"
+    except IsADirectoryError:
+        return "REFERENCE_PATH_UNSAFE"
     except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         return "REFERENCE_TOO_MANY_PIXELS"
-    except (OSError, ValueError, UnidentifiedImageError):
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            return "REFERENCE_PATH_UNSAFE"
+        return "REFERENCE_IMAGE_INVALID"
+    except (ValueError, UnidentifiedImageError):
         return "REFERENCE_IMAGE_INVALID"
     return None
 
