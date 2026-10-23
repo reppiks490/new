@@ -138,3 +138,36 @@ def test_empty_scene_and_empty_project_are_not_ready():
 def test_invalid_tolerances_are_rejected(bad):
     with pytest.raises(ValueError, match="finite"):
         audit_timeline(_project(), tolerance_seconds=bad)
+
+
+def test_duplicate_scene_id_after_mutation_blocks_structural_readiness():
+    project = _project(scene_lengths=((5.0, 5.0), (5.0, 5.0)), target=20)
+    second_scene = project.scenes[1]
+    second_scene.scene_id = project.scenes[0].scene_id
+    before = project.model_dump(mode="json")
+    report = audit_timeline(project)
+    assert not report.structurally_ready
+    assert _codes(report) == ["DUPLICATE_SCENE_ID"]
+    assert report.findings[0].scene_id == second_scene.scene_id
+    assert project.model_dump(mode="json") == before
+
+
+def test_duplicate_shot_id_across_scenes_blocks_preflight():
+    project = _project(scene_lengths=((5.0, 5.0), (5.0, 5.0)), target=20)
+    duplicate = project.scenes[1].shots[0]
+    duplicate.shot_id = project.scenes[0].shots[0].shot_id
+    report = audit_timeline(project)
+    assert not report.structurally_ready
+    assert _codes(report) == ["DUPLICATE_SHOT_ID"]
+    assert report.findings[0].shot_id == duplicate.shot_id
+    assert report.findings[0].scene_id == project.scenes[1].scene_id
+
+
+def test_duplicate_shot_id_within_scene_is_not_silently_accepted():
+    project = _project()
+    first, second = project.scenes[0].shots
+    second.shot_id = first.shot_id
+    report = audit_timeline(project)
+    assert not report.structurally_ready
+    assert _codes(report) == ["DUPLICATE_SHOT_ID"]
+    assert "Secret shot" not in json.dumps(report.as_dict())
