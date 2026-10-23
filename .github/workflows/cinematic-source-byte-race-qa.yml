@@ -1,0 +1,41 @@
+name: Cinematic source-byte provenance QA
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_source_byte_race_helper1.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_rendering.py'
+      - '.github/workflows/cinematic-source-byte-race-qa.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-byte-race-real-media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install real FFmpeg and FFprobe
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | sed -n '1p'
+          ffprobe -version | sed -n '1p'
+      - name: Install local application and tests
+        run: python -m pip install -e '.[dev]'
+      - name: Prove master provenance survives source-byte replacement at encode boundary
+        run: python -m pytest -q -W error tests/test_cinematic_source_byte_race_helper1.py
