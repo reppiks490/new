@@ -81,6 +81,78 @@ def list_projects() -> list[CinematicProject]:
     return [CinematicProject.model_validate(record) for record in list_video_records('video_project')]
 
 
+
+def _effective_shot_render_intent(
+    project: CinematicProject, scene: CinematicScene, shot: CinematicShot,
+) -> dict:
+    """In-memory rendering-intent comparison, never exported in diagnostics.
+
+    A job link is not durable evidence that its clip matches revised creative
+    instructions. This includes conservative scene/script and delivery changes.
+    It deliberately excludes identifiers, titles and *result* link metadata.
+    """
+    return {
+        'master_prompt': project.master_prompt,
+        'delivery_fps': project.delivery_fps,
+        'delivery_resolution': project.delivery_resolution,
+        'aspect_ratio': project.aspect_ratio,
+        'project_references': project.reference_image_ids,
+        'scene_references': scene.reference_image_ids,
+        'scene_source_text': scene.source_text,
+        'scene_synopsis': scene.synopsis,
+        'scene_ordinal': scene.ordinal,
+        'scene_duration': scene.target_duration_seconds,
+        'shot': shot.model_dump(
+            mode='python',
+            exclude={
+                'title', 'latest_job_id', 'latest_asset_url',
+                'latest_rendered_project_revision',
+            },
+        ),
+        'continuity': merge_continuity(
+            merge_continuity(project.continuity_bible, scene.continuity_patch),
+            shot.continuity_patch,
+        ).model_dump(mode='python'),
+    }
+
+
+def _invalidate_stale_shot_links(
+    previous: CinematicProject, candidate: CinematicProject,
+) -> CinematicProject:
+    """Detach old results when a shot's effective input intent changes.
+
+    Completed asset/job records remain untouched for provenance. The changed
+    shot becomes missing; only explicit owner-initiated retry can render again.
+    This does not prove unchanged bytes behind an opaque reference-image ID.
+    """
+    original_scenes = {scene.scene_id: scene for scene in previous.scenes}
+    scenes: list[CinematicScene] = []
+    for scene in candidate.scenes:
+        prior_scene = original_scenes.get(scene.scene_id)
+        previous_shots = (
+            {shot.shot_id: shot for shot in prior_scene.shots}
+            if prior_scene is not None else {}
+        )
+        shots: list[CinematicShot] = []
+        for shot in scene.shots:
+            earlier = previous_shots.get(shot.shot_id)
+            valid_old_link = (
+                prior_scene is not None
+                and earlier is not None
+                and _effective_shot_render_intent(previous, prior_scene, earlier)
+                == _effective_shot_render_intent(candidate, scene, shot)
+            )
+            if not valid_old_link:
+                shot = shot.model_copy(update={
+                    'latest_job_id': None,
+                    'latest_asset_url': None,
+                    'latest_rendered_project_revision': None,
+                })
+            shots.append(shot)
+        scenes.append(scene.model_copy(update={'shots': shots}))
+    return candidate.model_copy(update={'scenes': scenes})
+
+
 def update_project(project_id: str, request: ProjectUpdateRequest) -> CinematicProject:
     current = get_project(project_id)
     if current.revision != request.expected_revision:
@@ -92,6 +164,7 @@ def update_project(project_id: str, request: ProjectUpdateRequest) -> CinematicP
     data['revision'] = current.revision + 1
     data['updated_at'] = _utcnow()
     candidate = CinematicProject.model_validate(data)
+    candidate = _invalidate_stale_shot_links(current, candidate)
     payload = _project_payload(candidate)
 
     updated, actual_revision, record = compare_and_swap_video_project(
