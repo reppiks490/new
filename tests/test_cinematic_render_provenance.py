@@ -244,3 +244,72 @@ def test_same_png_is_hashed_once_per_bounded_status_operation(monkeypatch, tmp_p
     state = service.project_render_status(project.id)
     assert state["ready_for_assembly"]
     assert image_hash_calls.count(".png") == 1
+
+
+
+def test_many_shots_reuse_one_image_hash_per_status(monkeypatch, tmp_path):
+    """No per-shot redundant hash of a shared image on a long film status read."""
+    ctx = _ready(monkeypatch, tmp_path)
+    service, models, storage, _, _, _, _, project = ctx
+    shots = [
+        models.CinematicShot(
+            shot_id=f"{index + 1:032x}", ordinal=index + 1,
+            title=f"Camera angle {index + 1}",
+            prompt=f"Action beat {index + 1}", duration_seconds=5,
+        )
+        for index in range(120)
+    ]
+    scene = models.CinematicScene(
+        scene_id=SCENE_ID, ordinal=1, title="Long-form scene",
+        shots=shots, target_duration_seconds=600,
+    )
+    adjusted = service.update_project(
+        project.id, models.ProjectUpdateRequest(
+            expected_revision=project.revision,
+            target_duration_seconds=600,
+            scenes=[scene],
+        ),
+    )
+    linked = []
+    for shot in adjusted.scenes[0].shots:
+        digest = service._shot_render_provenance_digest(
+            adjusted, adjusted.scenes[0], shot,
+            engine_name="fake", native_fps=24, native_resolution="720p",
+        )
+        job = storage.put_video_record("video_job", {
+            "project_id": adjusted.id,
+            "scene_id": SCENE_ID,
+            "shot_id": shot.shot_id,
+            "engine": "fake",
+            "fps": 24,
+            "resolution": "720p",
+            "status": "succeeded",
+            "asset_id": "d" * 32,
+            "render_intent_sha256": digest,
+        })
+        linked.append(shot.model_copy(update={"latest_job_id": job["id"]}))
+    storage.video_asset_path("d" * 32, "mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42test"
+    )
+    service.update_project(
+        adjusted.id,
+        models.ProjectUpdateRequest(
+            expected_revision=adjusted.revision,
+            scenes=[adjusted.scenes[0].model_copy(update={"shots": linked})],
+        ),
+    )
+    real_digest = service.hashlib.file_digest
+    image_reads = []
+
+    def tracked_digest(fileobj, algorithm):
+        if Path(fileobj.name).suffix == ".png":
+            image_reads.append(fileobj.name)
+        return real_digest(fileobj, algorithm)
+
+    monkeypatch.setattr(service.hashlib, "file_digest", tracked_digest)
+    state = service.project_render_status(adjusted.id)
+    assert state["total_shots"] == 120
+    assert state["succeeded"] == 120
+    assert state["missing_output_assets"] == 0
+    assert state["ready_for_assembly"] is True
+    assert len(image_reads) == 1
