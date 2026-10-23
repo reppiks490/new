@@ -28,6 +28,7 @@ export function createCinematicMasterPreview({
   let epoch=0;
   let current=null;
   let activeReader=null;
+  let activeController=null;
   function release(){
     if(current!==null){
       const stale=current;
@@ -39,6 +40,9 @@ export function createCinematicMasterPreview({
   function close(){
     // Invalidate any pending read BEFORE closing the visible media.
     epoch++;
+    const controller=activeController;
+    activeController=null;
+    if(controller)controller.abort();
     const reader=activeReader;
     activeReader=null;
     if(reader){
@@ -55,7 +59,15 @@ export function createCinematicMasterPreview({
     const path=job.assetUrl;
     close();
     const requestEpoch=epoch;
-    const response=await fetchMedia(path);
+    const controller=new AbortController();
+    activeController=controller;
+    let response;
+    try{
+      response=await fetchMedia(path,{signal:controller.signal});
+    }catch(error){
+      if(requestEpoch!==epoch)return null;
+      throw error;
+    }
     if(requestEpoch!==epoch)return null;
     if(!response || response.ok!==true)throw new Error('Private MP4 request failed');
     const getHeader=response.headers?.get?.bind(response.headers);
@@ -126,6 +138,7 @@ export function createCinematicMasterPreview({
       return null;
     }
     current=url;
+    activeController=null;
     return url;
   }
 
