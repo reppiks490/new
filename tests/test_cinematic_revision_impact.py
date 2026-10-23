@@ -135,6 +135,8 @@ def test_reorder_requires_reassembly_not_regeneration():
     })
     report = analyze_cinematic_revision(original, revised)
     assert report.shots_requiring_render == 0
+    assert report.unchanged_render_input_shots == 3
+    assert report.changed_shots == 2  # reordered positional IDs, not changed render inputs
     assert report.requires_master_reassembly
     assert not report.requires_recompile
     assert 'SHOT_SEQUENCE_CHANGED' in report.reason_codes
@@ -284,3 +286,17 @@ def test_large_unbounded_640_shot_revision_remains_precise():
     assert report.unchanged_render_input_shots == 639
     assert report.shots[-1].requires_new_render
     assert report.changed_shots == 1
+
+
+def test_shot_title_and_ordinal_are_metadata_changes_not_render_reasons():
+    original = _project()
+    revised = _replace_shot(original, 1, title='PRIVATE_RENAMED', ordinal=9)
+    report = analyze_cinematic_revision(original, revised)
+    assert report.changed_shots == 1
+    assert report.unchanged_render_input_shots == 3
+    assert report.shots_requiring_render == 0
+    assert not report.requires_master_reassembly
+    assert not report.requires_creative_review
+    assert report.shots[1].reason_codes == (
+        'SHOT_TITLE_METADATA_CHANGED', 'SHOT_ORDINAL_METADATA_CHANGED'
+    )
