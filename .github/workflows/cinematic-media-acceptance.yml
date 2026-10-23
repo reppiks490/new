@@ -1,0 +1,43 @@
+name: Cinematic real-media acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_requests.py'
+      - 'app/video/storage.py'
+      - 'tests/test_cinematic_real_media_integration.py'
+      - '.github/workflows/cinematic-media-acceptance.yml'
+  workflow_dispatch:
+
+jobs:
+  ffmpeg-master:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Provision local FFmpeg and FFprobe
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          command -v ffmpeg
+          command -v ffprobe
+          ffmpeg -version | sed -n '1p'
+          ffprobe -version | sed -n '1p'
+
+      - name: Install local application and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Verify real master container, timeline, decode and cache
+        run: python -m pytest -q -W error tests/test_cinematic_real_media_integration.py
