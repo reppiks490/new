@@ -192,3 +192,27 @@ test('closing during an active stream cancels the reader and prevents URL creati
   assert.ok(cancels>=1);
   assert.deepEqual(issued,[]);
 });
+
+
+test('quick-hide aborts a pending authenticated request before any response bytes arrive',async()=>{
+  let requestSignal;
+  let aborted=0;
+  const fetchMedia=async(_path,{signal})=>{
+    requestSignal=signal;
+    return new Promise((resolve,reject)=>{
+      signal.addEventListener('abort',()=>{
+        aborted++;
+        const error=new Error('Cancelled by privacy control');
+        error.name='AbortError';
+        reject(error);
+      },{once:true});
+    });
+  };
+  const {preview,issued}=setup({request:fetchMedia});
+  const pending=preview.open(VERIFIED);
+  assert.ok(requestSignal);
+  preview.close();
+  assert.equal(await pending,null);
+  assert.equal(aborted,1);
+  assert.deepEqual(issued,[]);
+});
