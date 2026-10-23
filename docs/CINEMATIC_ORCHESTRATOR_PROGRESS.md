@@ -1,5 +1,33 @@
 # Cinematic Orchestrator — Verification Ledger
 
+## Stopping checkpoint — 2026-10-23
+
+Request: resume the selected 3D repo, then find a stopping point and provide an immediately usable link. Actor: Codex. Base: `ba492146af3bbdab0e9cf255a9ca8b56c395a889`; isolated branch: `codex/cinematic-launcher-privacy-lifecycle`.
+
+The existing browser studio is reachable at <https://reppiks490.github.io/new/> (HTTP 200 checked at this checkpoint). That deployment is the default-branch 3D studio, not this cinematic branch. Cinematic generation additionally requires the private worker; this checkpoint does not deploy or claim a playable completed film.
+
+### Bounded change and knowledge delta
+
+- Code: `app/studio/web/cinematic-launcher.js` and `app/studio/web/cinematic-studio.js`; regression: `tests/test_cinematic_launcher.mjs`.
+- Documentation, decision context, and continuation memory stay here in the existing ledger; no new dependencies, schema, provider, API, deployment, or separate rule/skill/router layer is introduced.
+- Assumption: the selected cinematic workstream remains the intended scope; preserve separately developed assembly/QA draft PRs rather than merging their overlapping implementations.
+- Before: delayed startup/project/poll/media responses could reopen private content after exit or hide; cinematic previews ignored blur preferences. Now session checks and aborts discard obsolete responses, hidden renders remain neutral, and preview blobs are revoked on hide/exit. Restore reloads previews and reconnects polling; switching jobs supersedes the old poll.
+- Why: cancelling a fetch alone does not protect against a response already resolved or a later body decode. Both cancellation and state/visibility checks are required. Hiding does not cancel server rendering or roll back writes already accepted by the worker.
+
+### Observed verification and remaining gates
+
+- Six original regression tests failed before the fix and passed afterward. Review found a shot-switch polling race; its added regression also failed before correction.
+- `node --test tests/test_cinematic_launcher.mjs tests/test_cinematic_ui.mjs`: **22 passed**, including 13 new launcher regressions. The lightweight DOM harness verifies control flow and markup, not Safari layout or hardware playback.
+- Full Node suite retains the pre-existing `tests/test_video_privacy.mjs` failure: its shell assertion expects an eager video script although the shell loads it through the cinematic launcher. The assertion is left intact for reconciliation with the separate QA branch.
+- Full Node run before the final shot-switch regression: **55 passed, 1 failed**, solely the shell assertion described above.
+- Full Python verification with warnings as errors completed at the stopping checkpoint: **602 passed, 13 failed**. Four failures are the original branch's missing master-assembly service functions in `tests/test_cinematic_master.py`; nine are live Blender checks in `tests/test_blender_live.py` (Cycles PNG/EXR, lighting, export contents, shim exit, bake reach/UDIM, displacement, tree scatter). None of those modules was changed here. This is not a passing full-suite result; reconcile the original assembly work and diagnose this environment's live Blender failures before release.
+- Docker build was attempted and failed while fetching build dependencies because the container could not verify this environment's proxy certificate. No Docker health or full GitHub matrix success is claimed.
+- Independent code review identified the polling handoff race, now covered by the shot-switch regression. Actual private iPhone/worker behavior, full Python 3.11/3.12/Node/Docker CI, and assembly integration remain required before release.
+
+Review this checkpoint when launcher navigation, privacy callbacks, job polling, or the deployment branch changes. To continue, run the focused command above, reconcile the separate master-assembly work, and obtain fresh full-matrix evidence before deploying cinematic changes.
+
+---
+
 Branch: `feat/cinematic-orchestrator-v1`
 Spec: `docs/superpowers/specs/2026-10-22-cinematic-orchestrator-design.md`
 Plan: `docs/superpowers/plans/2026-10-22-cinematic-orchestrator-v1.md`

@@ -120,7 +120,9 @@ function modeRerender(state,deps){
   renderCinematicWorkspace(state,deps);
 }
 async function refreshProjects(state,deps){
+  const mode=state.cinematic;
   const projects=await deps.api('/projects');
+  if(state.closed||state.cinematic!==mode)return;
   state.cinematic.projects=Array.isArray(projects)?projects:[];
   state.cinematic.selection=reconcileCinematicSelection(state.cinematic.selection,state.cinematic.projects);
   modeRerender(state,deps);
@@ -133,6 +135,7 @@ export async function enterCinematicProjectMode(state,deps){
   };
   deps.setStatus('Opening cinematic project workspace…');
   await refreshProjects(state,deps);
+  if(state.closed||!state.cinematic)return;
   deps.setStatus(state.cinematic.projects.length?'Cinematic projects ready.':'Create your first long-form film project.');
 }
 
@@ -177,7 +180,7 @@ function renderProjectList(state,deps,inspector){
 
 export function renderCinematicInspector(state,deps){
   const inspector=document.getElementById('inspector');
-  if(!inspector||!state.cinematic?.active)return;
+  if(!inspector||state.closed||state.privacy?.isQuickHidden?.()||!state.cinematic?.active)return;
   const {project}=selectedObjects(state);
   if(!project){renderProjectList(state,deps,inspector);return;}
   const mode=state.cinematic;
@@ -250,7 +253,7 @@ async function persistScenes(state,deps,scenes,selectionPatch={}){
 
 export function renderCinematicWorkspace(state,deps){
   const workspace=document.getElementById('video-workspace');
-  if(!workspace||!state.cinematic?.active)return;
+  if(!workspace||state.closed||state.privacy?.isQuickHidden?.()||!state.cinematic?.active)return;
   const mode=state.cinematic;
   const {project,scene,shot}=selectedObjects(state);
   if(!project){workspace.innerHTML='<div class="video-empty-stage cinematic-empty"><h2>Long Film Workspace</h2><p>Create or select a cinematic project from the left panel.</p></div>';return;}
