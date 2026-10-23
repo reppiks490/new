@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+from concurrent.futures import ThreadPoolExecutor
 import sys
 from pathlib import Path
 
@@ -104,6 +105,7 @@ def test_drain_executes_and_records_verified_master_without_leaking_scripts(monk
         return {
             "id": "b" * 32, "asset_id": "a" * 32,
             "asset_url": "/api/video/assets/" + "a" * 32 + ".mp4",
+            "status": "ready", "probe": {"probe_metadata_verified": True},
             "sha256": "f" * 64, "actual_video_probe_verified": True,
         }
     monkeypatch.setattr(queue, "assemble_project_master", fake_assemble)
@@ -116,6 +118,41 @@ def test_drain_executes_and_records_verified_master_without_leaking_scripts(monk
     assert latest["probe_metadata_verified"] is True
     assert latest["asset_id"] == "a" * 32
     assert "VERY_PRIVATE" not in str(latest)
+    assert queue._claim_next() is None
+
+
+@pytest.mark.parametrize("override", [
+    {"actual_video_probe_verified": False},
+    {"status": "not-ready"},
+    {"probe": None},
+    {"sha256": "invalid"},
+    {"asset_url": "/api/video/assets/" + "c" * 32 + ".mp4"},
+    {"asset_id": None},
+])
+def test_worker_rejects_malformed_master_result_without_false_completion(
+    monkeypatch, tmp_path, override,
+):
+    _, _, _, queue, project = _ready_project(monkeypatch, tmp_path)
+    monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
+    requests = importlib.import_module("app.video.cinematic_requests")
+    job = queue.enqueue_master_assembly(
+        project.id, requests.AssembleMasterRequest(expected_revision=project.revision),
+    )
+    result = {
+        "id": "b" * 32, "asset_id": "a" * 32,
+        "asset_url": "/api/video/assets/" + "a" * 32 + ".mp4",
+        "status": "ready", "probe": {"probe_metadata_verified": True},
+        "sha256": "f" * 64, "actual_video_probe_verified": True,
+    }
+    result.update(override)
+    monkeypatch.setattr(queue, "assemble_project_master", lambda *a, **kw: result)
+    queue._drain()
+    stored = queue.get_master_assembly_job(project.id, job["id"])
+    assert stored["status"] == "failed"
+    assert stored["stage"] == "Assembly failed"
+    assert "asset_url" not in stored
+    assert "sha256" not in stored
+    assert "PRIVATE" not in str(stored)
     assert queue._claim_next() is None
 
 
@@ -216,6 +253,69 @@ def test_cancel_running_assembly_rejected_and_cross_project_hidden(monkeypatch, 
     queue._store_status(job["id"], status="succeeded", progress=100)
     with pytest.raises(queue.AssemblyCancellationConflict):
         queue.cancel_queued_master_assembly(project.id, job["id"])
+
+
+def test_concurrent_submissions_have_exactly_one_active_record(monkeypatch, tmp_path):
+    _, _, _, queue, project = _ready_project(monkeypatch, tmp_path)
+    monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
+    requests = importlib.import_module("app.video.cinematic_requests")
+    request = requests.AssembleMasterRequest(expected_revision=project.revision)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        identifiers = list(pool.map(
+            lambda _: queue.enqueue_master_assembly(project.id, request)["id"], range(12),
+        ))
+    assert len(set(identifiers)) == 1
+    history = queue.list_master_assembly_jobs(project.id)
+    assert history["total"] == 1
+    assert history["jobs"][0]["status"] == "queued"
+
+
+def test_queue_capacity_released_after_cancel(monkeypatch, tmp_path):
+    _, _, _, queue, first_project = _ready_project(monkeypatch, tmp_path)
+    _, _, _, _, second_project = _ready_project(monkeypatch, tmp_path)
+    _, _, _, _, third_project = _ready_project(monkeypatch, tmp_path)
+    monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
+    monkeypatch.setattr(queue, "_MAX_OUTSTANDING", 2)
+    requests = importlib.import_module("app.video.cinematic_requests")
+    req = requests.AssembleMasterRequest(expected_revision=first_project.revision)
+    first = queue.enqueue_master_assembly(first_project.id, req)
+    second = queue.enqueue_master_assembly(second_project.id, req)
+    with pytest.raises(queue.AssemblyQueueFull):
+        queue.enqueue_master_assembly(third_project.id, req)
+    assert second["status"] == "queued"
+    cancelled = queue.cancel_queued_master_assembly(first_project.id, first["id"])
+    assert cancelled["status"] == "cancelled"
+    third = queue.enqueue_master_assembly(third_project.id, req)
+    assert third["status"] == "queued"
+    assert queue.list_master_assembly_jobs(first_project.id)["total"] == 1
+    assert queue._claim_next()["id"] == second["id"]
+
+
+def test_cancel_and_claim_race_has_single_winner(monkeypatch, tmp_path):
+    _, _, _, queue, project = _ready_project(monkeypatch, tmp_path)
+    monkeypatch.setattr(queue, "assembly_pool", HoldingPool())
+    requests = importlib.import_module("app.video.cinematic_requests")
+    job = queue.enqueue_master_assembly(
+        project.id, requests.AssembleMasterRequest(expected_revision=project.revision),
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claim_future = pool.submit(queue._claim_next)
+        cancel_future = pool.submit(queue.cancel_queued_master_assembly, project.id, job["id"])
+        claimed = claim_future.result()
+        try:
+            cancelled = cancel_future.result()
+        except queue.AssemblyCancellationConflict:
+            cancelled = None
+    persisted = queue.get_master_assembly_job(project.id, job["id"])
+    if claimed:
+        assert claimed["id"] == job["id"]
+        assert cancelled is None
+        assert persisted["status"] == "running"
+    else:
+        assert cancelled is not None
+        assert cancelled["status"] == "cancelled"
+        assert persisted["status"] == "cancelled"
+    assert queue._claim_next() is None
 
 
 def test_async_assembly_api_is_authenticated_and_returns_202(monkeypatch, tmp_path):

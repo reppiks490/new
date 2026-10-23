@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import re
 import time
 import uuid
 
@@ -218,15 +219,38 @@ def _claim_next() -> dict | None:
         return {"id": identifier, **payload}
 
 
+def _validated_master_result(value: dict) -> dict:
+    """Refuse to publish fabricated or unverified assembly artifacts."""
+    if not isinstance(value, dict):
+        raise ValueError("Master assembly result must be a record")
+    if value.get("status") != "ready" or value.get("actual_video_probe_verified") is not True:
+        raise ValueError("Master assembly was not verified")
+    probe = value.get("probe")
+    if not isinstance(probe, dict) or probe.get("probe_metadata_verified") is not True:
+        raise ValueError("Master probe evidence is missing")
+    identifiers = ("id", "asset_id")
+    for key in identifiers:
+        identifier = value.get(key)
+        if not isinstance(identifier, str) or not re.fullmatch(r"[a-f0-9]{32}", identifier):
+            raise ValueError("Master record identity is invalid")
+    sha = value.get("sha256")
+    if not isinstance(sha, str) or not re.fullmatch(r"[a-f0-9]{64}", sha):
+        raise ValueError("Master content hash is invalid")
+    expected_url = f"/api/video/assets/{value['asset_id']}.mp4"
+    if value.get("asset_url") != expected_url:
+        raise ValueError("Master asset URL does not match verified identity")
+    return value
+
+
 def _execute_one(job: dict) -> None:
     try:
-        result = assemble_project_master(
+        result = _validated_master_result(assemble_project_master(
             job["project_id"],
             AssembleMasterRequest(
                 expected_revision=job["project_revision"],
                 ffmpeg_path=job["ffmpeg_path"],
             ),
-        )
+        ))
     except ProjectRevisionConflict:
         _store_status(
             job["id"], status="failed", stage="Stale revision", progress=0,
