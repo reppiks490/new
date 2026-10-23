@@ -69,19 +69,25 @@ export function createCinematicMasterPreview({
       throw error;
     }
     if(requestEpoch!==epoch)return null;
-    if(!response || response.ok!==true)throw new Error('Private MP4 request failed');
+    const rejectResponse=(message,ErrorClass=Error)=>{
+      // Stop a streamed FileResponse immediately after a failed metadata gate.
+      // Otherwise the browser may keep buffering the oversized response.
+      controller.abort();
+      throw new ErrorClass(message);
+    };
+    if(!response || response.ok!==true)rejectResponse('Private MP4 request failed');
     const getHeader=response.headers?.get?.bind(response.headers);
     const mime=getHeader?.('content-type')?.split(';',1)[0]?.trim()?.toLowerCase();
-    if(mime!=='video/mp4')throw new Error('Private asset is not an MP4 response');
+    if(mime!=='video/mp4')rejectResponse('Private asset is not an MP4 response');
     const reported=getHeader?.('content-length');
     if(typeof reported!=='string' || !/^\d+$/.test(reported)){
-      throw new Error('Private MP4 response length is unavailable');
+      rejectResponse('Private MP4 response length is unavailable');
     }
     const byteLength=Number(reported);
     if(!Number.isSafeInteger(byteLength) || byteLength<1){
-      throw new Error('Invalid private MP4 content length');
+      rejectResponse('Invalid private MP4 content length');
     }
-    if(byteLength>maxBytes)throw new Error('MP4 is too large for bounded mobile preview');
+    if(byteLength>maxBytes)rejectResponse('MP4 is too large for bounded mobile preview');
     let blob;
     // Prefer bounded incremental fetch streaming when the browser exposes it.
     // This also protects memory when a dishonest response claims a small size
@@ -121,7 +127,7 @@ export function createCinematicMasterPreview({
       // Legacy fallback is permitted only after the strict size header gate.
       // Modern browsers use the streamed and independently bounded path.
       if(typeof response.blob!=='function'){
-        throw new TypeError('Invalid private MP4 response');
+        rejectResponse('Invalid private MP4 response',TypeError);
       }
       blob=await response.blob();
     }
