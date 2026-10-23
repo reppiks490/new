@@ -27,6 +27,7 @@ export function createCinematicMasterPreview({
 
   let epoch=0;
   let current=null;
+  let activeReader=null;
   function release(){
     if(current!==null){
       const stale=current;
@@ -38,6 +39,11 @@ export function createCinematicMasterPreview({
   function close(){
     // Invalidate any pending read BEFORE closing the visible media.
     epoch++;
+    const reader=activeReader;
+    activeReader=null;
+    if(reader){
+      try{Promise.resolve(reader.cancel()).catch(()=>{});}catch{}
+    }
     release();
   }
 
@@ -64,8 +70,49 @@ export function createCinematicMasterPreview({
       throw new Error('Invalid private MP4 content length');
     }
     if(byteLength>maxBytes)throw new Error('MP4 is too large for bounded mobile preview');
-    if(typeof response.blob!=='function')throw new TypeError('Invalid private MP4 response');
-    const blob=await response.blob();
+    let blob;
+    // Prefer bounded incremental fetch streaming when the browser exposes it.
+    // This also protects memory when a dishonest response claims a small size
+    // but sends a much larger body.
+    if(typeof response.body?.getReader==='function'){
+      const reader=response.body.getReader();
+      activeReader=reader;
+      const chunks=[];
+      let received=0;
+      try{
+        while(true){
+          if(requestEpoch!==epoch)return null;
+          const part=await reader.read();
+          if(requestEpoch!==epoch)return null;
+          if(part.done)break;
+          if(!(part.value instanceof Uint8Array)){
+            throw new TypeError('Invalid private MP4 byte stream');
+          }
+          received+=part.value.byteLength;
+          if(received>maxBytes)throw new Error('MP4 is too large for bounded mobile preview');
+          if(received>byteLength)throw new Error('Private MP4 content length mismatch');
+          chunks.push(part.value);
+        }
+        if(received!==byteLength){
+          throw new Error('Private MP4 content length mismatch');
+        }
+      }catch(error){
+        try{await reader.cancel();}catch{}
+        throw error;
+      }finally{
+        if(activeReader===reader)activeReader=null;
+        try{reader.releaseLock?.();}catch{}
+      }
+      if(requestEpoch!==epoch)return null;
+      blob=new Blob(chunks,{type:'video/mp4'});
+    }else{
+      // Legacy fallback is permitted only after the strict size header gate.
+      // Modern browsers use the streamed and independently bounded path.
+      if(typeof response.blob!=='function'){
+        throw new TypeError('Invalid private MP4 response');
+      }
+      blob=await response.blob();
+    }
     if(requestEpoch!==epoch)return null;
     if(!blob || typeof blob.size!=='number' || blob.size!==byteLength){
       throw new Error('Private MP4 content length mismatch');
