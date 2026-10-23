@@ -101,6 +101,8 @@ def test_new_cinematic_job_persists_digest_without_private_inputs(monkeypatch, t
     latest = service.project_render_status(project.id)
     assert latest["succeeded"] == 1
     assert latest["ready_for_assembly"] is True
+    assert latest["legacy_unverified_shots"] == 0
+    assert latest["ready_with_verified_render_provenance"] is True
 
 
 def test_changed_png_bytes_same_reference_id_invalidates_success_and_retries(
@@ -313,3 +315,35 @@ def test_many_shots_reuse_one_image_hash_per_status(monkeypatch, tmp_path):
     assert state["missing_output_assets"] == 0
     assert state["ready_for_assembly"] is True
     assert len(image_reads) == 1
+
+
+
+def test_legacy_job_remains_readable_but_is_not_reported_as_provenance_verified(
+    monkeypatch, tmp_path
+):
+    ctx = _ready(monkeypatch, tmp_path)
+    service, models, storage, _, _, _, _, project = ctx
+    storage.video_asset_path("d" * 32, "mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42legacy"
+    )
+    prior = storage.put_video_record("video_job", {
+        "status": "succeeded",
+        "project_id": project.id,
+        "scene_id": SCENE_ID,
+        "shot_id": SHOT_ID,
+        "asset_id": "d" * 32,
+    })
+    scene = project.scenes[0]
+    linked = scene.shots[0].model_copy(update={"latest_job_id": prior["id"]})
+    service.update_project(
+        project.id,
+        models.ProjectUpdateRequest(
+            expected_revision=project.revision,
+            scenes=[scene.model_copy(update={"shots": [linked]})],
+        ),
+    )
+    state = service.project_render_status(project.id)
+    assert state["succeeded"] == 1
+    assert state["ready_for_assembly"] is True  # historical API compatibility
+    assert state["legacy_unverified_shots"] == 1
+    assert state["ready_with_verified_render_provenance"] is False
