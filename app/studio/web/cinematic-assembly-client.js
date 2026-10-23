@@ -57,6 +57,16 @@ function defaultSleep(ms,signal){
   });
 }
 
+function isTransientNetworkFailure(error){
+  // Do not treat malformed server payloads, authorization failures, or
+  // deliberate aborts as connectivity interruptions.
+  if(error?.name==='AbortError')return false;
+  if(error?.name==='TimeoutError')return true;
+  return error?.name==='TypeError'
+    && /failed to fetch|fetch failed|network|connection|disconnected|offline|load failed/i
+      .test(String(error.message||''));
+}
+
 export function isTerminalAssemblyStatus(status){
   return TERMINAL.has(status);
 }
@@ -161,11 +171,13 @@ export function createCinematicAssemblyClient({api,sleep=defaultSleep}={}){
     });
   }
 
-  async function findActive(projectId,{pageSize=200}={}){
+  async function findActive(projectId,{pageSize=200,signal}={}){
     validInteger(pageSize,'page size',1,200);
     let offset=0;
     while(true){
+      ensureNotAborted(signal);
       const page=await list(projectId,{limit:pageSize,offset});
+      ensureNotAborted(signal);
       const active=page.jobs.find(item=>ACTIVE.has(item.status));
       if(active)return active;
       if(!page.hasMore)return null;
@@ -174,15 +186,38 @@ export function createCinematicAssemblyClient({api,sleep=defaultSleep}={}){
   }
 
   async function waitForTerminal(projectId,jobId,{
-    signal,onUpdate,intervalMs=2000,
+    signal,onUpdate,onConnectionChange,intervalMs=2000,maxTransientFailures=4,
   }={}){
     validInteger(intervalMs,'poll interval',250,60000);
+    validInteger(maxTransientFailures,'transient failure limit',0,20);
     if(onUpdate!==undefined && typeof onUpdate!=='function'){
       throw new TypeError('Invalid status callback');
     }
+    if(onConnectionChange!==undefined && typeof onConnectionChange!=='function'){
+      throw new TypeError('Invalid connection callback');
+    }
+    let failures=0;
     while(true){
       ensureNotAborted(signal);
-      const current=await get(projectId,jobId);
+      let current;
+      try{
+        current=await get(projectId,jobId);
+      }catch(error){
+        ensureNotAborted(signal);
+        if(!isTransientNetworkFailure(error) || failures>=maxTransientFailures){
+          throw error;
+        }
+        failures+=1;
+        onConnectionChange?.('retrying');
+        ensureNotAborted(signal);
+        const backoff=Math.min(60000,intervalMs*(2**(failures-1)));
+        await sleep(backoff,signal);
+        ensureNotAborted(signal);
+        continue;
+      }
+      ensureNotAborted(signal);
+      if(failures)onConnectionChange?.('connected');
+      failures=0;
       ensureNotAborted(signal);
       onUpdate?.(current);
       ensureNotAborted(signal);
