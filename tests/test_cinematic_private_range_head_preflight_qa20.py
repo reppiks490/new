@@ -67,7 +67,7 @@ def test_large_private_asset_supports_bounded_authenticated_byte_ranges(monkeypa
         # A second seek into the same >80 MiB master must not fetch its body.
         suffix = client.get(ASSET_URL, headers={**auth, "Range": "bytes=-8"})
         assert suffix.status_code == 206
-        assert suffix.content == b"\\x00" * 8
+        assert suffix.content == bytes(8)
         assert suffix.headers["content-length"] == "8"
 
         impossible = client.get(
