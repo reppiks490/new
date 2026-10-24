@@ -584,3 +584,111 @@ def test_rebound_host_cannot_enqueue_private_gpu_generation(
         "Untrusted Host reached private local generation admission (inert "
         "spy only; no GPU/paid work): " + ", ".join(violations)
     )
+
+
+def test_rebound_host_cannot_admit_private_ffmpeg_master_assembly(
+    monkeypatch, tmp_path: Path,
+):
+    """Untrusted Host must not admit an async local FFmpeg assembly request.
+
+    The enqueue function is an inert spy. No real FFmpeg assembly, queue
+    persistence, worker, paid service, or owner media is touched here.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Dedicated strict Host/master-assembly admission security matrix")
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+    router = importlib.import_module("app.video.router")
+
+    project_request = {
+        "title": "Synthetic FFmpeg admission Host boundary",
+        "master_prompt": "SYNTHETIC_PRIVATE_ASSEMBLY_ADMISSION_7e19",
+        "target_duration_seconds": 10,
+        "delivery_fps": 24,
+        "delivery_resolution": "480p",
+        "aspect_ratio": "16:9",
+    }
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42400)) as local:
+        created = local.post("/api/video/projects", json=project_request)
+        assert created.status_code == 200, created.text
+        project_id = created.json()["id"]
+        revision = created.json()["revision"]
+
+    admitted = []
+
+    def inert_enqueue(identifier, request):
+        admitted.append((identifier, request.expected_revision, request.ffmpeg_path))
+        return {
+            "id": "b" * 32, "project_id": identifier,
+            "project_revision": request.expected_revision, "status": "queued",
+        }
+
+    monkeypatch.setattr(router, "enqueue_master_assembly", inert_enqueue)
+    endpoint = f"/api/video/projects/{project_id}/assembly-jobs"
+    payload = {"expected_revision": revision}
+    expected = (project_id, revision, "ffmpeg")
+
+    # Positive controls: local tokenless and remote explicit Bearer admission.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42401)) as local:
+        response = local.post(
+            endpoint, json=payload, headers={"Origin": "http://localhost"},
+        )
+        assert response.status_code == 202, response.text
+        assert response.json()["project_id"] == project_id
+    assert admitted == [expected]
+
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42402)) as remote:
+        response = remote.post(
+            endpoint, json=payload,
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        assert response.status_code == 403
+    assert admitted == [expected]
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-master-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42403)) as authorized_remote:
+        response = authorized_remote.post(
+            endpoint, json=payload,
+            headers={
+                "Authorization": "Bearer synthetic-master-bearer",
+                "Origin": "http://cinema.attacker.invalid",
+            },
+        )
+        assert response.status_code == 202, response.text
+    assert admitted == [expected, expected]
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    violations = []
+    variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (label, headers) in enumerate(variants):
+        before = len(admitted)
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42410 + offset)) as rebound:
+            response = rebound.post(endpoint, json=payload, headers=headers)
+            assert response.request.headers["host"] == "cinema.attacker.invalid"
+            if not headers:
+                assert "origin" not in response.request.headers
+            if response.status_code not in (401, 403):
+                violations.append(f"{label}-ffmpeg-admission:HTTP-{response.status_code}")
+            if len(admitted) != before:
+                violations.append(f"{label}-unauthorized-master-enqueue-spy-invoked")
+                assert admitted[-1] == expected
+
+    assert not violations, (
+        "Untrusted Host reached private FFmpeg master-assembly admission "
+        "(inert spy only; no worker or media output): " + ", ".join(violations)
+    )
