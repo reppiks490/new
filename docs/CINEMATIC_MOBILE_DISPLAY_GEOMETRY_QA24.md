@@ -1,0 +1,11 @@
+# QA24 — normalized display geometry for mobile cinematic masters
+
+**Scope:** An optional, offline, read-only acceptance gate stacked on QA22 #71. The script first runs QA17–22's trusted-SHA, full video/audio decode, H.264 8-bit 4:2:0, faststart, AAC and A/V timestamp checks. It then rejects non-square pixel aspect ratio and MP4 display transformation metadata, including display matrices that could rotate or mirror video. This is a conservative **normalized-master policy**; anamorphic and rotated MP4s can be playable in some clients. No media is modified or uploaded.
+
+**Reproduction:** Genuine synthetic 320×240, 24 FPS, 48-frame H.264 MP4 with `setsar=4/3` or `-display_rotation 90` remains valid H.264 and full-decodable, and can satisfy QA22 despite requiring presentation transformations. QA24 makes this distinction explicit. It does not claim a current master-assembly output has such a defect; production #40 already applies `setsar=1`, but the output contract and cached/external files deserve independent acceptance.
+
+**Example:** `python -m scripts.cinematic_mobile_display_geometry_preflight --mp4 /private/local/master.mp4 --expected-sha256 <trusted-64-hex> --fps 24 --frames 48 --width 320 --height 240`. CLI output is privacy-minimized and does not include paths, metadata values, FFmpeg stderr or owner media. Do not paste private paths or hashes into public PR comments.
+
+**Verification ladder:** Python unit mocks validate malformed metadata/privacy; genuine synthetic FFmpeg checks SAR, rotation, hash and decode; **neither proves actual model inference, a 600-second owner-PC render, browser bearer-token streaming or physical iPhone playback**. The 600-second gate, mobile HTTP HEAD/Range and async queue repairs remain separate lead/owner work. Keep draft until exact-head general CI and strict real-media CI pass on Python 3.11 and 3.12. No auto-merge, deployment, cloud generation or purchase.
+
+**Ownership:** QA24 changes four uniquely named additive paths only. PR #40 owns production assembly/router; #21 owns queue; #28/#36 own mobile; #62/#64/#66/#70/#71 own preceding optional acceptance gates; Helper 1 owns its independent QA. Coordinate before integrating stacked PRs.
