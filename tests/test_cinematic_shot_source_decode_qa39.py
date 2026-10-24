@@ -114,7 +114,16 @@ def test_truncated_ftyp_shot_must_not_be_reported_assembly_ready(ready_shot):
     path.write_bytes(path.read_bytes()[:64])
     assert path.stat().st_size == 64
     assert jobs._valid_mp4(path) is True  # Current 64-byte signature-only gate.
-    const_probe = _run(\n        ffprobe, "-v", "error", "-select_streams", "v:0",\n        "-show_entries", "stream=codec_type", "-of", "json", str(path),\n    )\n    # Some FFprobe builds exit zero even when a truncated MP4 has no streams.\n    stream_info = json.loads(const_probe.stdout or b"{}") if const_probe.returncode == 0 else {}\n    assert not any(\n        stream.get("codec_type") == "video"\n        for stream in stream_info.get("streams", [])\n    )
+    const_probe = _run(
+        ffprobe, "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=codec_type", "-of", "json", str(path),
+    )
+    # Some FFprobe builds exit zero even when a truncated MP4 has no streams.
+    stream_info = json.loads(const_probe.stdout or b"{}") if const_probe.returncode == 0 else {}
+    assert not any(
+        stream.get("codec_type") == "video"
+        for stream in stream_info.get("streams", [])
+    )
     assert _run(
         ffmpeg, "-nostdin", "-v", "error", "-xerror",
         "-i", str(path), "-an", "-f", "null", "-",
