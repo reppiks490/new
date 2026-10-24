@@ -36,9 +36,9 @@ def api(method: str, path: str, payload: dict | None = None):
     request = Request(BASE + path, data=data, headers=headers, method=method)
     try:
         with urlopen(request, timeout=20) as response:
-            return response.status, dict(response.headers), response.read()
+            return response.status, {k.lower(): v for k, v in response.headers.items()}, response.read()
     except HTTPError as error:
-        return error.code, dict(error.headers), error.read()
+        return error.code, {k.lower(): v for k, v in error.headers.items()}, error.read()
 
 
 def json_api(method: str, path: str, payload: dict | None = None):
@@ -132,8 +132,8 @@ class RealCinematicDockerAssembly(unittest.TestCase):
         self.assertTrue(job["asset_url"].startswith("/api/video/assets/"))
         code, headers, media = api("GET", job["asset_url"])
         self.assertEqual(code, 200)
-        self.assertEqual(headers.get("Cache-Control"), "no-store")
-        self.assertTrue(headers.get("Content-Type", "").startswith("video/mp4"))
+        self.assertEqual(headers.get("cache-control"), "no-store")
+        self.assertTrue(headers.get("content-type", "").startswith("video/mp4"))
         self.assertEqual(hashlib.sha256(media).hexdigest(), job["sha256"])
         self.assertIn(b"ftyp", media[:12])
 
