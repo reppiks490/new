@@ -40,3 +40,15 @@ synthetic integration plus complete owner-PC and physical iPhone acceptance.
 
 No owner media, paid services, cloud generation, GPU model inference, actual
 600-second production render, or mobile-device playback was used.
+
+## Reproduction command
+
+From the repository root with local FFmpeg/FFprobe installed:
+
+```sh
+CINEMATIC_REQUIRE_REAL_MEDIA=1 python -m pytest -q -W error tests/test_cinematic_source_coverage_qa37.py
+```
+
+On the isolated QA37 development host (FFmpeg 7.1.5), **17 tests passed**.
+This is local synthetic evidence; GitHub-hosted exact-head results must be
+checked separately before review or integration.
