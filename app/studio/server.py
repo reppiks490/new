@@ -32,7 +32,7 @@ app.add_middleware(CORSMiddleware, allow_origins=origins,
 # A loopback TCP peer alone does not authenticate the browser's HTTP Host.
 # Only literal local names are trusted when no studio bearer token is set.
 # The synthetic TestClient host is restricted to the ASGI test peer.
-_LOCAL_HOST = re.compile(r"(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::([0-9]{1,5}))?", re.I)
+_LOCAL_HOST = re.compile(r"(?:localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?", re.I)
 _TEST_HOST = re.compile(r"testserver(?::([0-9]{1,5}))?", re.I)
 
 
