@@ -149,6 +149,56 @@ def test_rebinding_host_and_matching_origin_cannot_mutate_local_studio_without_t
         )
         if response.status_code not in (401, 403):
             violations.append(f"project-write:HTTP-{response.status_code}")
+    # Browser navigation GETs frequently omit Origin entirely. Host validation
+    # must not depend on an Origin header being present. A non-browser client
+    # can also send POST without Origin; reject that untrusted Host too.
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("127.0.0.1", 42003)) as originless:
+        for label, route in private_routes:
+            exposed = originless.get(route)
+            assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+            assert "origin" not in exposed.request.headers
+            if exposed.status_code not in (401, 403):
+                violations.append(f"originless-navigation-{label}:HTTP-{exposed.status_code}")
+                if exposed.status_code == 200 and label == "private-mp4":
+                    assert exposed.content == payload
+                elif exposed.status_code == 200 and label == "project-detail":
+                    assert exposed.json()["master_prompt"] == project_request["master_prompt"]
+                elif exposed.status_code == 200 and label == "project-list":
+                    assert any(
+                        item.get("master_prompt") == project_request["master_prompt"]
+                        for item in exposed.json()
+                    )
+        no_origin_write = originless.post("/api/video/projects", json=project_request)
+        assert "origin" not in no_origin_write.request.headers
+        if no_origin_write.status_code not in (401, 403):
+            violations.append(f"originless-project-write:HTTP-{no_origin_write.status_code}")
+
+    # A trusted-looking Origin must not override an untrusted Host. This is
+    # an in-process header combination, not a claim of browser exploitability.
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("127.0.0.1", 42004)) as spoofed:
+        for label, route in private_routes:
+            exposed = spoofed.get(route, headers={"Origin": "http://localhost"})
+            assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+            if exposed.status_code not in (401, 403):
+                violations.append(f"trusted-origin-untrusted-host-{label}:HTTP-{exposed.status_code}")
+                if exposed.status_code == 200 and label == "private-mp4":
+                    assert exposed.content == payload
+                elif exposed.status_code == 200 and label == "project-detail":
+                    assert exposed.json()["master_prompt"] == project_request["master_prompt"]
+                elif exposed.status_code == 200 and label == "project-list":
+                    assert any(
+                        item.get("master_prompt") == project_request["master_prompt"]
+                        for item in exposed.json()
+                    )
+        spoofed_write = spoofed.post(
+            "/api/video/projects", json=project_request,
+            headers={"Origin": "http://localhost"},
+        )
+        if spoofed_write.status_code not in (401, 403):
+            violations.append(f"trusted-origin-untrusted-host-write:HTTP-{spoofed_write.status_code}")
+
     if len(service.list_projects()) != before:
         violations.append("unauthorized-project-mutation")
     assert not violations, (
