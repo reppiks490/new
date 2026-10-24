@@ -139,8 +139,30 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
         assert listing.status_code == detail.status_code == 200
         assert any(item.get("master_prompt") == SENTINEL for item in listing.json())
         assert detail.json()["master_prompt"] == SENTINEL
+        # Creation and updates also return the complete private screenplay.
+        # Checking only GET routes would permit a partial middleware fix to
+        # leave these authenticated mutation responses cacheable.
+        created = client.post("/api/video/projects", headers=auth, json={
+            "title": "Another synthetic private film",
+            "master_prompt": SENTINEL,
+            "target_duration_seconds": 10,
+            "delivery_fps": 24,
+            "delivery_resolution": "480p",
+            "aspect_ratio": "16:9",
+        })
+        updated = client.put(
+            f"/api/video/projects/{project.id}", headers=auth,
+            json={"expected_revision": project.revision, "title": "Private screenplay revised"},
+        )
+        assert created.status_code == updated.status_code == 200
+        assert created.json()["master_prompt"] == SENTINEL
+        assert updated.json()["master_prompt"] == SENTINEL
+
         missing_no_store = []
-        for route, response in (("list", listing), ("detail", detail)):
+        for route, response in (
+            ("list", listing), ("detail", detail),
+            ("create", created), ("update", updated),
+        ):
             directives = {
                 part.strip().lower()
                 for part in response.headers.get("cache-control", "").split(",")
