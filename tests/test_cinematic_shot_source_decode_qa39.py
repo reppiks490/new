@@ -126,7 +126,7 @@ def test_truncated_ftyp_shot_must_not_be_reported_assembly_ready(ready_shot):
     )
     assert _run(
         ffmpeg, "-nostdin", "-v", "error", "-xerror",
-        "-i", str(path), "-an", "-f", "null", "-",
+        "-i", str(path), "-map", "0:v:0", "-an", "-f", "null", "-",
     ).returncode != 0
 
     status = service.project_render_status(project.id)
