@@ -66,7 +66,7 @@ def ready_project(monkeypatch, tmp_path: Path):
     # This is only the existing queue's signature-level readiness fixture.
     # It is deliberately NOT a real, decodable MP4 or an FFmpeg test.
     storage.video_asset_path(asset_id, "mp4").write_bytes(
-        b"\\x00\\x00\\x00\\x18ftypmp42synthetic"
+        b"\x00\x00\x00\x18ftypmp42synthetic"
     )
     record = storage.put_video_record("video_job", {
         "status": "succeeded", "project_id": project.id,
