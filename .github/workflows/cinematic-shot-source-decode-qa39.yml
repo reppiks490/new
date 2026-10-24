@@ -1,6 +1,14 @@
 name: Cinematic shot source decode QA39
 
 on:
+  push:
+    branches:
+      - chatgpt/cinematic-shot-source-decode-qa39-20261024
+    paths:
+      - 'tests/test_cinematic_shot_source_decode_qa39.py'
+      - '.github/workflows/cinematic-shot-source-decode-qa39.yml'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/jobs.py'
   pull_request:
     paths:
       - 'tests/test_cinematic_shot_source_decode_qa39.py'
