@@ -148,6 +148,51 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             )
             assert denied_masters.status_code == 401
 
+        # Render-status and ordinary shot-job metadata expose private owner
+        # project/job/asset identities. More importantly, render-missing
+        # returns the *entire screenplay-bearing project* even when all
+        # footage already exists. Exercise the real no-op batch path rather
+        # than scheduling any GPU/model work or paid inference.
+        status_url = f"/api/video/projects/{project.id}/render-status"
+        status_response = client.get(status_url, headers=auth)
+        assert status_response.status_code == 200
+        before_status = status_response.json()
+        assert before_status["project_id"] == project.id
+        assert before_status["ready_for_assembly"] is True
+        assert before_status["total_shots"] == 1
+
+        jobs_response = client.get("/api/video/jobs", headers=auth)
+        job_detail_url = f"/api/video/jobs/{job['id']}"
+        job_detail_response = client.get(job_detail_url, headers=auth)
+        assert jobs_response.status_code == job_detail_response.status_code == 200
+        assert any(item["id"] == job["id"] for item in jobs_response.json())
+        assert job_detail_response.json()["asset_id"] == source_id
+
+        missing_url = f"/api/video/projects/{project.id}/render-missing"
+        render_missing_response = client.post(
+            missing_url, headers=auth,
+            json={"expected_revision": project.revision, "max_shots": 1},
+        )
+        assert render_missing_response.status_code == 200, render_missing_response.text
+        assert render_missing_response.json()["jobs"] == []
+        assert render_missing_response.json()["skipped"] == 1
+        assert render_missing_response.json()["project"]["master_prompt"] == SENTINEL
+        assert client.get(status_url, headers=auth).json() == before_status
+
+        for private_url in (status_url, "/api/video/jobs", job_detail_url):
+            assert client.get(private_url).status_code == 401
+            assert client.get(
+                private_url, headers={"Authorization": "Bearer wrong"},
+            ).status_code == 401
+            assert client.get(private_url + "?token=" + TOKEN).status_code == 401
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            denied_batch = client.post(
+                missing_url, headers=denied_headers,
+                json={"expected_revision": project.revision, "max_shots": 1},
+            )
+            assert denied_batch.status_code == 401
+        assert client.get(status_url, headers=auth).json() == before_status
+
         # The asynchronous mobile queue exposes project identity, revision,
         # FFmpeg settings and job state.  Even though it deliberately excludes
         # screenplay text, these owner-only operational records must not be
@@ -275,6 +320,10 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             ("async-queue-create", queued), ("async-queue-list", queue_listing),
             ("async-queue-detail", queue_detail), ("async-queue-cancel", queue_cancelled),
             ("private-shot-plan", planned),
+            ("render-status", status_response),
+            ("video-jobs-list", jobs_response),
+            ("video-job-detail", job_detail_response),
+            ("render-missing-project", render_missing_response),
         ):
             directives = {
                 part.strip().lower()
