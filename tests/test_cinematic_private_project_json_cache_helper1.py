@@ -61,7 +61,9 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
     ))
     shot = models.CinematicShot(
         shot_id="3" * 32, ordinal=1, title="Synthetic red",
-        prompt="Synthetic FFmpeg red frame", duration_seconds=2,
+        prompt=f"{SENTINEL}: synthetic FFmpeg red frame",
+        negative_prompt=f"{SENTINEL}: private shot exclusions",
+        duration_seconds=2,
     )
     scene = models.CinematicScene(
         scene_id="2" * 32, ordinal=1, title="Synthetic scene",
@@ -243,6 +245,28 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             "revision"
         ] == compiled_revision
 
+        # A render-plan preview is a GET that returns the actual private shot
+        # prompt and negative prompt. It must not be cached merely because the
+        # project CRUD and assembly responses received no-store protection.
+        # Use the registered test-only engine capabilities; no GPU generation.
+        from app.video import engine as engine_module
+        monkeypatch.setattr(
+            engine_module, "get_engine",
+            lambda name: engine_module.FakeVideoEngine(),
+        )
+        plan_url = (
+            f"/api/video/projects/{project.id}/scenes/{scene.scene_id}"
+            f"/shots/{shot.shot_id}/plan?engine_name=helper1-synthetic"
+        )
+        planned = client.get(plan_url, headers=auth)
+        assert planned.status_code == 200, planned.text
+        assert planned.json()["prompt"] == f"{SENTINEL}: synthetic FFmpeg red frame"
+        assert planned.json()["negative_prompt"] == f"{SENTINEL}: private shot exclusions"
+        assert planned.json()["project_id"] == project.id
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            assert client.get(plan_url, headers=denied_headers).status_code == 401
+        assert client.get(plan_url + "&token=" + TOKEN).status_code == 401
+
         missing_no_store = []
         for route, response in (
             ("list", listing), ("detail", detail),
@@ -250,6 +274,7 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             ("assemble-master", assembled), ("master-library", masters),
             ("async-queue-create", queued), ("async-queue-list", queue_listing),
             ("async-queue-detail", queue_detail), ("async-queue-cancel", queue_cancelled),
+            ("private-shot-plan", planned),
         ):
             directives = {
                 part.strip().lower()
