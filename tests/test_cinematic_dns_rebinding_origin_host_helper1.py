@@ -70,7 +70,7 @@ def test_rebinding_host_and_matching_origin_cannot_mutate_local_studio_without_t
     url = f"/api/video/assets/{asset_id}.mp4"
     project_request = {
         "title": "Synthetic origin/Host boundary QA",
-        "master_prompt": "Synthetic only; no owner data",
+        "master_prompt": "SYNTHETIC_PRIVATE_REBINDING_SCREENPLAY_f81d",
         "target_duration_seconds": 10,
         "delivery_fps": 24,
         "delivery_resolution": "480p",
@@ -89,11 +89,25 @@ def test_rebinding_host_and_matching_origin_cannot_mutate_local_studio_without_t
             headers={"Origin": "http://localhost"},
         )
         assert good.status_code == 200
+        project_id = good.json()["id"]
+        assert good.json()["master_prompt"] == project_request["master_prompt"]
+        assert local.get(f"/api/video/projects/{project_id}").json()[
+            "master_prompt"
+        ] == project_request["master_prompt"]
     before = len(service.list_projects())
 
-    # Control: a directly remote peer cannot write without a studio token.
+    # Control: a genuinely remote peer cannot read private media or screenplay
+    # and cannot write when no token is configured.
+    private_routes = (
+        ("project-list", "/api/video/projects"),
+        ("project-detail", f"/api/video/projects/{project_id}"),
+        ("private-mp4", url),
+    )
     with TestClient(server.app, base_url="http://cinema.attacker.invalid",
                     client=("198.51.100.24", 42001)) as remote:
+        for label, route in private_routes:
+            denied_read = remote.get(route)
+            assert denied_read.status_code == 403, label
         denied = remote.post(
             "/api/video/projects", json=project_request,
             headers={"Origin": "http://cinema.attacker.invalid"},
@@ -101,17 +115,43 @@ def test_rebinding_host_and_matching_origin_cannot_mutate_local_studio_without_t
         assert denied.status_code == 403
     assert len(service.list_projects()) == before
 
-    # Simulate a DNS-rebound hostname resolving to 127.0.0.1. A browser's
-    # Origin and HTTP Host can both name the attacker-controlled hostname.
-    # Comparing Origin against request.base_url is not a trusted-host check.
+    # Conditional DNS-rebinding simulation: an attacker-owned Host and Origin
+    # both name a domain resolved to loopback. Read and write access must be
+    # denied, even if the peer IP appears local. Collect all outcomes rather
+    # than failing on the first route so CI identifies each distinct exposure.
+    # This is NOT proof of a real DNS/browser attack or deployed exposure.
+    violations = []
     with TestClient(server.app, base_url="http://cinema.attacker.invalid",
                     client=("127.0.0.1", 42002)) as rebound:
+        for label, route in private_routes:
+            exposed = rebound.get(
+                route, headers={"Origin": "http://cinema.attacker.invalid"},
+            )
+            assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+            if exposed.status_code not in (401, 403):
+                violations.append(f"{label}:HTTP-{exposed.status_code}")
+                # Establish the *synthetic* data really crossed the boundary,
+                # not just that a handler returned an empty success response.
+                if exposed.status_code == 200 and label == "private-mp4":
+                    assert exposed.content == payload
+                elif exposed.status_code == 200 and label == "project-detail":
+                    assert exposed.json()["master_prompt"] == project_request[
+                        "master_prompt"
+                    ]
+                elif exposed.status_code == 200 and label == "project-list":
+                    assert any(
+                        item.get("master_prompt") == project_request["master_prompt"]
+                        for item in exposed.json()
+                    )
         response = rebound.post(
             "/api/video/projects", json=project_request,
             headers={"Origin": "http://cinema.attacker.invalid"},
         )
-        assert response.status_code in (401, 403), (
-            "An attacker-controlled Host with a matching Origin was accepted "
-            "as a local owner and permitted to mutate a cinematic project"
-        )
-    assert len(service.list_projects()) == before
+        if response.status_code not in (401, 403):
+            violations.append(f"project-write:HTTP-{response.status_code}")
+    if len(service.list_projects()) != before:
+        violations.append("unauthorized-project-mutation")
+    assert not violations, (
+        "Tokenless DNS-rebound Host/Origin accepted private synthetic media, "
+        "screenplay or writes: " + ", ".join(violations)
+    )
