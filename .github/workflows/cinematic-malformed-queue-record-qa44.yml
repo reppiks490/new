@@ -1,0 +1,41 @@
+name: Cinematic malformed queue record QA44
+
+on:
+  push:
+    branches:
+      - chatgpt/cinematic-malformed-queue-record-qa44-20261024
+    paths:
+      - 'tests/test_cinematic_malformed_queue_record_qa44.py'
+      - '.github/workflows/cinematic-malformed-queue-record-qa44.yml'
+      - 'app/video/cinematic_assembly_jobs.py'
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_malformed_queue_record_qa44.py'
+      - '.github/workflows/cinematic-malformed-queue-record-qa44.yml'
+      - 'app/video/cinematic_assembly_jobs.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  malformed-record-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_STRICT_MALFORMED_QUEUE_QA44: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install local test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Run genuine SQLite control and strict queue-isolation regressions
+        run: python -m pytest -q -W error tests/test_cinematic_malformed_queue_record_qa44.py
