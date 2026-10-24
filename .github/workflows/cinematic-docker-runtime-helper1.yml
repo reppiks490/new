@@ -1,0 +1,61 @@
+name: Cinematic Docker studio runtime contract (Helper 1)
+
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_docker_runtime_contract_helper1.py'
+      - '.github/workflows/cinematic-docker-runtime-helper1.yml'
+      - 'Dockerfile'
+      - 'app/main.py'
+      - 'app/studio/server.py'
+      - 'app/video/router.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  studio-runtime-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build actual repository Docker image (no Blender/GPU)
+        run: |
+          set -euo pipefail
+          docker build --build-arg WITH_BLENDER=0 -t cinematic-helper1:qa .
+      - name: Boot ephemeral offline container
+        run: |
+          set -euo pipefail
+          # No host ports, mounted owner files, credentials, or network access.
+          docker run -d --name cinematic-helper1-qa --network none cinematic-helper1:qa
+          for i in $(seq 1 40); do
+            if docker exec cinematic-helper1-qa python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2)" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Container never exposed a local /health endpoint" >&2
+          docker logs cinematic-helper1-qa >&2
+          exit 1
+      - name: Assert cinematic API and genuine offline H.264 capability
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker exec -i cinematic-helper1-qa python - \
+            < tools/cinematic_docker_runtime_contract_helper1.py \
+            2>&1 | tee test-results/cinematic-docker-contract.txt
+      - name: Capture container diagnostics
+        if: always()
+        run: |
+          mkdir -p test-results
+          docker logs cinematic-helper1-qa > test-results/container.log 2>&1 || true
+          docker rm -f cinematic-helper1-qa >/dev/null 2>&1 || true
+      - name: Retain exact-run QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-docker-runtime-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
