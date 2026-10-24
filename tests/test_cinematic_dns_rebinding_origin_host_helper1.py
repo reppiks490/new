@@ -692,3 +692,129 @@ def test_rebound_host_cannot_admit_private_ffmpeg_master_assembly(
         "Untrusted Host reached private FFmpeg master-assembly admission "
         "(inert spy only; no worker or media output): " + ", ".join(violations)
     )
+
+
+def test_rebound_host_cannot_compile_private_screenplay(
+    monkeypatch, tmp_path: Path,
+):
+    """An untrusted Host cannot persist generated screenplay scenes.
+
+    Genuine SQLite project/revision state is used. Compiling is deterministic
+    local editorial work, not GPU inference, paid generation, or FFmpeg.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Dedicated strict Host/screenplay compilation security matrix")
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+    service = importlib.import_module("app.video.cinematic_service")
+
+    def new_project(client, suffix):
+        created = client.post("/api/video/projects", json={
+            "title": f"Synthetic compilation boundary {suffix}",
+            "master_prompt": f"SYNTHETIC_PRIVATE_COMPILE_{suffix}_a91d",
+            "target_duration_seconds": 10,
+            "delivery_fps": 24,
+            "delivery_resolution": "480p",
+            "aspect_ratio": "16:9",
+        })
+        assert created.status_code == 200, created.text
+        assert created.json()["revision"] == 1
+        assert not created.json()["scenes"]
+        return created.json()
+
+    def compile_url(project):
+        return f"/api/video/projects/{project['id']}/compile"
+
+    def compile_body(project):
+        return {
+            "expected_revision": project["revision"],
+            "preferred_shot_seconds": 2,
+            "engine_max_duration_seconds": 2,
+        }
+
+    # Local positive control: the real deterministic compiler persists scenes.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42500)) as local:
+        local_project = new_project(local, "local")
+        allowed = local.post(
+            compile_url(local_project), json=compile_body(local_project),
+            headers={"Origin": "http://localhost"},
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["project"]["revision"] == 2
+        assert allowed.json()["project"]["scenes"]
+        assert service.get_project(local_project["id"]).revision == 2
+
+        # Distinct project per variant prevents a successful unauthorized
+        # compile from making later requests fail only due to stale revision.
+        variants = (
+            ("matching-attacker-origin",
+             {"Origin": "http://cinema.attacker.invalid"}),
+            ("originless", {}),
+            ("trusted-looking-origin", {"Origin": "http://localhost"}),
+        )
+        projects = [(label, headers, new_project(local, label))
+                    for label, headers in variants]
+        remote_project = new_project(local, "remote-control")
+        bearer_project = new_project(local, "bearer-control")
+
+    # Genuinely remote unauthenticated peers must be rejected with no mutation.
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42501)) as remote:
+        denied = remote.post(
+            compile_url(remote_project), json=compile_body(remote_project),
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        assert denied.status_code == 403
+    assert service.get_project(remote_project["id"]).revision == 1
+
+    # Supported authenticated remote usage must survive a future Host fix.
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-compile-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42502)) as authenticated:
+        accepted = authenticated.post(
+            compile_url(bearer_project), json=compile_body(bearer_project),
+            headers={
+                "Authorization": "Bearer synthetic-compile-bearer",
+                "Origin": "http://cinema.attacker.invalid",
+            },
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["project"]["scenes"]
+    assert service.get_project(bearer_project["id"]).revision == 2
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    violations = []
+    for offset, (label, headers, project) in enumerate(projects):
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42510 + offset)) as rebound:
+            result = rebound.post(
+                compile_url(project), json=compile_body(project),
+                headers=headers,
+            )
+            assert result.request.headers["host"] == "cinema.attacker.invalid"
+            if not headers:
+                assert "origin" not in result.request.headers
+            if result.status_code not in (401, 403):
+                violations.append(f"{label}-compile:HTTP-{result.status_code}")
+                if result.status_code == 200:
+                    compiled = result.json()["project"]
+                    assert compiled["master_prompt"] == project["master_prompt"]
+                    assert compiled["scenes"]
+                    assert compiled["revision"] == 2
+            stored = service.get_project(project["id"])
+            if stored.revision != project["revision"] or stored.scenes:
+                violations.append(
+                    f"{label}-unauthorized-durable-compile:revision-{stored.revision}"
+                )
+
+    assert not violations, (
+        "Untrusted Host compiled private synthetic screenplay into durable "
+        "project scenes (no model or paid work): " + ", ".join(violations)
+    )
