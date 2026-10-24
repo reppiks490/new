@@ -158,10 +158,40 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
         assert created.json()["master_prompt"] == SENTINEL
         assert updated.json()["master_prompt"] == SENTINEL
 
+        # The compiler returns the full project including the original
+        # screenplay and newly generated shot text. A GET/POST/PUT-only
+        # no-store fix would still expose this owner-authored JSON to caches.
+        compiled = client.post(
+            f"/api/video/projects/{created.json()['id']}/compile",
+            headers=auth,
+            json={
+                "expected_revision": created.json()["revision"],
+                "preferred_shot_seconds": 2,
+                "engine_max_duration_seconds": 2,
+            },
+        )
+        assert compiled.status_code == 200, compiled.status_code
+        assert compiled.json()["project"]["master_prompt"] == SENTINEL
+        assert compiled.json()["project"]["scenes"]
+        assert compiled.json()["project"]["revision"] == created.json()["revision"] + 1
+        # Authentication rejection must happen before any compile mutation.
+        compiled_id = created.json()["id"]
+        compiled_revision = compiled.json()["project"]["revision"]
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            denied = client.post(
+                f"/api/video/projects/{compiled_id}/compile",
+                headers=denied_headers,
+                json={"expected_revision": compiled_revision},
+            )
+            assert denied.status_code == 401
+        assert client.get(f"/api/video/projects/{compiled_id}", headers=auth).json()[
+            "revision"
+        ] == compiled_revision
+
         missing_no_store = []
         for route, response in (
             ("list", listing), ("detail", detail),
-            ("create", created), ("update", updated),
+            ("create", created), ("update", updated), ("compile", compiled),
         ):
             directives = {
                 part.strip().lower()
