@@ -1,0 +1,509 @@
+"""Helper 1: private cinematic screenplay JSON must be non-cacheable.
+
+Test-first, real-media integration proof using only synthetic H.264.  This
+checks *project metadata* responses, not the already no-store MP4 asset route.
+No owner footage, external inference, paid services or real credentials.
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+from fastapi.testclient import TestClient
+import pytest
+
+TOKEN = "synthetic-json-cache-owner-token"
+SENTINEL = "SYNTHETIC_PRIVATE_SCREENPLAY_CACHE_SENTINEL_8f4d"
+
+
+def _media_tools():
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") == "1":
+            pytest.fail("Strict project-JSON privacy QA requires real FFmpeg and FFprobe")
+        pytest.skip("Real FFmpeg and FFprobe unavailable in ordinary CI")
+    return ffmpeg, ffprobe
+
+
+def _run(*command):
+    return subprocess.run(command, check=True, capture_output=True, timeout=120)
+
+
+class _HoldingAssemblyPool:
+    """Hold queued jobs without executing a second FFmpeg encode during HTTP QA."""
+
+    def submit(self, fn, *args, **kwargs):
+        return object()
+
+
+def test_private_project_json_never_advertises_cacheable_screenplay(
+    monkeypatch, tmp_path: Path,
+):
+    ffmpeg, ffprobe = _media_tools()
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", TOKEN)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    models = importlib.import_module("app.video.cinematic_models")
+    service = importlib.import_module("app.video.cinematic_service")
+    storage = importlib.import_module("app.video.storage")
+
+    project = service.create_project(models.ProjectCreateRequest(
+        title="Synthetic private screenplay", master_prompt=SENTINEL,
+        target_duration_seconds=10, delivery_fps=24,
+        delivery_resolution="480p", aspect_ratio="16:9",
+    ))
+    shot = models.CinematicShot(
+        shot_id="3" * 32, ordinal=1, title="Synthetic red",
+        prompt=f"{SENTINEL}: synthetic FFmpeg red frame",
+        negative_prompt=f"{SENTINEL}: private shot exclusions",
+        duration_seconds=2,
+    )
+    scene = models.CinematicScene(
+        scene_id="2" * 32, ordinal=1, title="Synthetic scene",
+        target_duration_seconds=2, shots=[shot],
+    )
+    project = service.update_project(
+        project.id, models.ProjectUpdateRequest(expected_revision=1, scenes=[scene]),
+    )
+    source_id = "4" * 32
+    source = storage.video_asset_path(source_id, "mp4")
+    _run(
+        ffmpeg, "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=red:s=160x90:r=24:d=2",
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart", str(source),
+    )
+    source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    _run(ffmpeg, "-nostdin", "-v", "error", "-xerror",
+         "-i", str(source), "-an", "-f", "null", "-")
+
+    job = storage.put_video_record("video_job", {
+        "status": "succeeded", "project_id": project.id,
+        "scene_id": scene.scene_id, "shot_id": shot.shot_id,
+        "asset_id": source_id, "project_revision": project.revision,
+    })
+    linked = shot.model_copy(update={
+        "latest_job_id": job["id"], "latest_rendered_project_revision": 2,
+    })
+    project = service.update_project(
+        project.id, models.ProjectUpdateRequest(
+            expected_revision=2,
+            scenes=[scene.model_copy(update={"shots": [linked]})],
+        ),
+    )
+    assert service.project_render_status(project.id)["ready_for_assembly"]
+
+    for module in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(module, None)
+    server = importlib.import_module("app.studio.server")
+    queue = importlib.import_module("app.video.cinematic_assembly_jobs")
+    monkeypatch.setattr(queue, "assembly_pool", _HoldingAssemblyPool())
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+
+    with TestClient(server.app) as client:
+        assembled = client.post(
+            f"/api/video/projects/{project.id}/assemble",
+            json={"expected_revision": project.revision}, headers=auth,
+        )
+        assert assembled.status_code == 200, assembled.status_code
+        master = assembled.json()
+        assert master["status"] == "ready"
+        assert master["actual_video_probe_verified"] is True
+        output = storage.video_asset_path(master["asset_id"], "mp4")
+        data = output.read_bytes()
+        assert len(data) > 2048
+        assert hashlib.sha256(data).hexdigest() == master["sha256"]
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == source_digest
+        probe = json.loads(_run(
+            ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,nb_read_frames",
+            "-of", "json", str(output),
+        ).stdout)
+        assert probe["streams"][0]["codec_name"] == "h264"
+        assert int(probe["streams"][0]["nb_read_frames"]) == 48
+        _run(ffmpeg, "-nostdin", "-v", "error", "-xerror",
+             "-i", str(output), "-an", "-f", "null", "-")
+
+        media = client.get(master["asset_url"], headers=auth)
+        assert media.status_code == 200
+        assert media.headers.get("cache-control") == "no-store"
+        assert media.content == data
+
+        # Master records expose private media identity and source provenance.
+        # Both the synchronous assembly response and master-library JSON
+        # require the same no-store protection as the underlying private MP4.
+        masters = client.get(f"/api/video/projects/{project.id}/masters", headers=auth)
+        assert masters.status_code == 200
+        assert any(item.get("asset_id") == master["asset_id"] for item in masters.json())
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            denied_masters = client.get(
+                f"/api/video/projects/{project.id}/masters", headers=denied_headers,
+            )
+            assert denied_masters.status_code == 401
+
+        # Render-status and ordinary shot-job metadata expose private owner
+        # project/job/asset identities. More importantly, render-missing
+        # returns the *entire screenplay-bearing project* even when all
+        # footage already exists. Exercise the real no-op batch path rather
+        # than scheduling any GPU/model work or paid inference.
+        status_url = f"/api/video/projects/{project.id}/render-status"
+        status_response = client.get(status_url, headers=auth)
+        assert status_response.status_code == 200
+        before_status = status_response.json()
+        assert before_status["project_id"] == project.id
+        assert before_status["ready_for_assembly"] is True
+        assert before_status["total_shots"] == 1
+
+        jobs_response = client.get("/api/video/jobs", headers=auth)
+        job_detail_url = f"/api/video/jobs/{job['id']}"
+        job_detail_response = client.get(job_detail_url, headers=auth)
+        assert jobs_response.status_code == job_detail_response.status_code == 200
+        assert any(item["id"] == job["id"] for item in jobs_response.json())
+        assert job_detail_response.json()["asset_id"] == source_id
+
+        missing_url = f"/api/video/projects/{project.id}/render-missing"
+        render_missing_response = client.post(
+            missing_url, headers=auth,
+            json={"expected_revision": project.revision, "max_shots": 1},
+        )
+        assert render_missing_response.status_code == 200, render_missing_response.text
+        assert render_missing_response.json()["jobs"] == []
+        assert render_missing_response.json()["skipped"] == 1
+        assert render_missing_response.json()["project"]["master_prompt"] == SENTINEL
+        assert client.get(status_url, headers=auth).json() == before_status
+
+        for private_url in (status_url, "/api/video/jobs", job_detail_url):
+            assert client.get(private_url).status_code == 401
+            assert client.get(
+                private_url, headers={"Authorization": "Bearer wrong"},
+            ).status_code == 401
+            assert client.get(private_url + "?token=" + TOKEN).status_code == 401
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            denied_batch = client.post(
+                missing_url, headers=denied_headers,
+                json={"expected_revision": project.revision, "max_shots": 1},
+            )
+            assert denied_batch.status_code == 401
+        assert client.get(status_url, headers=auth).json() == before_status
+
+        # The asynchronous mobile queue exposes project identity, revision,
+        # FFmpeg settings and job state.  Even though it deliberately excludes
+        # screenplay text, these owner-only operational records must not be
+        # stored by browser or intermediary caches. Hold the worker to make
+        # queued -> cancelled deterministic; the synchronous master above
+        # already proved genuine H.264 encoding, probing and full decoding.
+        queue_url = f"/api/video/projects/{project.id}/assembly-jobs"
+        queued = client.post(
+            queue_url, headers=auth,
+            json={"expected_revision": project.revision},
+        )
+        assert queued.status_code == 202, queued.text
+        queue_job = queued.json()
+        assert queue_job["project_id"] == project.id
+        assert queue_job["project_revision"] == project.revision
+        assert queue_job["status"] == "queued"
+        assert SENTINEL not in queued.text
+        queue_detail_url = f"{queue_url}/{queue_job['id']}"
+        queue_listing = client.get(queue_url, headers=auth)
+        queue_detail = client.get(queue_detail_url, headers=auth)
+        assert queue_listing.status_code == queue_detail.status_code == 200
+        assert any(item["id"] == queue_job["id"] for item in queue_listing.json()["jobs"])
+        assert queue_detail.json()["id"] == queue_job["id"]
+        for private_url in (queue_url, queue_detail_url):
+            assert client.get(private_url).status_code == 401
+            assert client.get(private_url, headers={"Authorization": "Bearer wrong"}).status_code == 401
+        denied_cancel = client.post(queue_detail_url + "/cancel")
+        assert denied_cancel.status_code == 401
+        assert queue.get_master_assembly_job(project.id, queue_job["id"])["status"] == "queued"
+        queue_cancelled = client.post(queue_detail_url + "/cancel", headers=auth)
+        assert queue_cancelled.status_code == 200
+        assert queue_cancelled.json()["status"] == "cancelled"
+        assert queue.get_master_assembly_job(project.id, queue_job["id"])["status"] == "cancelled"
+
+        # No Authorization header or query token may retrieve screenplay JSON.
+        for route in ("/api/video/projects", f"/api/video/projects/{project.id}"):
+            assert client.get(route).status_code == 401
+            assert client.get(route, headers={"Authorization": "Bearer wrong"}).status_code == 401
+            assert client.get(route + "?token=" + TOKEN).status_code == 401
+
+        # The private JSON routes return the raw creative screenplay, unlike
+        # media files that already set no-store. Browser/proxy caches must
+        # never be invited to retain these owner-only JSON representations.
+        listing = client.get("/api/video/projects", headers=auth)
+        detail = client.get(f"/api/video/projects/{project.id}", headers=auth)
+        assert listing.status_code == detail.status_code == 200
+        assert any(item.get("master_prompt") == SENTINEL for item in listing.json())
+        assert detail.json()["master_prompt"] == SENTINEL
+        # Creation and updates also return the complete private screenplay.
+        # Checking only GET routes would permit a partial middleware fix to
+        # leave these authenticated mutation responses cacheable.
+        created = client.post("/api/video/projects", headers=auth, json={
+            "title": "Another synthetic private film",
+            "master_prompt": SENTINEL,
+            "target_duration_seconds": 10,
+            "delivery_fps": 24,
+            "delivery_resolution": "480p",
+            "aspect_ratio": "16:9",
+        })
+        updated = client.put(
+            f"/api/video/projects/{project.id}", headers=auth,
+            json={"expected_revision": project.revision, "title": "Private screenplay revised"},
+        )
+        assert created.status_code == updated.status_code == 200
+        assert created.json()["master_prompt"] == SENTINEL
+        assert updated.json()["master_prompt"] == SENTINEL
+
+        # The compiler returns the full project including the original
+        # screenplay and newly generated shot text. A GET/POST/PUT-only
+        # no-store fix would still expose this owner-authored JSON to caches.
+        compiled = client.post(
+            f"/api/video/projects/{created.json()['id']}/compile",
+            headers=auth,
+            json={
+                "expected_revision": created.json()["revision"],
+                "preferred_shot_seconds": 2,
+                "engine_max_duration_seconds": 2,
+            },
+        )
+        assert compiled.status_code == 200, compiled.status_code
+        assert compiled.json()["project"]["master_prompt"] == SENTINEL
+        assert compiled.json()["project"]["scenes"]
+        assert compiled.json()["project"]["revision"] == created.json()["revision"] + 1
+        # Authentication rejection must happen before any compile mutation.
+        compiled_id = created.json()["id"]
+        compiled_revision = compiled.json()["project"]["revision"]
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            denied = client.post(
+                f"/api/video/projects/{compiled_id}/compile",
+                headers=denied_headers,
+                json={"expected_revision": compiled_revision},
+            )
+            assert denied.status_code == 401
+        assert client.get(f"/api/video/projects/{compiled_id}", headers=auth).json()[
+            "revision"
+        ] == compiled_revision
+
+        # A render-plan preview is a GET that returns the actual private shot
+        # prompt and negative prompt. It must not be cached merely because the
+        # project CRUD and assembly responses received no-store protection.
+        # Use the registered test-only engine capabilities; no GPU generation.
+        from app.video import engine as engine_module
+        monkeypatch.setattr(
+            engine_module, "get_engine",
+            lambda name: engine_module.FakeVideoEngine(),
+        )
+        plan_url = (
+            f"/api/video/projects/{project.id}/scenes/{scene.scene_id}"
+            f"/shots/{shot.shot_id}/plan?engine_name=helper1-synthetic"
+        )
+        planned = client.get(plan_url, headers=auth)
+        assert planned.status_code == 200, planned.text
+        assert planned.json()["prompt"] == f"{SENTINEL}: synthetic FFmpeg red frame"
+        assert planned.json()["negative_prompt"] == f"{SENTINEL}: private shot exclusions"
+        assert planned.json()["project_id"] == project.id
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            assert client.get(plan_url, headers=denied_headers).status_code == 401
+        assert client.get(plan_url + "&token=" + TOKEN).status_code == 401
+
+        # POST /render is another screenplay-bearing response: unlike the
+        # read-only plan, it returns both the authored shot plan and the full
+        # linked project. Exercise the real enqueue/link route with a local
+        # synthetic PNG and a held fake worker; never launch GPU inference.
+        from PIL import Image
+        from app.video import jobs as jobs_module
+        render_image_id = "5" * 32
+        Image.new("RGB", (20, 16), (12, 34, 56)).save(
+            storage.video_asset_path(render_image_id, "png")
+        )
+        monkeypatch.setattr(
+            jobs_module, "get_engine",
+            lambda name: engine_module.FakeVideoEngine(),
+        )
+        monkeypatch.setattr(jobs_module, "pool", _HoldingAssemblyPool())
+        render_project = client.post("/api/video/projects", headers=auth, json={
+            "title": "Synthetic private render request",
+            "master_prompt": SENTINEL,
+            "reference_image_ids": [render_image_id],
+            "target_duration_seconds": 10,
+            "delivery_fps": 24,
+            "delivery_resolution": "480p",
+            "aspect_ratio": "16:9",
+        })
+        assert render_project.status_code == 200, render_project.text
+        render_id = render_project.json()["id"]
+        with_scene = client.put(
+            f"/api/video/projects/{render_id}", headers=auth,
+            json={
+                "expected_revision": render_project.json()["revision"],
+                "scenes": [scene.model_dump(mode="json")],
+            },
+        )
+        assert with_scene.status_code == 200, with_scene.text
+        render_url = (
+            f"/api/video/projects/{render_id}/scenes/{scene.scene_id}"
+            f"/shots/{shot.shot_id}/render"
+        )
+        rendered = client.post(
+            render_url, headers=auth,
+            json={
+                "expected_revision": with_scene.json()["revision"],
+                "engine_name": "fake",
+            },
+        )
+        assert rendered.status_code == 200, rendered.text
+        assert rendered.json()["project"]["master_prompt"] == SENTINEL
+        assert rendered.json()["plan"]["prompt"] == (
+            f"{SENTINEL}: synthetic FFmpeg red frame"
+        )
+        assert rendered.json()["job"]["id"]
+        linked_revision = rendered.json()["project"]["revision"]
+        assert linked_revision == with_scene.json()["revision"] + 1
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            denied_render = client.post(
+                render_url, headers=denied_headers,
+                json={"expected_revision": linked_revision, "engine_name": "fake"},
+            )
+            assert denied_render.status_code == 401
+        assert client.post(
+            render_url + "?token=" + TOKEN,
+            json={"expected_revision": linked_revision, "engine_name": "fake"},
+        ).status_code == 401
+        assert client.get(
+            f"/api/video/projects/{render_id}", headers=auth,
+        ).json()["revision"] == linked_revision
+
+        # Complete coverage of the remaining owner-only video API JSON
+        # surfaces. Image upload reveals a private asset locator, privacy
+        # settings reveal protection choices, and quick generation exposes
+        # local job/image identities. Keep all inputs synthetic and hold the
+        # worker so no GPU or paid model inference can start.
+        from io import BytesIO
+
+        private_png = BytesIO()
+        Image.new("RGB", (16, 12), (19, 41, 67)).save(
+            private_png, format="PNG"
+        )
+        image_upload_url = "/api/video/images"
+        uploaded = client.post(
+            image_upload_url,
+            headers=auth,
+            files={"file": (
+                "synthetic-private-reference.png",
+                private_png.getvalue(), "image/png",
+            )},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        uploaded_id = uploaded.json()["image_id"]
+        uploaded_url = uploaded.json()["url"]
+        assert uploaded_url == f"/api/video/assets/{uploaded_id}.png"
+        assert client.get(uploaded_url, headers=auth).headers.get(
+            "cache-control"
+        ) == "no-store"
+        assert client.get(uploaded_url).status_code == 401
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            assert client.post(
+                image_upload_url, headers=denied_headers,
+                files={"file": ("private.png", private_png.getvalue(), "image/png")},
+            ).status_code == 401
+
+        privacy_url = "/api/video/privacy"
+        private_preferences = client.get(privacy_url, headers=auth)
+        assert private_preferences.status_code == 200
+        assert private_preferences.json()["privacy_mode"] is True
+        changed_preferences = {
+            **private_preferences.json(), "idle_lock_seconds": 42,
+        }
+        privacy_updated = client.put(
+            privacy_url, headers=auth, json=changed_preferences,
+        )
+        assert privacy_updated.status_code == 200
+        assert privacy_updated.json()["idle_lock_seconds"] == 42
+        assert client.get(
+            privacy_url, headers=auth,
+        ).json()["idle_lock_seconds"] == 42
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            assert client.get(
+                privacy_url, headers=denied_headers,
+            ).status_code == 401
+            assert client.put(
+                privacy_url, headers=denied_headers,
+                json={**changed_preferences, "idle_lock_seconds": 99},
+            ).status_code == 401
+        assert client.get(
+            privacy_url, headers=auth,
+        ).json()["idle_lock_seconds"] == 42
+
+        # Capabilities contain owner-machine runtime/hardware diagnostics.
+        runtime_capabilities = client.get(
+            "/api/video/capabilities", headers=auth,
+        )
+        assert runtime_capabilities.status_code == 200
+        assert "runtime" in runtime_capabilities.json()
+        assert client.get("/api/video/capabilities").status_code == 401
+
+        monkeypatch.setattr(
+            jobs_module, "select_engine",
+            lambda profile: engine_module.FakeVideoEngine(),
+        )
+        quick_generation_url = "/api/video/generate"
+        quick_request = {
+            "image_id": uploaded_id,
+            "prompt": SENTINEL,
+            "duration_seconds": 2,
+            "fps": 24,
+            "resolution": "480p",
+            "engine_profile": "balanced",
+        }
+        before_quick_jobs = len(storage.list_video_records("video_job"))
+        quick_generation = client.post(
+            quick_generation_url, headers=auth, json=quick_request,
+        )
+        assert quick_generation.status_code == 200, quick_generation.text
+        assert quick_generation.json()["status"] == "queued"
+        assert quick_generation.json()["image_id"] == uploaded_id
+        assert quick_generation.json()["prompt_chars"] == len(SENTINEL)
+        assert SENTINEL not in quick_generation.text
+        assert len(storage.list_video_records("video_job")) == before_quick_jobs + 1
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            assert client.post(
+                quick_generation_url, headers=denied_headers,
+                json=quick_request,
+            ).status_code == 401
+        assert len(storage.list_video_records("video_job")) == before_quick_jobs + 1
+
+        missing_no_store = []
+        for route, response in (
+            ("list", listing), ("detail", detail),
+            ("create", created), ("update", updated), ("compile", compiled),
+            ("assemble-master", assembled), ("master-library", masters),
+            ("async-queue-create", queued), ("async-queue-list", queue_listing),
+            ("async-queue-detail", queue_detail), ("async-queue-cancel", queue_cancelled),
+            ("private-shot-plan", planned),
+            ("render-status", status_response),
+            ("video-jobs-list", jobs_response),
+            ("video-job-detail", job_detail_response),
+            ("render-missing-project", render_missing_response),
+            ("shot-render-private-project", rendered),
+            ("private-image-upload", uploaded),
+            ("private-video-preferences-read", private_preferences),
+            ("private-video-preferences-update", privacy_updated),
+            ("owner-runtime-capabilities", runtime_capabilities),
+            ("quick-generation-private-job", quick_generation),
+        ):
+            directives = {
+                part.strip().lower()
+                for part in response.headers.get("cache-control", "").split(",")
+            }
+            if "no-store" not in directives:
+                missing_no_store.append(route)
+        assert not missing_no_store, (
+            "Private video JSON lacks Cache-Control: no-store on: "
+            + ", ".join(missing_no_store)
+        )

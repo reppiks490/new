@@ -1,0 +1,53 @@
+name: Cinematic private screenplay JSON cache real-media QA
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_private_project_json_cache_helper1.py'
+      - 'app/studio/server.py'
+      - 'app/video/router.py'
+      - '.github/workflows/cinematic-private-project-json-cache-qa.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  private-project-json-real-media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require genuine FFmpeg FFprobe and libx264
+        run: |
+          set -euo pipefail
+          if command -v ffmpeg >/dev/null 2>&1 \
+              && command -v ffprobe >/dev/null 2>&1 \
+              && ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264' >/dev/null; then
+            echo 'Using installed media binaries'
+          else
+            for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+              if [ -f "$sources" ]; then
+                sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu/#http://archive.ubuntu.com/ubuntu/#g' "$sources"
+              fi
+            done
+            timeout 240s sudo apt-get update -qq -o Acquire::Retries=2 -o Acquire::http::Timeout=20
+            timeout 480s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
+          fi
+          ffmpeg -version | sed -n '1p'
+          ffprobe -version | sed -n '1p'
+          ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264'
+      - name: Install Python dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Verify private screenplay JSON no-store with fully decoded synthetic master
+        run: python -m pytest -q -W error tests/test_cinematic_private_project_json_cache_helper1.py
