@@ -1,0 +1,40 @@
+name: Cinematic master HDR to SDR colorimetry QA32
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_master_colorimetry_qa32.py'
+      - '.github/workflows/cinematic-master-colorimetry-qa32.yml'
+      - 'app/video/cinematic_service.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-colorimetry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_COLORIMETRY_QA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Verify FFmpeg and FFprobe
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+      - name: Install application test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Synthetic PQ reencode control and strict application regression
+        run: python -m pytest -q -W error tests/test_cinematic_master_colorimetry_qa32.py
