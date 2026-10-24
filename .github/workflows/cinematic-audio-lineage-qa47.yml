@@ -1,0 +1,27 @@
+name: Cinematic audio lineage QA47
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_audio_lineage_qa47.py'
+      - 'tests/test_cinematic_audio_lineage_qa47.py'
+      - '.github/workflows/cinematic-audio-lineage-qa47.yml'
+      - 'docs/CINEMATIC_AUDIO_LINEAGE_QA47_20261024.md'
+  workflow_dispatch:
+jobs:
+  synthetic-audio:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install real local FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Verify FFmpeg and ffprobe
+        run: ffmpeg -version && ffprobe -version
+      - name: Real synthetic media and privacy-safe regression
+        run: python -m unittest -v tests/test_cinematic_audio_lineage_qa47.py
