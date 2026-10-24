@@ -312,6 +312,73 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             assert client.get(plan_url, headers=denied_headers).status_code == 401
         assert client.get(plan_url + "&token=" + TOKEN).status_code == 401
 
+        # POST /render is another screenplay-bearing response: unlike the
+        # read-only plan, it returns both the authored shot plan and the full
+        # linked project. Exercise the real enqueue/link route with a local
+        # synthetic PNG and a held fake worker; never launch GPU inference.
+        from PIL import Image
+        from app.video import jobs as jobs_module
+        render_image_id = "5" * 32
+        Image.new("RGB", (20, 16), (12, 34, 56)).save(
+            storage.video_asset_path(render_image_id, "png")
+        )
+        monkeypatch.setattr(
+            jobs_module, "get_engine",
+            lambda name: engine_module.FakeVideoEngine(),
+        )
+        monkeypatch.setattr(jobs_module, "pool", _HoldingAssemblyPool())
+        render_project = client.post("/api/video/projects", headers=auth, json={
+            "title": "Synthetic private render request",
+            "master_prompt": SENTINEL,
+            "reference_image_ids": [render_image_id],
+            "target_duration_seconds": 10,
+            "delivery_fps": 24,
+            "delivery_resolution": "480p",
+            "aspect_ratio": "16:9",
+        })
+        assert render_project.status_code == 200, render_project.text
+        render_id = render_project.json()["id"]
+        with_scene = client.put(
+            f"/api/video/projects/{render_id}", headers=auth,
+            json={
+                "expected_revision": render_project.json()["revision"],
+                "scenes": [scene.model_dump(mode="json")],
+            },
+        )
+        assert with_scene.status_code == 200, with_scene.text
+        render_url = (
+            f"/api/video/projects/{render_id}/scenes/{scene.scene_id}"
+            f"/shots/{shot.shot_id}/render"
+        )
+        rendered = client.post(
+            render_url, headers=auth,
+            json={
+                "expected_revision": with_scene.json()["revision"],
+                "engine_name": "fake",
+            },
+        )
+        assert rendered.status_code == 200, rendered.text
+        assert rendered.json()["project"]["master_prompt"] == SENTINEL
+        assert rendered.json()["plan"]["prompt"] == (
+            f"{SENTINEL}: synthetic FFmpeg red frame"
+        )
+        assert rendered.json()["job"]["id"]
+        linked_revision = rendered.json()["project"]["revision"]
+        assert linked_revision == with_scene.json()["revision"] + 1
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            denied_render = client.post(
+                render_url, headers=denied_headers,
+                json={"expected_revision": linked_revision, "engine_name": "fake"},
+            )
+            assert denied_render.status_code == 401
+        assert client.post(
+            render_url + "?token=" + TOKEN,
+            json={"expected_revision": linked_revision, "engine_name": "fake"},
+        ).status_code == 401
+        assert client.get(
+            f"/api/video/projects/{render_id}", headers=auth,
+        ).json()["revision"] == linked_revision
+
         missing_no_store = []
         for route, response in (
             ("list", listing), ("detail", detail),
@@ -324,6 +391,7 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             ("video-jobs-list", jobs_response),
             ("video-job-detail", job_detail_response),
             ("render-missing-project", render_missing_response),
+            ("shot-render-private-project", rendered),
         ):
             directives = {
                 part.strip().lower()
