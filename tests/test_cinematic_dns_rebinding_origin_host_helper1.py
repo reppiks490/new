@@ -199,6 +199,56 @@ def test_rebinding_host_and_matching_origin_cannot_mutate_local_studio_without_t
         if spoofed_write.status_code not in (401, 403):
             violations.append(f"trusted-origin-untrusted-host-write:HTTP-{spoofed_write.status_code}")
 
+    # Owner privacy controls are also private API state. A rebinding Host must
+    # not read preferences or disable protections, even with a local TCP peer.
+    # These are synthetic settings in tmp_path, never owner preferences.
+    privacy_url = "/api/video/privacy"
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42005)) as local:
+        baseline_privacy = local.get(privacy_url)
+        assert baseline_privacy.status_code == 200
+        original_privacy = baseline_privacy.json()
+        assert local.put(privacy_url, json=original_privacy).status_code == 200
+
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42006)) as remote:
+        assert remote.get(privacy_url).status_code == 403
+        assert remote.put(privacy_url, json=original_privacy).status_code == 403
+
+    changed_privacy = {
+        **original_privacy,
+        "privacy_mode": not original_privacy["privacy_mode"],
+        "idle_lock_seconds": 77,
+    }
+    privacy_variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (variant, headers) in enumerate(privacy_variants):
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42010 + offset)) as rebound_privacy:
+            exposed = rebound_privacy.get(privacy_url, headers=headers)
+            assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+            if exposed.status_code not in (401, 403):
+                violations.append(f"{variant}-privacy-read:HTTP-{exposed.status_code}")
+                if exposed.status_code == 200:
+                    assert "privacy_mode" in exposed.json()
+                    assert "idle_lock_seconds" in exposed.json()
+            modified = rebound_privacy.put(
+                privacy_url, headers=headers, json=changed_privacy,
+            )
+            if modified.status_code not in (401, 403):
+                violations.append(f"{variant}-privacy-write:HTTP-{modified.status_code}")
+                if modified.status_code == 200:
+                    assert modified.json()["privacy_mode"] == changed_privacy["privacy_mode"]
+                    assert modified.json()["idle_lock_seconds"] == 77
+
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42020)) as local:
+        if local.get(privacy_url).json() != original_privacy:
+            violations.append("unauthorized-privacy-preferences-mutation")
+
     if len(service.list_projects()) != before:
         violations.append("unauthorized-project-mutation")
     assert not violations, (
