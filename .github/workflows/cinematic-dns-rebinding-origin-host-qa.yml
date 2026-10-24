@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'tests/test_cinematic_dns_rebinding_origin_host_helper1.py'
+      - 'tests/test_cinematic_trusted_host_policy_helper1.py'
       - 'app/studio/server.py'
       - 'app/video/router.py'
       - '.github/workflows/cinematic-dns-rebinding-origin-host-qa.yml'
@@ -50,4 +51,7 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -e '.[dev]'
       - name: Verify loopback origin/Host security boundary with real H.264
-        run: python -m pytest -q -W error tests/test_cinematic_dns_rebinding_origin_host_helper1.py
+        run: |
+          python -m pytest -q -W error \
+            tests/test_cinematic_dns_rebinding_origin_host_helper1.py \
+            tests/test_cinematic_trusted_host_policy_helper1.py
