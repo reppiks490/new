@@ -1,0 +1,41 @@
+name: Cinematic reference admission QA40
+
+on:
+  push:
+    branches:
+      - chatgpt/cinematic-reference-admission-qa40-20261024
+    paths:
+      - 'tests/test_cinematic_reference_admission_qa40.py'
+      - '.github/workflows/cinematic-reference-admission-qa40.yml'
+      - 'app/video/cinematic_rendering.py'
+      - 'app/video/cinematic_reference_preflight.py'
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_reference_admission_qa40.py'
+      - '.github/workflows/cinematic-reference-admission-qa40.yml'
+      - 'app/video/cinematic_rendering.py'
+      - 'app/video/cinematic_reference_preflight.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_REFERENCE_ADMISSION_QA40: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install application test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Run synthetic PNG admission controls and strict contracts
+        run: python -m pytest -q -W error tests/test_cinematic_reference_admission_qa40.py
