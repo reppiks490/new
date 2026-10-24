@@ -255,3 +255,125 @@ def test_rebinding_host_and_matching_origin_cannot_mutate_local_studio_without_t
         "Tokenless DNS-rebound Host/Origin accepted private synthetic media, "
         "screenplay or writes: " + ", ".join(violations)
     )
+
+
+def test_rebound_host_cannot_read_or_cancel_durable_master_jobs(
+    monkeypatch, tmp_path: Path,
+):
+    """Reject hostile Host on async metadata and cancellation, not just project CRUD.
+
+    The jobs are inert synthetic SQLite records. Suppressing queue dispatch
+    avoids starting FFmpeg or GPU work; this tests the HTTP security boundary,
+    project-ID isolation and durable cancellation state, not media rendering.
+    """
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    storage = importlib.import_module("app.video.storage")
+    assembly = importlib.import_module("app.video.cinematic_assembly_jobs")
+    monkeypatch.setattr(assembly, "_dispatch", lambda: None)
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+
+    project_request = {
+        "title": "Synthetic queued master Host boundary",
+        "master_prompt": "PRIVATE_SYNTHETIC_QUEUE_PROMPT_4f19",
+        "target_duration_seconds": 10,
+        "delivery_fps": 24,
+        "delivery_resolution": "480p",
+        "aspect_ratio": "16:9",
+    }
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42100)) as local:
+        a = local.post("/api/video/projects", json=project_request)
+        b = local.post("/api/video/projects", json={
+            **project_request, "title": "Other synthetic project",
+        })
+        assert a.status_code == b.status_code == 200
+        project_id, other_id = a.json()["id"], b.json()["id"]
+        assert project_id != other_id
+
+    def seed_queued(identifier: str) -> str:
+        storage.put_video_record(
+            "video_assembly_job",
+            {
+                "project_id": project_id,
+                "project_revision": a.json()["revision"],
+                "ffmpeg_path": "ffmpeg",
+                "status": "queued",
+                "stage": "Queued",
+                "created_at": 1.0,
+                "updated_at": 1.0,
+                "progress": 0,
+            },
+            identifier=identifier,
+        )
+        return f"/api/video/projects/{project_id}/assembly-jobs/{identifier}"
+
+    legitimate_url = seed_queued("1" * 32)
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42101)) as local:
+        listing = local.get(f"/api/video/projects/{project_id}/assembly-jobs")
+        assert listing.status_code == 200
+        assert any(job["id"] == "1" * 32 for job in listing.json()["jobs"])
+        assert local.get(legitimate_url).json()["status"] == "queued"
+        assert local.get(
+            f"/api/video/projects/{other_id}/assembly-jobs/" + "1" * 32
+        ).status_code == 404
+        cancelled = local.post(legitimate_url + "/cancel",
+                               headers={"Origin": "http://localhost"})
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert storage.get_video_record("video_assembly_job", "1" * 32)[
+            "status"
+        ] == "cancelled"
+
+    variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}, "2" * 32),
+        ("originless", {}, "3" * 32),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}, "4" * 32),
+    )
+    violations = []
+    for offset, (label, headers, job_id) in enumerate(variants):
+        job_url = seed_queued(job_id)
+        collection = f"/api/video/projects/{project_id}/assembly-jobs"
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("198.51.100.24", 42110 + offset)) as remote:
+            assert remote.get(collection).status_code == 403
+            assert remote.get(job_url).status_code == 403
+            assert remote.post(job_url + "/cancel", headers=headers).status_code == 403
+        assert storage.get_video_record("video_assembly_job", job_id)[
+            "status"
+        ] == "queued"
+
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42120 + offset)) as rebound:
+            for route_name, route in (("collection", collection), ("detail", job_url)):
+                exposed = rebound.get(route, headers=headers)
+                assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+                if exposed.status_code not in (401, 403):
+                    violations.append(f"{label}-{route_name}:HTTP-{exposed.status_code}")
+                    if exposed.status_code == 200:
+                        body = exposed.json()
+                        if route_name == "collection":
+                            assert any(job["id"] == job_id for job in body["jobs"])
+                        else:
+                            assert body["id"] == job_id
+                            assert body["project_id"] == project_id
+            changed = rebound.post(job_url + "/cancel", headers=headers)
+            assert changed.request.headers["host"] == "cinema.attacker.invalid"
+            if changed.status_code not in (401, 403):
+                violations.append(f"{label}-cancel:HTTP-{changed.status_code}")
+                if changed.status_code == 200:
+                    assert changed.json()["status"] == "cancelled"
+
+        stored_status = storage.get_video_record("video_assembly_job", job_id)["status"]
+        if stored_status != "queued":
+            violations.append(f"{label}-unauthorized-durable-job-mutation:{stored_status}")
+
+    assert not violations, (
+        "Untrusted Host reached private async assembly metadata/cancellation: "
+        + ", ".join(violations)
+    )
