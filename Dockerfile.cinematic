@@ -1,6 +1,7 @@
 # Opt-in cinematic studio runtime. The repository's default Dockerfile remains
 # the generic Character3D API; do not silently replace that delivery contract.
-FROM python:3.11-slim
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
