@@ -125,6 +125,18 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
         assert media.headers.get("cache-control") == "no-store"
         assert media.content == data
 
+        # Master records expose private media identity and source provenance.
+        # Both the synchronous assembly response and master-library JSON
+        # require the same no-store protection as the underlying private MP4.
+        masters = client.get(f"/api/video/projects/{project.id}/masters", headers=auth)
+        assert masters.status_code == 200
+        assert any(item.get("asset_id") == master["asset_id"] for item in masters.json())
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            denied_masters = client.get(
+                f"/api/video/projects/{project.id}/masters", headers=denied_headers,
+            )
+            assert denied_masters.status_code == 401
+
         # No Authorization header or query token may retrieve screenplay JSON.
         for route in ("/api/video/projects", f"/api/video/projects/{project.id}"):
             assert client.get(route).status_code == 401
@@ -192,6 +204,7 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
         for route, response in (
             ("list", listing), ("detail", detail),
             ("create", created), ("update", updated), ("compile", compiled),
+            ("assemble-master", assembled), ("master-library", masters),
         ):
             directives = {
                 part.strip().lower()
