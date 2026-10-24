@@ -1,0 +1,36 @@
+# Opt-in cinematic studio runtime. The repository's default Dockerfile remains
+# the generic Character3D API; do not silently replace that delivery contract.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    CHARACTER3D_STUDIO_WORKSPACE=/app/workspace/studio
+
+WORKDIR /app
+
+# Required for local FFmpeg master assembly and genuine in-container decode.
+# Install only the distro-packaged codecs; no GPU, model downloads or paid APIs.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml ./
+COPY app ./app
+COPY config ./config
+COPY blender_scripts ./blender_scripts
+COPY scripts ./scripts
+
+RUN python -m pip install --no-cache-dir -e . \
+    && mkdir -p /app/workspace/studio \
+    && chown -R 10001:10001 /app/workspace
+
+# Private state and rendered media are writable only by the dedicated user.
+USER 10001:10001
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)).get('studio') is True"
+
+# Listening on the container interface does not grant tokenless remote API
+# access: app.studio.server enforces loopback-peer/token policy separately.
+CMD ["uvicorn", "app.studio.server:app", "--host", "0.0.0.0", "--port", "8000"]
