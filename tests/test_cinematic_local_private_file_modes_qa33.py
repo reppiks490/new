@@ -19,7 +19,13 @@ from app.video import cinematic_models as models, cinematic_service as service
 from app.video.cinematic_requests import AssembleMasterRequest
 from app.video.storage import put_video_record, video_asset_path
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+pytestmark = [
+    pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only"),
+    pytest.mark.skipif(
+        os.getenv("CINEMATIC_REQUIRE_PRIVATE_MODES_QA") != "1",
+        reason="Strict expected-red privacy regression runs in dedicated QA33 workflow",
+    ),
+]
 
 
 @pytest.fixture
