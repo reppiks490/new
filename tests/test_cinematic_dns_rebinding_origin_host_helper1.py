@@ -381,3 +381,106 @@ def test_rebound_host_cannot_read_or_cancel_durable_master_jobs(
         "Untrusted Host reached private async assembly metadata/cancellation: "
         + ", ".join(violations)
     )
+
+
+def test_rebound_host_cannot_persist_private_image_upload(
+    monkeypatch, tmp_path: Path,
+):
+    """Host validation must protect private image writes, not only JSON state.
+
+    Uses only a synthetic PNG in an isolated workspace.  The remote bearer
+    control is important: a future Host fix must not disable authenticated
+    remote access.  No owner images, GPU jobs or external services are used.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Strict Host/private-upload regression is dedicated security CI")
+
+    from io import BytesIO
+    from PIL import Image
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+    storage = importlib.import_module("app.video.storage")
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+
+    png = BytesIO()
+    Image.new("RGB", (17, 13), (41, 73, 109)).save(png, format="PNG")
+    upload = {"file": ("synthetic-private-reference.png", png.getvalue(), "image/png")}
+    endpoint = "/api/video/images"
+    asset_dir = tmp_path / "video-assets"
+
+    def saved_assets():
+        return set(asset_dir.glob("*.png")) if asset_dir.exists() else set()
+
+    # Legitimate tokenless localhost uploads and private PNG downloads work.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42200)) as local:
+        good = local.post(endpoint, files=upload,
+                          headers={"Origin": "http://localhost"})
+        assert good.status_code == 200, good.text
+        asset_id = good.json()["image_id"]
+        private_url = f"/api/video/assets/{asset_id}.png"
+        assert good.json()["url"] == private_url
+        media = local.get(private_url)
+        assert media.status_code == 200
+        assert media.headers["cache-control"] == "no-store"
+        with Image.open(BytesIO(media.content)) as decoded:
+            assert decoded.size == (17, 13)
+            assert decoded.getpixel((0, 0)) == (41, 73, 109)
+
+    # A truly remote peer cannot use tokenless private image APIs.
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42201)) as remote:
+        assert remote.get(private_url).status_code == 403
+        assert remote.post(endpoint, files=upload,
+                           headers={"Origin": "http://cinema.attacker.invalid"}
+                           ).status_code == 403
+
+    # Positive remote Bearer control prevents an overbroad Host fix from
+    # accidentally disabling authenticated mobile / remote operation.
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-qa-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42202)) as authorized_remote:
+        headers = {
+            "Authorization": "Bearer synthetic-qa-bearer",
+            "Origin": "http://cinema.attacker.invalid",
+        }
+        assert authorized_remote.get(private_url, headers=headers).status_code == 200
+        allowed = authorized_remote.post(endpoint, files=upload, headers=headers)
+        assert allowed.status_code == 200, allowed.text
+        assert storage.video_asset_path(allowed.json()["image_id"], "png").is_file()
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    before = saved_assets()
+    violations = []
+    variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (label, headers) in enumerate(variants):
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42210 + offset)) as rebound:
+            attempted = rebound.post(endpoint, files=upload, headers=headers)
+            assert attempted.request.headers["host"] == "cinema.attacker.invalid"
+            if attempted.status_code not in (401, 403):
+                violations.append(f"{label}-private-image-upload:HTTP-{attempted.status_code}")
+                if attempted.status_code == 200:
+                    # Confirm an actual synthetic private PNG was durably
+                    # created, rather than mistaking an empty 200 for exposure.
+                    uploaded_id = attempted.json()["image_id"]
+                    saved = storage.video_asset_path(uploaded_id, "png")
+                    assert saved.is_file()
+                    with Image.open(saved) as decoded:
+                        assert decoded.size == (17, 13)
+                        assert decoded.getpixel((0, 0)) == (41, 73, 109)
+    new_files = saved_assets() - before
+    if new_files:
+        violations.append(f"unauthorized-persisted-private-pngs:{len(new_files)}")
+    assert not violations, (
+        "Untrusted Host accepted private synthetic PNG uploads: "
+        + ", ".join(violations)
+    )
