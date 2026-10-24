@@ -1,0 +1,50 @@
+name: Cinematic many-input memory QA28
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_many_input_memory_qa28.py'
+      - '.github/workflows/cinematic-many-input-memory-qa28.yml'
+      - 'docs/CINEMATIC_MANY_INPUT_MEMORY_QA28.md'
+      - 'app/video/cinematic_filtergraph_transport_qa27.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-many-input-real-media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_MANY_INPUT_QA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require FFmpeg FFprobe and H.264 encoder
+        run: |
+          set -euo pipefail
+          if command -v ffmpeg >/dev/null 2>&1 \
+              && command -v ffprobe >/dev/null 2>&1 \
+              && ffmpeg -hide_banner -encoders 2>/dev/null | grep -F 'libx264' >/dev/null; then
+            echo 'Using runner FFmpeg and FFprobe'
+          else
+            for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+              if [ -f "$sources" ]; then
+                sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu/#http://archive.ubuntu.com/ubuntu/#g' "$sources"
+              fi
+            done
+            timeout 240s sudo apt-get update -qq -o Acquire::Retries=2 -o Acquire::http::Timeout=20
+            timeout 480s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
+          fi
+          ffmpeg -version | sed -n '1p'
+      - name: Install local application and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Real 700-input encode and expected RED production thread contract
+        run: python -m pytest -q -W error tests/test_cinematic_many_input_memory_qa28.py
