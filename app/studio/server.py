@@ -53,7 +53,8 @@ def _trusted_tokenless_host(request: Request) -> bool:
 
 @app.middleware('http')
 async def private_api(request: Request, call_next):
-    if request.url.path.startswith('/api/'):
+    # Inspect ASGI path before parsing the attacker-controlled Host as a URL.
+    if request.scope.get('path', '').startswith('/api/'):
         if request.method == 'OPTIONS':
             return await call_next(request)
         secret = os.getenv('CHARACTER3D_STUDIO_TOKEN')
