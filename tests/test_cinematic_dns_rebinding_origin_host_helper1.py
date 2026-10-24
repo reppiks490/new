@@ -484,3 +484,103 @@ def test_rebound_host_cannot_persist_private_image_upload(
         "Untrusted Host accepted private synthetic PNG uploads: "
         + ", ".join(violations)
     )
+
+
+def test_rebound_host_cannot_enqueue_private_gpu_generation(
+    monkeypatch, tmp_path: Path,
+):
+    """An untrusted Host must not reach the local GPU job admission boundary.
+
+    No GPU worker, video model, FFmpeg process, or paid provider is invoked:
+    enqueue_video_job is replaced with a spy returning inert synthetic metadata.
+    The test checks whether the HTTP authorization gate permits that call.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Dedicated strict Host/generation admission security matrix")
+
+    from PIL import Image
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    storage = importlib.import_module("app.video.storage")
+    asset_id = "9" * 32
+    Image.new("RGB", (19, 11), (29, 59, 89)).save(
+        storage.video_asset_path(asset_id, "png")
+    )
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+    router = importlib.import_module("app.video.router")
+
+    admitted = []
+
+    def inert_enqueue(request):
+        admitted.append((request.image_id, request.prompt))
+        return {"id": "a" * 32, "status": "queued"}
+
+    monkeypatch.setattr(router, "enqueue_video_job", inert_enqueue)
+    endpoint = "/api/video/generate"
+    payload = {
+        "image_id": asset_id,
+        "prompt": "SYNTHETIC_PRIVATE_GPU_ADMISSION_ONLY_6e42",
+        "duration_seconds": 1.0,
+    }
+
+    # Positive controls: legitimate local and explicitly authenticated remote
+    # users may reach admission. The spy guarantees no real worker dispatch.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42300)) as local:
+        accepted = local.post(endpoint, json=payload,
+                              headers={"Origin": "http://localhost"})
+        assert accepted.status_code == 200, accepted.text
+    assert admitted == [(asset_id, payload["prompt"])]
+
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42301)) as remote:
+        denied = remote.post(
+            endpoint, json=payload,
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        assert denied.status_code == 403
+    assert len(admitted) == 1
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-gpu-admission-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42302)) as authorized_remote:
+        accepted = authorized_remote.post(
+            endpoint, json=payload,
+            headers={
+                "Authorization": "Bearer synthetic-gpu-admission-bearer",
+                "Origin": "http://cinema.attacker.invalid",
+            },
+        )
+        assert accepted.status_code == 200, accepted.text
+    assert len(admitted) == 2
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    violations = []
+    variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (label, headers) in enumerate(variants):
+        before = len(admitted)
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42310 + offset)) as rebound:
+            result = rebound.post(endpoint, json=payload, headers=headers)
+            assert result.request.headers["host"] == "cinema.attacker.invalid"
+            if not headers:
+                assert "origin" not in result.request.headers
+            if result.status_code not in (401, 403):
+                violations.append(f"{label}-gpu-admission:HTTP-{result.status_code}")
+            if len(admitted) != before:
+                violations.append(f"{label}-unauthorized-enqueue-spy-invoked")
+                assert admitted[-1] == (asset_id, payload["prompt"])
+
+    assert not violations, (
+        "Untrusted Host reached private local generation admission (inert "
+        "spy only; no GPU/paid work): " + ", ".join(violations)
+    )
