@@ -1,0 +1,28 @@
+name: Cinematic queue health QA43
+
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_queue_health_qa43.py'
+      - 'tests/test_cinematic_queue_health_qa43.py'
+      - 'docs/CINEMATIC_QUEUE_HEALTH_QA43.md'
+      - '.github/workflows/cinematic-queue-health-qa43.yml'
+  workflow_dispatch:
+
+jobs:
+  offline-queue-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Test read-only queue snapshot against synthetic SQLite and WAL
+        run: python -m pytest -q -W error tests/test_cinematic_queue_health_qa43.py
