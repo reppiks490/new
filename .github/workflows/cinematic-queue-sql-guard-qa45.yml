@@ -1,0 +1,22 @@
+name: Cinematic queue SQL guard QA45
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_queue_sql_guard_qa45.py'
+      - 'tests/test_cinematic_queue_sql_guard_qa45.py'
+      - '.github/workflows/cinematic-queue-sql-guard-qa45.yml'
+  workflow_dispatch:
+jobs:
+  sqlite-safe-query:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install pytest
+      - run: python -m pytest -q tests/test_cinematic_queue_sql_guard_qa45.py
