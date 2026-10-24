@@ -1,0 +1,48 @@
+name: Cinematic shot source decode QA39
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_shot_source_decode_qa39.py'
+      - '.github/workflows/cinematic-shot-source-decode-qa39.yml'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/jobs.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_SHOT_SOURCE_DECODE_QA39: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Provision genuine FFmpeg/FFprobe if absent
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+              if [ -f "$sources" ]; then
+                sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu/#http://archive.ubuntu.com/ubuntu/#g' "$sources"
+              fi
+            done
+            timeout 240s sudo apt-get update -qq -o Acquire::Retries=2 -o Acquire::http::Timeout=20
+            timeout 480s sudo apt-get install -y --no-install-recommends -o Acquire::Retries=2 -o Acquire::http::Timeout=20 ffmpeg
+          fi
+          command -v ffmpeg
+          command -v ffprobe
+          ffmpeg -hide_banner -encoders 2>/dev/null | grep -F libx264
+      - name: Install application test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Genuine synthetic source and strict assembly-readiness contract
+        run: python -m pytest -q -W error tests/test_cinematic_shot_source_decode_qa39.py
