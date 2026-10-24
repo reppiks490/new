@@ -1,0 +1,40 @@
+name: Cinematic master chapter metadata privacy QA30
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_master_chapter_privacy_qa30.py'
+      - '.github/workflows/cinematic-master-chapter-privacy-qa30.yml'
+      - 'app/video/cinematic_service.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chapter-privacy-real-media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_CHAPTER_PRIVACY_QA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Verify FFmpeg and FFprobe availability
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+      - name: Install local application and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Real synthetic chapter-privacy controls and application regression
+        run: python -m pytest -q -W error tests/test_cinematic_master_chapter_privacy_qa30.py
