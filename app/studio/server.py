@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager
 import hmac
 import os
+import re
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -28,6 +29,28 @@ origins = [o.strip() for o in os.getenv('CHARACTER3D_STUDIO_ORIGINS','').split('
 app.add_middleware(CORSMiddleware, allow_origins=origins,
                    allow_methods=['GET','POST','PUT'], allow_headers=['Authorization','Content-Type'])
 
+# A loopback TCP peer alone does not authenticate the browser's HTTP Host.
+# Only literal local names are trusted when no studio bearer token is set.
+# The synthetic TestClient host is restricted to the ASGI test peer.
+_LOCAL_HOST = re.compile(r"(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::([0-9]{1,5}))?", re.I)
+_TEST_HOST = re.compile(r"testserver(?::([0-9]{1,5}))?", re.I)
+
+
+def _trusted_tokenless_host(request: Request) -> bool:
+    hosts = request.headers.getlist('host')
+    if len(hosts) != 1:
+        return False
+    host = hosts[0]
+    peer = request.client.host if request.client else None
+    match = _LOCAL_HOST.fullmatch(host)
+    if match is None and peer == 'testclient':
+        match = _TEST_HOST.fullmatch(host)
+    if match is None:
+        return False
+    port = match.group(1)
+    return port is None or 1 <= int(port) <= 65535
+
+
 @app.middleware('http')
 async def private_api(request: Request, call_next):
     if request.url.path.startswith('/api/'):
@@ -38,8 +61,10 @@ async def private_api(request: Request, call_next):
         if secret:
             if not hmac.compare_digest(secret.encode(), supplied.encode()):
                 return JSONResponse({'detail':'Studio access token required'},status_code=401)
-        elif not request.client or request.client.host not in {'127.0.0.1','::1','testclient'}:
-            return JSONResponse({'detail':'Remote API access requires CHARACTER3D_STUDIO_TOKEN'},status_code=403)
+        elif (not request.client
+              or request.client.host not in {'127.0.0.1', '::1', 'testclient'}
+              or not _trusted_tokenless_host(request)):
+            return JSONResponse({'detail':'Tokenless API requires trusted local peer and Host'},status_code=403)
         if request.method not in {'GET','HEAD'}:
             origin = request.headers.get('Origin')
             if origin and origin not in origins and origin.rstrip('/') != str(request.base_url).rstrip('/'):
