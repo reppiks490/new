@@ -379,6 +379,105 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             f"/api/video/projects/{render_id}", headers=auth,
         ).json()["revision"] == linked_revision
 
+        # Complete coverage of the remaining owner-only video API JSON
+        # surfaces. Image upload reveals a private asset locator, privacy
+        # settings reveal protection choices, and quick generation exposes
+        # local job/image identities. Keep all inputs synthetic and hold the
+        # worker so no GPU or paid model inference can start.
+        from io import BytesIO
+
+        private_png = BytesIO()
+        Image.new("RGB", (16, 12), (19, 41, 67)).save(
+            private_png, format="PNG"
+        )
+        image_upload_url = "/api/video/images"
+        uploaded = client.post(
+            image_upload_url,
+            headers=auth,
+            files={"file": (
+                "synthetic-private-reference.png",
+                private_png.getvalue(), "image/png",
+            )},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        uploaded_id = uploaded.json()["image_id"]
+        uploaded_url = uploaded.json()["url"]
+        assert uploaded_url == f"/api/video/assets/{uploaded_id}.png"
+        assert client.get(uploaded_url, headers=auth).headers.get(
+            "cache-control"
+        ) == "no-store"
+        assert client.get(uploaded_url).status_code == 401
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            assert client.post(
+                image_upload_url, headers=denied_headers,
+                files={"file": ("private.png", private_png.getvalue(), "image/png")},
+            ).status_code == 401
+
+        privacy_url = "/api/video/privacy"
+        private_preferences = client.get(privacy_url, headers=auth)
+        assert private_preferences.status_code == 200
+        assert private_preferences.json()["privacy_mode"] is True
+        changed_preferences = {
+            **private_preferences.json(), "idle_lock_seconds": 42,
+        }
+        privacy_updated = client.put(
+            privacy_url, headers=auth, json=changed_preferences,
+        )
+        assert privacy_updated.status_code == 200
+        assert privacy_updated.json()["idle_lock_seconds"] == 42
+        assert client.get(
+            privacy_url, headers=auth,
+        ).json()["idle_lock_seconds"] == 42
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            assert client.get(
+                privacy_url, headers=denied_headers,
+            ).status_code == 401
+            assert client.put(
+                privacy_url, headers=denied_headers,
+                json={**changed_preferences, "idle_lock_seconds": 99},
+            ).status_code == 401
+        assert client.get(
+            privacy_url, headers=auth,
+        ).json()["idle_lock_seconds"] == 42
+
+        # Capabilities contain owner-machine runtime/hardware diagnostics.
+        runtime_capabilities = client.get(
+            "/api/video/capabilities", headers=auth,
+        )
+        assert runtime_capabilities.status_code == 200
+        assert "runtime" in runtime_capabilities.json()
+        assert client.get("/api/video/capabilities").status_code == 401
+
+        monkeypatch.setattr(
+            jobs_module, "select_engine",
+            lambda profile: engine_module.FakeVideoEngine(),
+        )
+        quick_generation_url = "/api/video/generate"
+        quick_request = {
+            "image_id": uploaded_id,
+            "prompt": SENTINEL,
+            "duration_seconds": 2,
+            "fps": 24,
+            "resolution": "480p",
+            "engine_profile": "balanced",
+        }
+        before_quick_jobs = len(storage.list_video_records("video_job"))
+        quick_generation = client.post(
+            quick_generation_url, headers=auth, json=quick_request,
+        )
+        assert quick_generation.status_code == 200, quick_generation.text
+        assert quick_generation.json()["status"] == "queued"
+        assert quick_generation.json()["image_id"] == uploaded_id
+        assert quick_generation.json()["prompt_chars"] == len(SENTINEL)
+        assert SENTINEL not in quick_generation.text
+        assert len(storage.list_video_records("video_job")) == before_quick_jobs + 1
+        for denied_headers in ({}, {"Authorization": "Bearer wrong"}):
+            assert client.post(
+                quick_generation_url, headers=denied_headers,
+                json=quick_request,
+            ).status_code == 401
+        assert len(storage.list_video_records("video_job")) == before_quick_jobs + 1
+
         missing_no_store = []
         for route, response in (
             ("list", listing), ("detail", detail),
@@ -392,6 +491,11 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             ("video-job-detail", job_detail_response),
             ("render-missing-project", render_missing_response),
             ("shot-render-private-project", rendered),
+            ("private-image-upload", uploaded),
+            ("private-video-preferences-read", private_preferences),
+            ("private-video-preferences-update", privacy_updated),
+            ("owner-runtime-capabilities", runtime_capabilities),
+            ("quick-generation-private-job", quick_generation),
         ):
             directives = {
                 part.strip().lower()
@@ -400,6 +504,6 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             if "no-store" not in directives:
                 missing_no_store.append(route)
         assert not missing_no_store, (
-            "Private screenplay JSON lacks Cache-Control: no-store on: "
+            "Private video JSON lacks Cache-Control: no-store on: "
             + ", ".join(missing_no_store)
         )
