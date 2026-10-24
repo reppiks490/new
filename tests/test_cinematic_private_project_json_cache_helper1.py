@@ -35,6 +35,13 @@ def _run(*command):
     return subprocess.run(command, check=True, capture_output=True, timeout=120)
 
 
+class _HoldingAssemblyPool:
+    """Hold queued jobs without executing a second FFmpeg encode during HTTP QA."""
+
+    def submit(self, fn, *args, **kwargs):
+        return object()
+
+
 def test_private_project_json_never_advertises_cacheable_screenplay(
     monkeypatch, tmp_path: Path,
 ):
@@ -94,6 +101,8 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
     for module in ("app.studio.server", "app.video.router"):
         sys.modules.pop(module, None)
     server = importlib.import_module("app.studio.server")
+    queue = importlib.import_module("app.video.cinematic_assembly_jobs")
+    monkeypatch.setattr(queue, "assembly_pool", _HoldingAssemblyPool())
     auth = {"Authorization": f"Bearer {TOKEN}"}
 
     with TestClient(server.app) as client:
@@ -136,6 +145,40 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
                 f"/api/video/projects/{project.id}/masters", headers=denied_headers,
             )
             assert denied_masters.status_code == 401
+
+        # The asynchronous mobile queue exposes project identity, revision,
+        # FFmpeg settings and job state.  Even though it deliberately excludes
+        # screenplay text, these owner-only operational records must not be
+        # stored by browser or intermediary caches. Hold the worker to make
+        # queued -> cancelled deterministic; the synchronous master above
+        # already proved genuine H.264 encoding, probing and full decoding.
+        queue_url = f"/api/video/projects/{project.id}/assembly-jobs"
+        queued = client.post(
+            queue_url, headers=auth,
+            json={"expected_revision": project.revision},
+        )
+        assert queued.status_code == 202, queued.text
+        queue_job = queued.json()
+        assert queue_job["project_id"] == project.id
+        assert queue_job["project_revision"] == project.revision
+        assert queue_job["status"] == "queued"
+        assert SENTINEL not in queued.text
+        queue_detail_url = f"{queue_url}/{queue_job['id']}"
+        queue_listing = client.get(queue_url, headers=auth)
+        queue_detail = client.get(queue_detail_url, headers=auth)
+        assert queue_listing.status_code == queue_detail.status_code == 200
+        assert any(item["id"] == queue_job["id"] for item in queue_listing.json()["jobs"])
+        assert queue_detail.json()["id"] == queue_job["id"]
+        for private_url in (queue_url, queue_detail_url):
+            assert client.get(private_url).status_code == 401
+            assert client.get(private_url, headers={"Authorization": "Bearer wrong"}).status_code == 401
+        denied_cancel = client.post(queue_detail_url + "/cancel")
+        assert denied_cancel.status_code == 401
+        assert queue.get_master_assembly_job(project.id, queue_job["id"])["status"] == "queued"
+        queue_cancelled = client.post(queue_detail_url + "/cancel", headers=auth)
+        assert queue_cancelled.status_code == 200
+        assert queue_cancelled.json()["status"] == "cancelled"
+        assert queue.get_master_assembly_job(project.id, queue_job["id"])["status"] == "cancelled"
 
         # No Authorization header or query token may retrieve screenplay JSON.
         for route in ("/api/video/projects", f"/api/video/projects/{project.id}"):
@@ -205,6 +248,8 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
             ("list", listing), ("detail", detail),
             ("create", created), ("update", updated), ("compile", compiled),
             ("assemble-master", assembled), ("master-library", masters),
+            ("async-queue-create", queued), ("async-queue-list", queue_listing),
+            ("async-queue-detail", queue_detail), ("async-queue-cancel", queue_cancelled),
         ):
             directives = {
                 part.strip().lower()
