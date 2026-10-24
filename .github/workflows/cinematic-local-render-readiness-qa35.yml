@@ -1,0 +1,35 @@
+name: Cinematic owner-PC local readiness QA35
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/cinematic_local_render_readiness_qa35.py'
+      - 'tests/test_cinematic_local_render_readiness_qa35.py'
+      - 'docs/CINEMATIC_LOCAL_RENDER_READINESS_QA35.md'
+      - '.github/workflows/cinematic-local-render-readiness-qa35.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-render-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require installed FFmpeg and FFprobe (no apt network install)
+        run: |
+          command -v ffmpeg
+          command -v ffprobe
+      - name: Install isolated test runner
+        run: python -m pip install pytest
+      - name: Run mock/temporary-workspace tests and real synthetic FFmpeg smoke
+        run: python -m pytest -q -W error tests/test_cinematic_local_render_readiness_qa35.py
