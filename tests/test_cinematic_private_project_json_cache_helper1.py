@@ -139,12 +139,15 @@ def test_private_project_json_never_advertises_cacheable_screenplay(
         assert listing.status_code == detail.status_code == 200
         assert any(item.get("master_prompt") == SENTINEL for item in listing.json())
         assert detail.json()["master_prompt"] == SENTINEL
+        missing_no_store = []
         for route, response in (("list", listing), ("detail", detail)):
             directives = {
                 part.strip().lower()
                 for part in response.headers.get("cache-control", "").split(",")
             }
-            assert "no-store" in directives, (
-                f"Private cinematic project {route} JSON lacks Cache-Control: no-store; "
-                "a screenplay-bearing response must not be cacheable"
-            )
+            if "no-store" not in directives:
+                missing_no_store.append(route)
+        assert not missing_no_store, (
+            "Private screenplay JSON lacks Cache-Control: no-store on: "
+            + ", ".join(missing_no_store)
+        )
