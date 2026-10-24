@@ -1,0 +1,41 @@
+name: Cinematic live queue write-failure QA42
+
+on:
+  push:
+    branches:
+      - chatgpt/cinematic-live-queue-write-failure-qa42-20261024
+    paths:
+      - 'tests/test_cinematic_live_queue_write_failure_qa42.py'
+      - '.github/workflows/cinematic-live-queue-write-failure-qa42.yml'
+      - 'app/video/cinematic_assembly_jobs.py'
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_live_queue_write_failure_qa42.py'
+      - '.github/workflows/cinematic-live-queue-write-failure-qa42.yml'
+      - 'app/video/cinematic_assembly_jobs.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-queue-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_LIVE_QUEUE_RECOVERY_QA42: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install local test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Run SQLite queue recovery control and strict regression
+        run: python -m pytest -q -W error tests/test_cinematic_live_queue_write_failure_qa42.py
