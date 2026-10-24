@@ -41,7 +41,7 @@ def _synthetic_project():
     return service.create_project(models.ProjectCreateRequest(
         title="Synthetic permissions test",
         master_prompt="Synthetic content only; no owner footage or private text",
-        target_duration_seconds=1.0,
+        target_duration_seconds=10.0,
         delivery_fps=24,
         delivery_resolution="480p",
     ))
@@ -87,11 +87,11 @@ def test_real_synthetic_master_file_is_owner_only(studio_under_standard_umask, t
     project = _synthetic_project()
     shot = models.CinematicShot(
         shot_id="2" * 32, ordinal=1, title="Synthetic shot",
-        prompt="Synthetic only", duration_seconds=1.0,
+        prompt="Synthetic only", duration_seconds=10.0,
     )
     scene = models.CinematicScene(
         scene_id="3" * 32, ordinal=1, title="Synthetic scene",
-        target_duration_seconds=1.0, shots=[shot],
+        target_duration_seconds=10.0, shots=[shot],
     )
     project = service.update_project(
         project.id, models.ProjectUpdateRequest(
@@ -102,7 +102,7 @@ def test_real_synthetic_master_file_is_owner_only(studio_under_standard_umask, t
     source = tmp_path / "synthetic.mp4"
     subprocess.run([
         ffmpeg, "-nostdin", "-y", "-v", "error",
-        "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=24:d=1",
+        "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=24:d=10",
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
     ], check=True, capture_output=True, timeout=60)
 
@@ -123,7 +123,7 @@ def test_real_synthetic_master_file_is_owner_only(studio_under_standard_umask, t
     master = service.assemble_project_master(
         project.id, AssembleMasterRequest(expected_revision=project.revision),
     )
-    assert master["probe"]["frame_count"] == 24
+    assert master["probe"]["frame_count"] == 240
     output = video_asset_path(master["asset_id"], "mp4")
     assert output.is_file()
     mode = _mode(output)
