@@ -81,6 +81,6 @@ def test_second_valid_video_track_is_not_mobile_safe_strict_attestation(
     strict_code, strict_report = _invoke(
         monkeypatch, capsys, workspace, db, strict=True
     )
-    assert strict_report["video_stream_anomaly_count"] == 1
-    assert strict_report["integrity_attestation_complete"] is False
     assert strict_code == 1
+    assert strict_report["integrity_attestation_complete"] is False
+    assert strict_report["video_stream_anomaly_count"] == 1
