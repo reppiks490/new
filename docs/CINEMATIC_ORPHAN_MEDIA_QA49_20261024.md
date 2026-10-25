@@ -14,7 +14,7 @@ The term **candidate untracked** is intentional: an active FFmpeg process may be
 
 ## Verification
 
-Seven tests cover >100 historical records, missing completed assets, malformed JSON, active jobs, invalid IDs, privacy/no mutation, symlink boundaries, live WAL reads, and a **genuine synthetic FFmpeg-encoded H.264** clip alongside a manually truncated 64-byte candidate. The truncation simulates a possible partial file; it is **not** an actual killed FFmpeg encoder. The dedicated strict 3.11/3.12 workflow requires FFmpeg. Ordinary CI may skip only the real-media test if FFmpeg is absent; skipped tests are not passes.
+Eight tests cover >100 historical records, missing completed assets, malformed JSON and structurally invalid statuses, active jobs, invalid IDs, privacy/no mutation, symlink boundaries, live WAL reads, and a **genuine synthetic FFmpeg-encoded H.264** clip alongside a manually truncated 64-byte candidate. The truncation simulates a possible partial file; it is **not** an actual killed FFmpeg encoder. The dedicated strict 3.11/3.12 workflow requires FFmpeg. Ordinary CI may skip only the real-media test if FFmpeg is absent; skipped tests are not passes.
 
 Run only on a deliberate, offline, quiescent workspace, e.g.:
 
