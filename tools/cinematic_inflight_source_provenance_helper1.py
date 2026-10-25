@@ -787,5 +787,102 @@ class InFlightSourceProvenance(unittest.TestCase):
             external.unlink(missing_ok=True)
 
 
+
+    @unittest.skipUnless(os.name == "posix", "POSIX private media response path race")
+    def test_authenticated_asset_response_must_not_follow_post_validation_symlink(self):
+        """Real-media HTTP regression: no outside-store bytes after path validation.
+
+        The bearer-protected asset route validates a local path, then returns
+        a response that opens it later. A deterministic resolver seam replaces
+        the *already validated* master with a symlink to different synthetic
+        H.264 footage. Never send those outside-store bytes, even to an
+        authenticated requester. This tests a local filesystem race, not a
+        remote exploit or any owner footage.
+        """
+        from fastapi.testclient import TestClient
+        from app.studio import server as studio_server
+        from app.video import router as video_router
+
+        project, _ = self.make_ready_project()
+        first = service.assemble_project_master(
+            project.id, AssembleMasterRequest(expected_revision=project.revision),
+        )
+        self.assert_real_media(first, "red")
+        output = storage.video_asset_path(first["asset_id"], "mp4")
+        original_sha = sha256(output)
+        outside = output.parent.parent / (
+            f".synthetic-cinematic-http-blue-{uuid4().hex}.mp4"
+        )
+        encode_synthetic(outside, "blue")
+        self.assertNotEqual(sha256(outside), original_sha)
+        probe = json.loads(real_command(
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name", "-of", "json", str(outside),
+        ))
+        self.assertEqual(probe["streams"][0]["codec_name"], "h264")
+        real_command(
+            "ffmpeg", "-nostdin", "-v", "error", "-xerror",
+            "-i", str(outside), "-an", "-f", "null", "-",
+        )
+        original_resolver = video_router.video_asset_path
+        swapped = []
+
+        def replace_after_validation(identifier, extension):
+            validated = original_resolver(identifier, extension)
+            if (identifier == first["asset_id"] and extension == "mp4"
+                    and not swapped):
+                validated.unlink()
+                validated.symlink_to(outside)
+                swapped.append(True)
+            return validated
+
+        url = f"/api/video/assets/{first['asset_id']}.mp4"
+        headers = {"Authorization": "Bearer synthetic-helper1-owner"}
+        try:
+            with patch.dict(os.environ, {
+                "CHARACTER3D_STUDIO_TOKEN": "synthetic-helper1-owner",
+            }):
+                with TestClient(studio_server.app) as client:
+                    self.assertEqual(client.get(url).status_code, 401)
+                    self.assertEqual(
+                        client.get(url, headers={
+                            "Authorization": "Bearer incorrect",
+                        }).status_code, 401,
+                    )
+                    baseline = client.get(url, headers=headers)
+                    self.assertEqual(baseline.status_code, 200)
+                    self.assertEqual(
+                        hashlib.sha256(baseline.content).hexdigest(),
+                        original_sha,
+                    )
+                    self.assertEqual(
+                        baseline.headers.get("cache-control"), "no-store",
+                    )
+                    with patch.object(
+                        video_router, "video_asset_path",
+                        side_effect=replace_after_validation,
+                    ):
+                        response = client.get(url, headers=headers)
+            self.assertEqual(
+                swapped, [True], "Post-validation path-swap hook never ran",
+            )
+            if response.status_code == 200:
+                self.assertEqual(
+                    hashlib.sha256(response.content).hexdigest(),
+                    original_sha,
+                    "Authenticated asset route served different outside-store "
+                    "synthetic H.264 bytes after a validated master path was "
+                    "replaced by a symlink",
+                )
+            else:
+                self.assertIn(
+                    response.status_code, (403, 404, 409),
+                    "Unsafe asset response should fail closed, not error",
+                )
+        finally:
+            if output.is_symlink():
+                output.unlink()
+            outside.unlink(missing_ok=True)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
