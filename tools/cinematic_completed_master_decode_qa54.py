@@ -15,6 +15,7 @@ import re
 import sqlite3
 import stat
 import subprocess
+import tempfile
 
 _ID = re.compile(r"^[a-f0-9]{32}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
@@ -234,6 +235,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     audio_codec_unattested = 0
     audio_timing_anomalies = 0
     audio_timing_unattested = 0
+    audio_decode_anomalies = 0
+    audio_decode_unattested = 0
     for identifier in sorted(identifiers):
         path = media_dir / (identifier + ".mp4")
         try:
@@ -321,6 +324,24 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
                 audio_timing_anomalies += 1
             elif audio_match is None:
                 audio_timing_unattested += 1
+            # FFprobe's codec/profile/start/duration metadata cannot prove
+            # the AAC payload decodes. Some FFmpeg builds conceal damaged
+            # packets and exit 0 while logging decoder errors at -v error.
+            # Use an unnamed private temporary stream for bounded-memory
+            # error observation; never publish stderr, paths or audio bytes.
+            try:
+                with tempfile.TemporaryFile(mode="w+b") as audio_errors:
+                    audio_decode = subprocess.run([
+                        "ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-xerror",
+                        "-protocol_whitelist", "file", "-i", str(path),
+                        "-map", "0:a:0", "-vn", "-f", "null", "-",
+                    ], stdout=subprocess.DEVNULL, stderr=audio_errors,
+                       timeout=timeout, check=False)
+                    audio_errors.seek(0)
+                    if audio_decode.returncode or audio_errors.read(1):
+                        audio_decode_anomalies += 1
+            except (OSError, subprocess.TimeoutExpired):
+                audio_decode_unattested += 1
         try:
             decode = subprocess.run([
                 "ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-xerror",
@@ -409,6 +430,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "audio_codec_unattested_count": audio_codec_unattested,
         "audio_timing_anomaly_count": audio_timing_anomalies,
         "audio_timing_unattested_count": audio_timing_unattested,
+        "audio_decode_anomaly_count": audio_decode_anomalies,
+        "audio_decode_unattested_count": audio_decode_unattested,
         "hash_attested_masters": hash_attested,
         "hash_unattested_masters": hash_unattested,
         "hash_mismatch_count": hash_mismatches,
@@ -433,6 +456,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             and audio_stream_anomalies == 0 and audio_codec_anomalies == 0
             and audio_codec_unattested == 0 and audio_timing_anomalies == 0
             and audio_timing_unattested == 0
+            and audio_decode_anomalies == 0 and audio_decode_unattested == 0
         ),
         "verification_complete": bool(identifiers) and unverified == 0 and invalid_records == 0,
         "safe_to_delete_automatically": False,
