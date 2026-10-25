@@ -4,8 +4,8 @@ import io
 import os
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.video.cinematic_models import ProjectCreateRequest, ProjectUpdateRequest
@@ -104,22 +104,211 @@ async def upload_image(file: UploadFile = File(...)):
     return {'image_id': identifier, 'url': f'/api/video/assets/{identifier}.png'}
 
 
+def _open_private_asset(path):
+    """Pin a regular asset inode before the HTTP response can stream bytes.
+
+    POSIX no-follow directory-relative opens close the check-then-FileResponse
+    symlink race. Windows requires separate reparse-point/ACL verification.
+    """
+    import stat
+
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NONBLOCK', 0)
+    if os.name == 'posix':
+        if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+            raise OSError('Safe asset open is unsupported')
+        directory_fd = os.open(
+            path.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            | getattr(os, 'O_CLOEXEC', 0),
+        )
+        try:
+            fd = os.open(path.name, flags | os.O_NOFOLLOW, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+    else:
+        fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = os.lstat(path)
+        if (not stat.S_ISREG(opened.st_mode)
+                or not stat.S_ISREG(current.st_mode)
+                or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
+            raise OSError('Asset path changed or is not a regular file')
+        return fd, opened
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _asset_byte_ranges(header: str, size: int) -> list[tuple[int, int]]:
+    """Parse bounded RFC 7233 byte ranges; reject malformed/unsatisfiable input."""
+    import re
+
+    if not header.startswith('bytes='):
+        raise ValueError('Unsupported range unit')
+    components = header[6:].split(',')
+    if not 1 <= len(components) <= 16:
+        raise ValueError('Invalid range count')
+    ranges = []
+    for component in components:
+        match = re.fullmatch(r'(\\d*)-(\\d*)', component.strip())
+        if not match or (not match.group(1) and not match.group(2)):
+            raise ValueError('Invalid byte range')
+        if not match.group(1):
+            suffix = int(match.group(2))
+            if suffix <= 0 or size <= 0:
+                raise ValueError('Unsatisfiable suffix range')
+            start, end = max(0, size - suffix), size - 1
+        else:
+            start = int(match.group(1))
+            end = int(match.group(2)) if match.group(2) else size - 1
+            if start >= size or end < start:
+                raise ValueError('Unsatisfiable byte range')
+            end = min(end, size - 1)
+        ranges.append((start, end))
+    return ranges
+
+
+class _OpenedAssetResponse(Response):
+    """ASGI response reads exclusively from an opened inode, never its path."""
+
+    def __init__(self, fd, size, ranges, media_type, headers, status_code):
+        self._fd = fd
+        self._ranges = ranges
+        self._size = size
+        self._media_type = media_type
+        self._boundary = uuid.uuid4().hex if ranges and len(ranges) > 1 else None
+        if self._boundary:
+            headers['Content-Type'] = f'multipart/byteranges; boundary={self._boundary}'
+            headers['Content-Length'] = str(
+                sum(
+                    len(self._part_header(start, end)) + end - start + 1 + 2
+                    for start, end in ranges
+                ) + len(self._closing_boundary())
+            )
+        elif ranges:
+            start, end = ranges[0]
+            headers['Content-Range'] = f'bytes {start}-{end}/{size}'
+            headers['Content-Length'] = str(end - start + 1)
+        else:
+            headers['Content-Length'] = str(size)
+        super().__init__(
+            content=b'', status_code=status_code,
+            media_type=media_type, headers=headers,
+        )
+
+    def _part_header(self, start, end):
+        return (
+            f'--{self._boundary}\\r\\nContent-Type: {self._media_type}\\r\\n'
+            f'Content-Range: bytes {start}-{end}/{self._size}\\r\\n\\r\\n'
+        ).encode('ascii')
+
+    def _closing_boundary(self):
+        return f'--{self._boundary}--\\r\\n'.encode('ascii')
+
+    async def __call__(self, scope, receive, send):
+        import anyio
+
+        def read_at(offset, count):
+            if hasattr(os, 'pread'):
+                return os.pread(self._fd, count, offset)
+            os.lseek(self._fd, offset, os.SEEK_SET)
+            return os.read(self._fd, count)
+
+        try:
+            await send({
+                'type': 'http.response.start',
+                'status': self.status_code,
+                'headers': self.raw_headers,
+            })
+            if scope.get('method') != 'HEAD':
+                spans = self._ranges if self._ranges is not None else [(0, self._size - 1)]
+                for start, end in spans:
+                    if self._boundary:
+                        await send({
+                            'type': 'http.response.body',
+                            'body': self._part_header(start, end),
+                            'more_body': True,
+                        })
+                    offset = start
+                    while offset <= end:
+                        data = await anyio.to_thread.run_sync(
+                            read_at, offset, min(256 * 1024, end - offset + 1),
+                        )
+                        if not data:
+                            raise OSError('Asset changed during descriptor-backed streaming')
+                        await send({
+                            'type': 'http.response.body',
+                            'body': data,
+                            'more_body': True,
+                        })
+                        offset += len(data)
+                    if self._boundary:
+                        await send({
+                            'type': 'http.response.body', 'body': b'\\r\\n',
+                            'more_body': True,
+                        })
+                if self._boundary:
+                    await send({
+                        'type': 'http.response.body',
+                        'body': self._closing_boundary(), 'more_body': True,
+                    })
+            await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
+        finally:
+            os.close(self._fd)
+
+
 @router.get('/assets/{filename}')
-def asset(filename: str):
+def asset(filename: str, request: Request):
     try:
         identifier, extension = filename.rsplit('.', 1)
         if extension not in {'png', 'mp4'}:
             raise ValueError('Unsupported public asset type')
         path = video_asset_path(identifier, extension)
-    except ValueError:
+        fd, opened = _open_private_asset(path)
+    except (ValueError, OSError):
         raise HTTPException(404, 'Asset not found')
-    if not path.is_file():
-        raise HTTPException(404, 'Asset not found')
-    return FileResponse(
-        path,
-        media_type='video/mp4' if extension == 'mp4' else 'image/png',
-        headers={'Cache-Control': 'no-store'},
-    )
+    try:
+        from email.utils import formatdate
+
+        media_type = 'video/mp4' if extension == 'mp4' else 'image/png'
+        etag = f'"{opened.st_mtime_ns:x}-{opened.st_size:x}"'
+        last_modified = formatdate(opened.st_mtime, usegmt=True)
+        headers = {
+            'Cache-Control': 'no-store',
+            'Accept-Ranges': 'bytes',
+            'ETag': etag,
+            'Last-Modified': last_modified,
+        }
+        range_header = request.headers.get('range')
+        if range_header and request.headers.get('if-range') not in (
+            None, etag, last_modified,
+        ):
+            range_header = None
+        try:
+            ranges = (
+                _asset_byte_ranges(range_header, opened.st_size)
+                if range_header else None
+            )
+        except ValueError:
+            os.close(fd)
+            return Response(
+                status_code=416,
+                headers={
+                    'Cache-Control': 'no-store',
+                    'Accept-Ranges': 'bytes',
+                    'Content-Range': f'bytes */{opened.st_size}',
+                },
+            )
+        return _OpenedAssetResponse(
+            fd, opened.st_size, ranges, media_type, headers,
+            status_code=206 if ranges else 200,
+        )
+    except BaseException:
+        # The response owns fd only after successful construction.
+        # An already-closed 416 descriptor is returned before this handler.
+        os.close(fd)
+        raise
 
 
 @router.get('/privacy', response_model=PrivacyPreferences)
