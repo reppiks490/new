@@ -178,6 +178,73 @@ def _expected_encoder_tag(value: object, *, format_tag: bool) -> bool:
     return match is not None and match.group(1) in _SAFE_ENCODER_NAMES
 
 
+def _opaque_mp4_top_level_payload_present(
+    path: Path, original: os.stat_result
+) -> bool | None:
+    """Check a narrow FFmpeg-master top-level ISO-BMFF box contract.
+
+    FFprobe's stream/tag/chapter inventory ignores arbitrary top-level 'free'
+    and 'uuid' payloads. A matching persisted SHA therefore cannot establish
+    absence of private text in such boxes. Walk box headers only (constant
+    memory), accept one ftyp/moov/mdat and only empty 'free' padding. Unknown
+    boxes, nonempty padding, malformed lengths and duplicate core boxes fail
+    strict acceptance. This does NOT inspect nested atoms or encoded pixels.
+    Return None on filesystem uncertainty; never expose box bytes or paths.
+    """
+    required = {b"ftyp", b"moov", b"mdat"}
+    allowed = required | {b"free"}
+    seen: dict[bytes, int] = {}
+    try:
+        with path.open("rb") as handle:
+            before = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (original.st_dev, original.st_ino, original.st_size, original.st_mtime_ns)
+            ):
+                return None
+            position = 0
+            count = 0
+            while position < before.st_size:
+                count += 1
+                if count > 4096 or before.st_size - position < 8:
+                    return True
+                handle.seek(position)
+                header = handle.read(8)
+                if len(header) != 8:
+                    return None
+                length = int.from_bytes(header[:4], "big")
+                kind = header[4:8]
+                header_length = 8
+                if length == 1:
+                    extended = handle.read(8)
+                    if len(extended) != 8:
+                        return None
+                    length = int.from_bytes(extended, "big")
+                    header_length = 16
+                elif length == 0:
+                    length = before.st_size - position
+                if length < header_length or length > before.st_size - position:
+                    return True
+                if kind not in allowed or (kind == b"free" and length != header_length):
+                    return True
+                seen[kind] = seen.get(kind, 0) + 1
+                if kind in required and seen[kind] != 1:
+                    return True
+                position += length
+            after = os.fstat(handle.fileno())
+            if (
+                after.st_size != before.st_size
+                or after.st_mtime_ns != before.st_mtime_ns
+                or after.st_ino != before.st_ino
+            ):
+                return None
+            return any(seen.get(kind) != 1 for kind in required)
+    except OSError:
+        return None
+
+
 def _freeform_metadata_present(container: dict, streams: list) -> bool:
     """Conservatively flag unexpected FFprobe tag keys without emitting values.
 
@@ -288,6 +355,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     video_stream_anomalies = 0
     auxiliary_stream_anomalies = 0
     freeform_metadata_anomalies = 0
+    opaque_mp4_payload_anomalies = 0
+    opaque_mp4_payload_unattested = 0
     chapter_anomalies = 0
     chapter_unattested = 0
     video_codec_anomalies = 0
@@ -357,6 +426,14 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             auxiliary_stream_anomalies += 1
         if _freeform_metadata_present(container, streams):
             freeform_metadata_anomalies += 1
+        # FFprobe omits arbitrary top-level 'free'/'uuid' box contents.
+        # Validate a narrow private FFmpeg MP4 envelope without reading
+        # or reporting opaque payload bytes; preserve decode-only behavior.
+        opaque_payload = _opaque_mp4_top_level_payload_present(path, metadata)
+        if opaque_payload is True:
+            opaque_mp4_payload_anomalies += 1
+        elif opaque_payload is None:
+            opaque_mp4_payload_unattested += 1
         chapters = details.get("chapters")
         if not isinstance(chapters, list):
             chapter_unattested += 1
@@ -524,6 +601,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "video_stream_anomaly_count": video_stream_anomalies,
         "auxiliary_stream_anomaly_count": auxiliary_stream_anomalies,
         "freeform_metadata_anomaly_count": freeform_metadata_anomalies,
+        "opaque_mp4_payload_anomaly_count": opaque_mp4_payload_anomalies,
+        "opaque_mp4_payload_unattested_count": opaque_mp4_payload_unattested,
         "chapter_anomaly_count": chapter_anomalies,
         "chapter_unattested_count": chapter_unattested,
         "video_codec_anomaly_count": video_codec_anomalies,
@@ -560,6 +639,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             and hash_unattested == 0 and video_stream_anomalies == 0
             and auxiliary_stream_anomalies == 0
             and freeform_metadata_anomalies == 0
+            and opaque_mp4_payload_anomalies == 0
+            and opaque_mp4_payload_unattested == 0
             and chapter_anomalies == 0 and chapter_unattested == 0
             and video_codec_anomalies == 0 and video_codec_unattested == 0
             and video_pixel_format_anomalies == 0
