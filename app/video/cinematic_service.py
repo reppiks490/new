@@ -751,9 +751,8 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
     snapshots = None
     try:
         try:
-            snapshots = tempfile.TemporaryDirectory(
-                prefix='.cinematic-source-snapshot-', dir=output_path.parent,
-            )
+            from app.video.cinematic_source_snapshots import PrivateSourceSnapshots
+            snapshots = PrivateSourceSnapshots(output_path.parent)
         except OSError as exc:
             raise MasterAssemblyNotReady(
                 'Unable to stage private master inputs; check local storage'
