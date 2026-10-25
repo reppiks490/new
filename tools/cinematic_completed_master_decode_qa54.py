@@ -111,6 +111,27 @@ def _stable_file_sha256(path: Path, original: os.stat_result) -> str | None:
 
 
 
+def _audio_timeline_matches(stream: dict, claim: tuple[int, int] | None) -> bool | None:
+    """Check optional audio coverage against the persisted video delivery timeline.
+
+    Audio absence is allowed and handled by the caller. This checks only
+    stream start/end metadata, NOT decoded audio quality or lip synchronization.
+    Missing/nonfinite evidence is unattested, not automatically corrupt.
+    """
+    if claim is None:
+        return None
+    try:
+        start = float(stream["start_time"])
+        duration = float(stream["duration"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(start) or not math.isfinite(duration) or duration <= 0:
+        return None
+    frames, fps = claim
+    tolerance = max(0.01, 1.0 / fps)
+    return abs(start) <= tolerance and abs(start + duration - frames / fps) <= tolerance
+
+
 def _container_duration_matches(container: dict, frames: int, fps: int) -> bool | None:
     """Attest MP4 playback length, not just the decoded video frame cadence.
 
@@ -208,6 +229,9 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     hash_attested = 0
     hash_mismatches = 0
     video_stream_anomalies = 0
+    audio_stream_anomalies = 0
+    audio_timing_anomalies = 0
+    audio_timing_unattested = 0
     for identifier in sorted(identifiers):
         path = media_dir / (identifier + ".mp4")
         try:
@@ -221,7 +245,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         try:
             probe = subprocess.run([
                 "ffprobe", "-v", "error", "-protocol_whitelist", "file",
-                "-show_entries", "stream=codec_type,width,height:format=format_name,duration",
+                "-show_entries", "stream=codec_type,width,height,start_time,duration:format=format_name,duration",
                 "-of", "json", "-i", str(path),
             ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
@@ -261,6 +285,24 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             for stream in streams
         ) != 1:
             video_stream_anomalies += 1
+        # Audio is optional, but a present soundtrack must cover the claimed
+        # timeline from its start, with one unambiguous selectable audio track.
+        # A short/late AAC stream can leave the MP4 container at 2s because
+        # video still spans 2s, defeating container-duration-only checks.
+        audio_streams = [
+            stream for stream in streams
+            if isinstance(stream, dict) and stream.get("codec_type") == "audio"
+        ]
+        if len(audio_streams) > 1:
+            audio_stream_anomalies += 1
+        elif len(audio_streams) == 1:
+            timing = timing_claims.get(identifier, {None})
+            claim = next(iter(timing)) if len(timing) == 1 else None
+            audio_match = _audio_timeline_matches(audio_streams[0], claim)
+            if audio_match is False:
+                audio_timing_anomalies += 1
+            elif audio_match is None:
+                audio_timing_unattested += 1
         try:
             decode = subprocess.run([
                 "ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-xerror",
@@ -344,6 +386,9 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "timing_unattested_masters": timing_unattested,
         "timing_anomaly_count": timing_anomalies,
         "video_stream_anomaly_count": video_stream_anomalies,
+        "audio_stream_anomaly_count": audio_stream_anomalies,
+        "audio_timing_anomaly_count": audio_timing_anomalies,
+        "audio_timing_unattested_count": audio_timing_unattested,
         "hash_attested_masters": hash_attested,
         "hash_unattested_masters": hash_unattested,
         "hash_mismatch_count": hash_mismatches,
@@ -365,6 +410,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             bool(identifiers) and invalid_records == 0 and unverified == 0
             and timeline_unattested == 0 and timing_unattested == 0
             and hash_unattested == 0 and video_stream_anomalies == 0
+            and audio_stream_anomalies == 0 and audio_timing_anomalies == 0
+            and audio_timing_unattested == 0
         ),
         "verification_complete": bool(identifiers) and unverified == 0 and invalid_records == 0,
         "safe_to_delete_automatically": False,
