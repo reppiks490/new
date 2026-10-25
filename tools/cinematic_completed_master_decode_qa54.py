@@ -150,6 +150,36 @@ def _container_duration_matches(container: dict, frames: int, fps: int) -> bool 
     return abs(duration - expected) <= max(0.01, 1.0 / fps)
 
 
+_SAFE_FORMAT_TAGS = frozenset({
+    "major_brand", "minor_version", "compatible_brands", "encoder",
+})
+_SAFE_STREAM_TAGS = frozenset({
+    "language", "handler_name", "vendor_id", "encoder",
+})
+
+
+def _freeform_metadata_present(container: dict, streams: list) -> bool:
+    """Conservatively flag unexpected FFprobe tag keys without emitting values.
+
+    FFmpeg muxers normally add structural brand/encoder/handler tags. Arbitrary
+    comment, title, description, location or user-defined tags are not part of
+    the private delivery contract. This is NOT a complete MP4 box sanitizer.
+    """
+    for source, allowed in (
+        [(container, _SAFE_FORMAT_TAGS)]
+        + [(stream, _SAFE_STREAM_TAGS) for stream in streams if isinstance(stream, dict)]
+    ):
+        tags = source.get("tags", {})
+        if not isinstance(tags, dict) or not tags.keys() <= allowed:
+            return True
+        handler = tags.get("handler_name")
+        if handler is not None and handler not in (
+            "VideoHandler", "SoundHandler", "AudioHandler"
+        ):
+            return True
+    return False
+
+
 def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, int | bool]:
     """Fully decode each distinct ready master; report only sanitized counts.
 
@@ -230,6 +260,10 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     hash_attested = 0
     hash_mismatches = 0
     video_stream_anomalies = 0
+    auxiliary_stream_anomalies = 0
+    freeform_metadata_anomalies = 0
+    chapter_anomalies = 0
+    chapter_unattested = 0
     video_codec_anomalies = 0
     video_codec_unattested = 0
     video_pixel_format_anomalies = 0
@@ -254,7 +288,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         try:
             probe = subprocess.run([
                 "ffprobe", "-v", "error", "-protocol_whitelist", "file",
-                "-show_entries", "stream=codec_type,codec_name,profile,pix_fmt,width,height,start_time,duration:format=format_name,duration",
+                "-show_entries", "stream=codec_type,codec_name,profile,pix_fmt,width,height,start_time,duration:stream_tags:format=format_name,duration:format_tags:chapter=start_time,end_time:chapter_tags",
                 "-of", "json", "-i", str(path),
             ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
@@ -285,6 +319,23 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         if not valid:
             failed_probe += 1
             continue
+        # Decodable H.264 frames and matching SHA do not imply private
+        # delivery: subtitles/data streams, chapter titles and free-form
+        # metadata can carry prompt or identity text. Only aggregate counters
+        # are returned; never print FFprobe metadata values or file paths.
+        if any(
+            not isinstance(stream, dict)
+            or stream.get("codec_type") not in ("video", "audio")
+            for stream in streams
+        ):
+            auxiliary_stream_anomalies += 1
+        if _freeform_metadata_present(container, streams):
+            freeform_metadata_anomalies += 1
+        chapters = details.get("chapters")
+        if not isinstance(chapters, list):
+            chapter_unattested += 1
+        elif chapters:
+            chapter_anomalies += 1
         # The strict delivery contract is a single unambiguous video track.
         # Decode/timing checks intentionally select v:0, so extra video
         # streams could otherwise escape inspection and alter phone playback.
@@ -445,6 +496,10 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "timing_unattested_masters": timing_unattested,
         "timing_anomaly_count": timing_anomalies,
         "video_stream_anomaly_count": video_stream_anomalies,
+        "auxiliary_stream_anomaly_count": auxiliary_stream_anomalies,
+        "freeform_metadata_anomaly_count": freeform_metadata_anomalies,
+        "chapter_anomaly_count": chapter_anomalies,
+        "chapter_unattested_count": chapter_unattested,
         "video_codec_anomaly_count": video_codec_anomalies,
         "video_codec_unattested_count": video_codec_unattested,
         "video_pixel_format_anomaly_count": video_pixel_format_anomalies,
@@ -477,6 +532,9 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             bool(identifiers) and invalid_records == 0 and unverified == 0
             and timeline_unattested == 0 and timing_unattested == 0
             and hash_unattested == 0 and video_stream_anomalies == 0
+            and auxiliary_stream_anomalies == 0
+            and freeform_metadata_anomalies == 0
+            and chapter_anomalies == 0 and chapter_unattested == 0
             and video_codec_anomalies == 0 and video_codec_unattested == 0
             and video_pixel_format_anomalies == 0
             and video_pixel_format_unattested == 0
