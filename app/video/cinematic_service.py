@@ -452,7 +452,9 @@ import hashlib
 import json
 import math
 import subprocess
+import tempfile
 import uuid
+from pathlib import Path
 from fractions import Fraction
 
 from app.video.cinematic_requests import AssembleMasterRequest, BatchRenderRequest
@@ -742,20 +744,55 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         ''.join(f'[v{index}]' for index in range(len(sources)))
         + f'concat=n={len(sources)}:v=1:a=0[v]'
     )
-    command = [request.ffmpeg_path, '-nostdin', '-y', '-hide_banner', '-loglevel', 'error']
-    for _, _, job in sources:
-        command.extend(['-i', str(video_asset_path(job['asset_id'], 'mp4'))])
-    command.extend([
-        '-filter_complex', ';'.join(filters),
-        '-map', '[v]', '-an', '-c:v', 'libx264',
-        '-preset', 'medium', '-crf', '18',
-        # Explicit muxer CFR fixes MP4 average FPS and last-frame duration
-        # (filtergraph fps alone is insufficient on some FFmpeg builds).
-        '-r', str(project.delivery_fps), '-fps_mode', 'cfr',
-        '-movflags', '+faststart',
-        str(output_path),
-    ])
+    # A source asset can change (and revert) while FFmpeg is reading it.
+    # Stage independent, private input bytes and verify the snapshot digest
+    # against the cache fingerprint BEFORE passing any input path to FFmpeg.
+    # Never hardlink: hardlinks would share mutable source bytes.
+    snapshots = None
     try:
+        try:
+            snapshots = tempfile.TemporaryDirectory(
+                prefix='.cinematic-source-snapshot-', dir=output_path.parent,
+            )
+        except OSError as exc:
+            raise MasterAssemblyNotReady(
+                'Unable to stage private master inputs; check local storage'
+            ) from exc
+        staged_sources = []
+        for source_id, expected_source_hash in zip(source_ids, source_hashes):
+            snapshot = Path(snapshots.name) / f'{source_id}.mp4'
+            snapshot_sha = hashlib.sha256()
+            try:
+                with video_asset_path(source_id, 'mp4').open('rb') as original, snapshot.open('xb') as staged:
+                    while True:
+                        chunk = original.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        staged.write(chunk)
+                        snapshot_sha.update(chunk)
+            except OSError as exc:
+                raise MasterAssemblyNotReady(
+                    'Unable to stage verified source media; retry'
+                ) from exc
+            if snapshot_sha.hexdigest() != expected_source_hash:
+                raise MasterAssemblyNotReady(
+                    'Source media changed while staging master inputs; retry'
+                )
+            staged_sources.append(snapshot)
+
+        command = [request.ffmpeg_path, '-nostdin', '-y', '-hide_banner', '-loglevel', 'error']
+        for snapshot in staged_sources:
+            command.extend(['-i', str(snapshot)])
+        command.extend([
+            '-filter_complex', ';'.join(filters),
+            '-map', '[v]', '-an', '-c:v', 'libx264',
+            '-preset', 'medium', '-crf', '18',
+            # Explicit muxer CFR fixes MP4 average FPS and last-frame duration
+            # (filtergraph fps alone is insufficient on some FFmpeg builds).
+            '-r', str(project.delivery_fps), '-fps_mode', 'cfr',
+            '-movflags', '+faststart',
+            str(output_path),
+        ])
         execution = _run_master_ffmpeg(
             command, capture_output=True, text=True, timeout=43200, check=False,
         )
@@ -823,3 +860,6 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         if output_path.exists():
             output_path.unlink()
         raise
+    finally:
+        if snapshots is not None:
+            snapshots.cleanup()
