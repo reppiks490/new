@@ -542,5 +542,58 @@ class InFlightSourceProvenance(unittest.TestCase):
             live.cleanup()
 
 
+    def test_cache_hit_must_not_return_stale_master_if_source_changes_during_lookup(self):
+        """A cached RED master must not be served after its source becomes BLUE.
+
+        The mutation is placed AFTER the service fingerprints source bytes,
+        exactly when it enumerates cached master records. This is distinct
+        from sequential cache invalidation and in-flight FFmpeg mutation.
+        Both source generations are real H.264; any returned master must
+        have matching SHA lineage, ffprobe metadata and decoded pixels.
+        """
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        original_sha = sha256(source)
+        first = service.assemble_project_master(project.id, request)
+        self.assertEqual(first["source_asset_hashes"], [original_sha])
+        self.assert_real_media(first, "red")
+        # Establish that an unchanged source actually exercises the cache.
+        self.assertEqual(
+            service.assemble_project_master(project.id, request)["id"],
+            first["id"],
+        )
+
+        original_list = service.list_video_records
+        changed_hashes = []
+
+        def mutate_at_cached_master_enumeration(kind):
+            if kind == "video_master" and not changed_hashes:
+                encode_synthetic(source, "blue")
+                changed_hashes.append(sha256(source))
+            return original_list(kind)
+
+        with patch.object(service, "list_video_records",
+                          side_effect=mutate_at_cached_master_enumeration):
+            try:
+                refreshed = service.assemble_project_master(project.id, request)
+            except service.MasterAssemblyNotReady:
+                # A fresh source-integrity check may reject the racing call.
+                self.assertEqual(len(changed_hashes), 1)
+                self.assertNotEqual(changed_hashes[0], original_sha)
+                self.assertEqual(sha256(source), changed_hashes[0])
+                return
+
+        self.assertEqual(len(changed_hashes), 1,
+                         "The cached-master lookup mutation hook did not run")
+        self.assertNotEqual(changed_hashes[0], original_sha)
+        self.assertEqual(sha256(source), changed_hashes[0])
+        self.assertNotEqual(
+            refreshed["id"], first["id"],
+            "Cache returned the old RED master after source changed to BLUE",
+        )
+        self.assertEqual(refreshed["source_asset_hashes"], [changed_hashes[0]])
+        self.assert_real_media(refreshed, "blue")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
