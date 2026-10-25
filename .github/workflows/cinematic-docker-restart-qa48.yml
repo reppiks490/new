@@ -1,0 +1,106 @@
+name: Cinematic Docker durable restart and FFmpeg recovery QA48
+
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_docker_restart_recovery_qa48.py'
+      - '.github/workflows/cinematic-docker-restart-qa48.yml'
+      - 'Dockerfile.cinematic'
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/studio/storage.py'
+      - 'app/studio/server.py'
+      - 'app/video/router.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-restart-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build opt-in cinematic runtime with real FFmpeg
+        run: |
+          set -euo pipefail
+          docker build -f Dockerfile.cinematic \
+            --build-arg PYTHON_VERSION=${{ matrix.python-version }} \
+            -t cinematic-restart-qa48:local .
+
+      - name: Prepare isolated persistent volume
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-qa48-state"
+          sudo chown 10001:10001 "$RUNNER_TEMP/cinematic-qa48-state"
+          sudo chmod 700 "$RUNNER_TEMP/cinematic-qa48-state"
+
+      - name: First container - synthetic queued and interrupted records
+        run: |
+          set -euo pipefail
+          docker run -d --name cinematic-qa48 --network none \
+            --read-only --pids-limit 128 --memory 1g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --mount "type=bind,src=$RUNNER_TEMP/cinematic-qa48-state,dst=/app/workspace/studio" \
+            cinematic-restart-qa48:local
+          for i in $(seq 1 40); do
+            if docker exec cinematic-qa48 python -c \
+              "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=2))['studio']" \
+              >/dev/null 2>&1; then break; fi
+            if [ "$i" -eq 40 ]; then docker logs cinematic-qa48; exit 1; fi
+            sleep 1
+          done
+          docker exec -i cinematic-qa48 python - prepare \
+            < tools/cinematic_docker_restart_recovery_qa48.py
+
+      - name: Kill and restart actual container on same persistent volume
+        run: |
+          set -euo pipefail
+          docker kill cinematic-qa48
+          docker rm cinematic-qa48
+          docker run -d --name cinematic-qa48 --network none \
+            --read-only --pids-limit 128 --memory 1g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --mount "type=bind,src=$RUNNER_TEMP/cinematic-qa48-state,dst=/app/workspace/studio" \
+            cinematic-restart-qa48:local
+          for i in $(seq 1 40); do
+            if docker exec cinematic-qa48 python -c \
+              "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=2))['studio']" \
+              >/dev/null 2>&1; then break; fi
+            if [ "$i" -eq 40 ]; then docker logs cinematic-qa48; exit 1; fi
+            sleep 1
+          done
+          docker exec -i cinematic-qa48 python - verify \
+            < tools/cinematic_docker_restart_recovery_qa48.py
+
+      - name: Second restart must not duplicate completed master
+        run: |
+          set -euo pipefail
+          docker kill cinematic-qa48
+          docker rm cinematic-qa48
+          docker run -d --name cinematic-qa48 --network none \
+            --read-only --pids-limit 128 --memory 1g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --mount "type=bind,src=$RUNNER_TEMP/cinematic-qa48-state,dst=/app/workspace/studio" \
+            cinematic-restart-qa48:local
+          for i in $(seq 1 40); do
+            if docker exec cinematic-qa48 python -c \
+              "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=2))['studio']" \
+              >/dev/null 2>&1; then break; fi
+            if [ "$i" -eq 40 ]; then docker logs cinematic-qa48; exit 1; fi
+            sleep 1
+          done
+          docker exec -i cinematic-qa48 python - verify-stable \
+            < tools/cinematic_docker_restart_recovery_qa48.py
+
+      - name: Remove all synthetic containers and persistent state
+        if: always()
+        run: |
+          docker rm -f cinematic-qa48 >/dev/null 2>&1 || true
+          sudo rm -rf "$RUNNER_TEMP/cinematic-qa48-state"
