@@ -492,5 +492,55 @@ class InFlightSourceProvenance(unittest.TestCase):
             live.cleanup()
 
 
+    @unittest.skipUnless(os.name == "posix", "POSIX snapshot lease creation race")
+    def test_recovery_at_marker_open_must_not_delete_initializing_source(self):
+        """Startup recovery must not unlink an unleased but live source directory.
+
+        Trigger recovery immediately after the real .active.lock file is opened
+        and before its creator calls flock. Unlike a first-flock hook, this
+        remains a valid interleaving even if construction adds a parent fence.
+        """
+        from app.video import cinematic_source_snapshots as snapshot_module
+
+        if snapshot_module.fcntl is None or not getattr(
+            shutil.rmtree, "avoids_symlink_attacks", False
+        ):
+            self.skipTest("Safe POSIX snapshot recovery unavailable")
+
+        _, source = self.make_ready_project()
+        original_open = snapshot_module.os.open
+        observed = []
+
+        def recover_after_marker_open(path, flags, mode=0o777, *, dir_fd=None):
+            fd = original_open(path, flags, mode, dir_fd=dir_fd)
+            if Path(os.fspath(path)).name == ".active.lock" and not observed:
+                # Guard first: cleanup itself opens files using os.open.
+                observed.append(None)
+                observed[0] = snapshot_module.cleanup_abandoned_source_snapshots(
+                    source.parent
+                )
+            return fd
+
+        with patch.object(snapshot_module.os, "open",
+                          side_effect=recover_after_marker_open):
+            live = snapshot_module.PrivateSourceSnapshots(source.parent)
+        try:
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(
+                observed[0]["removed"], 0,
+                "Recovery removed a worker snapshot before its lease lock",
+            )
+            self.assertTrue(Path(live.name).is_dir())
+            staged = Path(live.name) / "synthetic.mp4"
+            shutil.copyfile(source, staged)
+            self.assertEqual(sha256(staged), sha256(source))
+            real_command(
+                "ffmpeg", "-nostdin", "-v", "error", "-xerror",
+                "-i", str(staged), "-an", "-f", "null", "-",
+            )
+        finally:
+            live.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
