@@ -18,25 +18,64 @@ except ImportError:  # Windows: no portable flock-compatible recovery.
 
 _PREFIX = ".cinematic-source-snapshot-"
 _MARKER = ".active.lock"
+# Persistent parent-scoped mutex; unlike per-snapshot markers, this is
+# acquired BEFORE a new recoverable snapshot directory becomes visible.
+_FENCE = ".cinematic-source-snapshots.guard"
+
+
+def _open_recovery_fence(parent: Path, *, blocking: bool) -> int | None:
+    """Acquire the shared creator/reaper fence; None means busy/non-POSIX.
+
+    The guard is never unlinked: unlinking would allow concurrent processes
+    to lock different inodes under the same pathname. Suspicious pre-existing
+    entries fail closed instead of being replaced or followed.
+    """
+    if fcntl is None:
+        return None
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise OSError("Safe no-follow source snapshot fence is unavailable")
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(parent / _FENCE, flags, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_nlink != 1):
+            raise OSError("Unsafe source snapshot recovery fence")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            os.close(fd)
+            return None
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 class PrivateSourceSnapshots:
     """A private temporary input directory with a live-process lease."""
 
     def __init__(self, parent: Path):
-        self._temporary = tempfile.TemporaryDirectory(prefix=_PREFIX, dir=parent)
-        self.name = self._temporary.name
         self._lease_fd: int | None = None
+        # Fence both directory creation and marker lease acquisition. Startup
+        # cleanup takes the same guard before inspecting any candidate.
+        guard_fd = _open_recovery_fence(parent, blocking=True)
         try:
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-            flags |= getattr(os, "O_CLOEXEC", 0)
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-            self._lease_fd = os.open(Path(self.name) / _MARKER, flags, 0o600)
-            if fcntl is not None:
-                fcntl.flock(self._lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BaseException:
-            self.cleanup()
-            raise
+            self._temporary = tempfile.TemporaryDirectory(prefix=_PREFIX, dir=parent)
+            self.name = self._temporary.name
+            try:
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                self._lease_fd = os.open(Path(self.name) / _MARKER, flags, 0o600)
+                if fcntl is not None:
+                    fcntl.flock(self._lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BaseException:
+                self.cleanup()
+                raise
+        finally:
+            if guard_fd is not None:
+                os.close(guard_fd)
 
     def cleanup(self) -> None:
         if fcntl is None:
@@ -55,7 +94,7 @@ class PrivateSourceSnapshots:
                 self._lease_fd = None
 
 
-def cleanup_abandoned_source_snapshots(asset_dir: Path) -> dict[str, int | bool]:
+def _cleanup_abandoned_source_snapshots_unfenced(asset_dir: Path) -> dict[str, int | bool]:
     """Delete only dead, private, app-marked POSIX snapshots.
 
     Never delete active locks, symlinks, world-readable directories, unmarked
@@ -112,3 +151,29 @@ def cleanup_abandoned_source_snapshots(asset_dir: Path) -> dict[str, int | bool]
             if directory_fd is not None:
                 os.close(directory_fd)
     return result
+
+
+def cleanup_abandoned_source_snapshots(asset_dir: Path) -> dict[str, int | bool]:
+    """Recover abandoned snapshots without racing directory/lease creation.
+
+    A busy guard means another process is creating a live snapshot or already
+    recovering. Skip this pass; the next startup can retry orphan cleanup.
+    """
+    result: dict[str, int | bool] = {"removed": 0, "skipped": 0, "unsupported": False}
+    if fcntl is None or not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        result["unsupported"] = True
+        return result
+    try:
+        guard_fd = _open_recovery_fence(asset_dir, blocking=False)
+    except FileNotFoundError:
+        return result
+    except OSError:
+        result["skipped"] += 1
+        return result
+    if guard_fd is None:
+        result["skipped"] += 1
+        return result
+    try:
+        return _cleanup_abandoned_source_snapshots_unfenced(asset_dir)
+    finally:
+        os.close(guard_fd)
