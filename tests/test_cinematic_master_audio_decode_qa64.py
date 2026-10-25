@@ -70,7 +70,7 @@ def test_strict_master_attests_decoded_aac_not_just_stream_metadata(
             for packet in packets[15:35]:
                 pos, size = int(packet["pos"]), int(packet["size"])
                 assert pos > 0 and size > 0 and pos + size <= len(blob)
-                blob[pos:pos + size] = b"\xff" * size
+                blob[pos:pos + size] = b"\x00" * size
             replacement.write_bytes(blob)
         probe = json.loads(subprocess.run([
             "ffprobe", "-v", "error",
