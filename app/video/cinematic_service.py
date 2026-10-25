@@ -776,6 +776,22 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         latest_revision = get_project(project_id).revision
         if latest_revision != project.revision:
             raise ProjectRevisionConflict(project_id, project.revision, latest_revision)
+        # Source MP4s are mutable after the initial cache fingerprint is read.
+        # Never publish a ready master with pre-FFmpeg hashes if a source changed.
+        # This detects post-fingerprint mutations, but immutable snapshots are
+        # still needed to close mutate-and-revert or mid-encode race windows.
+        for source_id, expected_source_hash in zip(source_ids, source_hashes):
+            try:
+                with video_asset_path(source_id, 'mp4').open('rb') as source_file:
+                    current_source_hash = hashlib.file_digest(source_file, 'sha256').hexdigest()
+            except (OSError, ValueError) as exc:
+                raise MasterAssemblyNotReady(
+                    'Source media became unavailable during master assembly; retry'
+                ) from exc
+            if current_source_hash != expected_source_hash:
+                raise MasterAssemblyNotReady(
+                    'Source media changed during master assembly; retry'
+                )
         with output_path.open('rb') as handle:
             digest = hashlib.file_digest(handle, 'sha256').hexdigest()
         record = put_video_record('video_master', {
