@@ -328,5 +328,50 @@ class InFlightSourceProvenance(unittest.TestCase):
                 shutil.rmtree(orphan, ignore_errors=True)
 
 
+
+    @unittest.skipUnless(hasattr(os, "fork"), "POSIX snapshot lease gate")
+    def test_startup_recovery_must_not_remove_live_ffmpeg_input_snapshot(self):
+        """A second startup cannot delete inputs held by an active encoder."""
+        from app.video.cinematic_assembly_jobs import recover_assembly_queue
+
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        original_runner = service._run_master_ffmpeg
+        staged_paths = []
+        before = {p.name for p in source.parent.glob(".cinematic-source-snapshot-*")}
+
+        def verify_live_snapshot_then_encode(command, **kwargs):
+            staged_paths.extend(
+                Path(command[i + 1])
+                for i, arg in enumerate(command[:-1]) if arg == "-i"
+            )
+            self.assertEqual(len(staged_paths), 1)
+            self.assertNotEqual(staged_paths[0], source)
+            self.assertEqual(sha256(staged_paths[0]), sha256(source))
+            # Simulates another API process's startup recovery while the
+            # actual FFmpeg worker still owns its verified private copy.
+            recover_assembly_queue()
+            self.assertTrue(
+                staged_paths[0].is_file(),
+                "Recovery deleted an active FFmpeg source snapshot",
+            )
+            real_command(
+                "ffmpeg", "-nostdin", "-v", "error", "-xerror",
+                "-i", str(staged_paths[0]), "-an", "-f", "null", "-",
+            )
+            return original_runner(command, **kwargs)
+
+        with patch.object(service, "_run_master_ffmpeg",
+                          side_effect=verify_live_snapshot_then_encode):
+            master = service.assemble_project_master(project.id, request)
+        self.assert_real_media(master, "red")
+        self.assertEqual(len(staged_paths), 1)
+        self.assertFalse(staged_paths[0].exists())
+        self.assertEqual(
+            {p.name for p in source.parent.glob(".cinematic-source-snapshot-*")},
+            before,
+            "A normally completed worker must remove its private snapshot",
+        )
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
