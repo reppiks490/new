@@ -224,6 +224,36 @@ class InFlightSourceProvenance(unittest.TestCase):
             )
 
 
+    def test_ffmpeg_failure_discards_private_input_snapshots(self):
+        """A failed encode must not leave staged copies or publish a master."""
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        ffmpeg_inputs = []
+
+        def synthetic_ffmpeg_failure(command, **kwargs):
+            ffmpeg_inputs.extend(
+                Path(command[i + 1])
+                for i, arg in enumerate(command[:-1]) if arg == "-i"
+            )
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+        with patch.object(service, "_run_master_ffmpeg",
+                          side_effect=synthetic_ffmpeg_failure):
+            with self.assertRaisesRegex(RuntimeError, "FFmpeg master assembly failed"):
+                service.assemble_project_master(project.id, request)
+        self.assertEqual(len(ffmpeg_inputs), 1)
+        self.assertNotEqual(ffmpeg_inputs[0], source,
+                            "FFmpeg must read a private verified snapshot, not mutable source")
+        self.assertFalse(ffmpeg_inputs[0].exists(),
+                         "Failed assembly must remove staged input bytes")
+        self.assertFalse(ffmpeg_inputs[0].parent.exists(),
+                         "Failed assembly must remove the private snapshot directory")
+        self.assertFalse([
+            row for row in storage.list_video_records("video_master")
+            if row.get("project_id") == project.id and row.get("status") == "ready"
+        ])
+
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
