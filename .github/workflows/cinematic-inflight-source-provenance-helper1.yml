@@ -7,6 +7,9 @@ on:
       - '.github/workflows/cinematic-inflight-source-provenance-helper1.yml'
       - 'tools/cinematic_inflight_source_provenance_helper1.py'
       - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_source_snapshots.py'
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'tests/test_cinematic_provenance_workflow_triggers_helper1.py'
       - 'app/video/cinematic_editing.py'
       - 'app/video/storage.py'
       - 'app/video/cinematic_requests.py'
@@ -26,6 +29,9 @@ jobs:
         python-version: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify real-media workflow watches snapshot and recovery code
+        run: python -m pytest -q tests/test_cinematic_provenance_workflow_triggers_helper1.py
 
       - name: Build isolated opt-in cinematic image with real FFmpeg
         run: |
