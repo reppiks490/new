@@ -25,7 +25,7 @@ and 3.12. It runs with `--network none`, no host ports, no owner mounts,
 no token, no paid services, no GPU, a read-only root filesystem, UID 10001
 and a dedicated disposable host-mounted workspace. The test:
 
-1. Creates a real SQLite project with two locally FFmpeg-encoded 2-second
+1. Creates a real SQLite project with two locally FFmpeg-encoded 5-second
    synthetic red/blue clips and project revision 3.
 2. **Directly seeds** one `running` and one `queued` assembly row to
    isolate startup recovery; it does **not** claim the running FFmpeg process
@@ -36,7 +36,7 @@ and a dedicated disposable host-mounted workspace. The test:
    dispatch the queued row to the real CPU worker. Polls the real private
    loopback HTTP API, checks persisted master identity, SHA-256, private
    `Cache-Control: no-store` asset download, 854x480 H.264, 24 FPS,
-   96 frames / 4 seconds, and full FFmpeg decode.
+   240 frames / 10 seconds, and full FFmpeg decode.
 5. Kills and restarts the container a second time; verifies the same master
    identity/hash and exactly one persisted master record.
 6. Removes synthetic containers and workspace regardless of outcome.
