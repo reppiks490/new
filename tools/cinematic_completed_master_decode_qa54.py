@@ -230,6 +230,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     hash_mismatches = 0
     video_stream_anomalies = 0
     audio_stream_anomalies = 0
+    audio_codec_anomalies = 0
+    audio_codec_unattested = 0
     audio_timing_anomalies = 0
     audio_timing_unattested = 0
     for identifier in sorted(identifiers):
@@ -245,7 +247,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         try:
             probe = subprocess.run([
                 "ffprobe", "-v", "error", "-protocol_whitelist", "file",
-                "-show_entries", "stream=codec_type,width,height,start_time,duration:format=format_name,duration",
+                "-show_entries", "stream=codec_type,codec_name,profile,width,height,start_time,duration:format=format_name,duration",
                 "-of", "json", "-i", str(path),
             ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
@@ -296,6 +298,22 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         if len(audio_streams) > 1:
             audio_stream_anomalies += 1
         elif len(audio_streams) == 1:
+            # Mobile-delivery acceptance is AAC-LC when audio is present.
+            # MP3 can be muxed into MP4 with valid timing and video/SHA,
+            # but that is not the AAC-LC delivery contract. Missing codec
+            # evidence is unattested, not a fabricated codec mismatch.
+            codec = audio_streams[0].get("codec_name")
+            profile = audio_streams[0].get("profile")
+            if not isinstance(codec, str):
+                audio_codec_unattested += 1
+            elif codec != "aac":
+                # A known non-AAC codec is anomalous even if that codec
+                # has no meaningful FFprobe AAC profile field.
+                audio_codec_anomalies += 1
+            elif not isinstance(profile, str):
+                audio_codec_unattested += 1
+            elif profile != "LC":
+                audio_codec_anomalies += 1
             timing = timing_claims.get(identifier, {None})
             claim = next(iter(timing)) if len(timing) == 1 else None
             audio_match = _audio_timeline_matches(audio_streams[0], claim)
@@ -387,6 +405,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "timing_anomaly_count": timing_anomalies,
         "video_stream_anomaly_count": video_stream_anomalies,
         "audio_stream_anomaly_count": audio_stream_anomalies,
+        "audio_codec_anomaly_count": audio_codec_anomalies,
+        "audio_codec_unattested_count": audio_codec_unattested,
         "audio_timing_anomaly_count": audio_timing_anomalies,
         "audio_timing_unattested_count": audio_timing_unattested,
         "hash_attested_masters": hash_attested,
@@ -410,7 +430,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             bool(identifiers) and invalid_records == 0 and unverified == 0
             and timeline_unattested == 0 and timing_unattested == 0
             and hash_unattested == 0 and video_stream_anomalies == 0
-            and audio_stream_anomalies == 0 and audio_timing_anomalies == 0
+            and audio_stream_anomalies == 0 and audio_codec_anomalies == 0
+            and audio_codec_unattested == 0 and audio_timing_anomalies == 0
             and audio_timing_unattested == 0
         ),
         "verification_complete": bool(identifiers) and unverified == 0 and invalid_records == 0,
