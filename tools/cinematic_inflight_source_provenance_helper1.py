@@ -212,7 +212,16 @@ class InFlightSourceProvenance(unittest.TestCase):
         # The persisted RED lineage and cache fingerprint are false when
         # the real master actually decodes BLUE. This must reject or produce
         # a master that matches the attested source bytes.
-        self.assert_real_media(master, "red")
+        try:
+            self.assert_real_media(master, "red")
+        except AssertionError:
+            # Establish the actual alternate color with full decode before
+            # reporting the provenance violation; do not mask broken media.
+            self.assert_real_media(master, "blue")
+            self.fail(
+                "Ready master decodes BLUE while source SHA attests restored RED; "
+                "post-FFmpeg source rehash alone cannot prove input provenance"
+            )
 
 
 
