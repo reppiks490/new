@@ -186,6 +186,75 @@ class RealCinematicDockerAssembly(unittest.TestCase):
         self.assertEqual(len(storage.list_video_records("video_master")), 1)
         self.assertEqual(service.get_project(project.id).revision, 3)
 
+        # Critical provenance regression: the asset ID and project revision
+        # stay unchanged, but the underlying source MP4 bytes change. A
+        # hash-verified cached master MUST NOT be returned for these new bytes.
+        original_master_sha = job["sha256"]
+        original_blue_sha = hashlib.sha256(sources[1].read_bytes()).hexdigest()
+        synthetic_clip(sources[1], "green", 30)
+        green_sha = hashlib.sha256(sources[1].read_bytes()).hexdigest()
+        self.assertNotEqual(green_sha, original_blue_sha)
+        self.assertEqual(service.get_project(project.id).revision, 3)
+
+        code, _, changed_receipt = json_api(
+            "POST", endpoint, {"expected_revision": 3}
+        )
+        self.assertEqual(code, 202, changed_receipt)
+        self.assertNotEqual(changed_receipt["id"], retry["id"])
+        changed_path = f"{endpoint}/{changed_receipt['id']}"
+        deadline = time.monotonic() + 120
+        while True:
+            code, _, changed = json_api("GET", changed_path)
+            self.assertEqual(code, 200, changed)
+            if changed["status"] in {"succeeded", "failed", "cancelled"}:
+                break
+            self.assertLess(time.monotonic(), deadline, "Source mutation rebuild timed out")
+            time.sleep(0.35)
+        self.assertEqual(changed["status"], "succeeded", changed)
+        self.assertNotEqual(changed["master_id"], job["master_id"])
+        self.assertNotEqual(changed["sha256"], original_master_sha)
+        self.assertEqual(len(storage.list_video_records("video_master")), 2)
+        rebuilt = storage.get_video_record("video_master", changed["master_id"])
+        self.assertEqual(rebuilt["project_id"], project.id)
+        self.assertEqual(rebuilt["project_revision"], 3)
+        self.assertEqual(rebuilt["source_asset_hashes"], [
+            hashlib.sha256(path.read_bytes()).hexdigest() for path in sources
+        ])
+        self.assertEqual(rebuilt["source_asset_hashes"][1], green_sha)
+
+        rebuilt_output = storage.video_asset_path(changed["asset_id"], "mp4")
+        code, headers, rebuilt_media = api("GET", changed["asset_url"])
+        self.assertEqual(code, 200)
+        self.assertEqual(headers.get("cache-control"), "no-store")
+        self.assertEqual(hashlib.sha256(rebuilt_media).hexdigest(), changed["sha256"])
+        self.assertEqual(rebuilt_output.read_bytes(), rebuilt_media)
+        new_probe = json.loads(run(
+            "ffprobe", "-v", "error", "-show_streams", "-of", "json",
+            str(rebuilt_output),
+        ))
+        new_videos = [s for s in new_probe["streams"] if s["codec_type"] == "video"]
+        self.assertEqual(len(new_videos), 1)
+        self.assertEqual(int(new_videos[0]["nb_frames"]), 240)
+        run("ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i",
+            str(rebuilt_output), "-an", "-f", "null", "-")
+        green_pixel = run(
+            "ffmpeg", "-nostdin", "-v", "error", "-ss", "7",
+            "-i", str(rebuilt_output), "-frames:v", "1",
+            "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt",
+            "rgb24", "pipe:1",
+        )
+        self.assertEqual(len(green_pixel), 3)
+        self.assertGreater(green_pixel[1], 80)
+        self.assertGreater(green_pixel[1], green_pixel[0] + 60)
+        self.assertGreater(green_pixel[1], green_pixel[2] + 60)
+
+        # Retain old historical master bytes without ever confusing the cache
+        # for the current source fingerprint.
+        self.assertEqual(
+            hashlib.sha256(output.read_bytes()).hexdigest(), original_master_sha
+        )
+        self.assertEqual(service.get_project(project.id).revision, 3)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
