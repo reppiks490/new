@@ -595,5 +595,48 @@ class InFlightSourceProvenance(unittest.TestCase):
         self.assert_real_media(refreshed, "blue")
 
 
+    def test_completed_master_output_file_is_private_during_and_after_ffmpeg(self):
+        """Master footage must be owner-only, including during FFmpeg encoding.
+
+        The workspace and video-assets directories may be traversable under a
+        standard 022 umask. Real libx264 output must not be created as 0644
+        before its authenticated download endpoint serves it. Capture mode
+        immediately after the real FFmpeg process finishes and verify the
+        persisted, fully decoded H.264 master retains owner-only permissions.
+        """
+        project, _source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        original_runner = service._run_master_ffmpeg
+        observed = []
+
+        def run_real_ffmpeg_and_capture_output_mode(command, **kwargs):
+            result = original_runner(command, **kwargs)
+            output = Path(command[-1])
+            self.assertTrue(output.is_file(), "Actual FFmpeg master was not written")
+            observed.append(stat.S_IMODE(output.stat().st_mode))
+            return result
+
+        previous_umask = os.umask(0o022)
+        try:
+            with patch.object(
+                service, "_run_master_ffmpeg",
+                side_effect=run_real_ffmpeg_and_capture_output_mode,
+            ):
+                master = service.assemble_project_master(project.id, request)
+        finally:
+            os.umask(previous_umask)
+
+        self.assert_real_media(master, "red")
+        output = storage.video_asset_path(master["asset_id"], "mp4")
+        self.assertEqual(
+            observed, [0o600],
+            "Real FFmpeg created a group/other-readable cinematic master",
+        )
+        self.assertEqual(
+            stat.S_IMODE(output.stat().st_mode), 0o600,
+            "Persisted private cinematic master is group/other-readable",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
