@@ -230,6 +230,10 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     hash_attested = 0
     hash_mismatches = 0
     video_stream_anomalies = 0
+    video_codec_anomalies = 0
+    video_codec_unattested = 0
+    video_pixel_format_anomalies = 0
+    video_pixel_format_unattested = 0
     audio_stream_anomalies = 0
     audio_codec_anomalies = 0
     audio_codec_unattested = 0
@@ -250,7 +254,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         try:
             probe = subprocess.run([
                 "ffprobe", "-v", "error", "-protocol_whitelist", "file",
-                "-show_entries", "stream=codec_type,codec_name,profile,width,height,start_time,duration:format=format_name,duration",
+                "-show_entries", "stream=codec_type,codec_name,profile,pix_fmt,width,height,start_time,duration:format=format_name,duration",
                 "-of", "json", "-i", str(path),
             ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
@@ -285,11 +289,27 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         # Decode/timing checks intentionally select v:0, so extra video
         # streams could otherwise escape inspection and alter phone playback.
         # Preserve decode-only compatibility; gate only strict attestation.
-        if sum(
-            isinstance(stream, dict) and stream.get("codec_type") == "video"
-            for stream in streams
-        ) != 1:
+        video_streams = [
+            stream for stream in streams
+            if isinstance(stream, dict) and stream.get("codec_type") == "video"
+        ]
+        if len(video_streams) != 1:
             video_stream_anomalies += 1
+        else:
+            # A fully decodable, timestamp-correct MP4 is not necessarily
+            # an H.264 8-bit 4:2:0 mobile-delivery master. MPEG-4 Part 2 and
+            # H.264 4:4:4 can both satisfy all previous strict checks.
+            # Missing FFprobe evidence is unattested, not fabricated damage.
+            codec = video_streams[0].get("codec_name")
+            if not isinstance(codec, str):
+                video_codec_unattested += 1
+            elif codec != "h264":
+                video_codec_anomalies += 1
+            pixel_format = video_streams[0].get("pix_fmt")
+            if not isinstance(pixel_format, str):
+                video_pixel_format_unattested += 1
+            elif pixel_format != "yuv420p":
+                video_pixel_format_anomalies += 1
         # Audio is optional, but a present soundtrack must cover the claimed
         # timeline from its start, with one unambiguous selectable audio track.
         # A short/late AAC stream can leave the MP4 container at 2s because
@@ -425,6 +445,10 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "timing_unattested_masters": timing_unattested,
         "timing_anomaly_count": timing_anomalies,
         "video_stream_anomaly_count": video_stream_anomalies,
+        "video_codec_anomaly_count": video_codec_anomalies,
+        "video_codec_unattested_count": video_codec_unattested,
+        "video_pixel_format_anomaly_count": video_pixel_format_anomalies,
+        "video_pixel_format_unattested_count": video_pixel_format_unattested,
         "audio_stream_anomaly_count": audio_stream_anomalies,
         "audio_codec_anomaly_count": audio_codec_anomalies,
         "audio_codec_unattested_count": audio_codec_unattested,
@@ -453,6 +477,9 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             bool(identifiers) and invalid_records == 0 and unverified == 0
             and timeline_unattested == 0 and timing_unattested == 0
             and hash_unattested == 0 and video_stream_anomalies == 0
+            and video_codec_anomalies == 0 and video_codec_unattested == 0
+            and video_pixel_format_anomalies == 0
+            and video_pixel_format_unattested == 0
             and audio_stream_anomalies == 0 and audio_codec_anomalies == 0
             and audio_codec_unattested == 0 and audio_timing_anomalies == 0
             and audio_timing_unattested == 0
