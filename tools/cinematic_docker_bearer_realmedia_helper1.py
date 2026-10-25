@@ -7,9 +7,11 @@ No real credentials, owner footage, network, GPU, or paid services.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+from threading import Barrier
 import subprocess
 import time
 import unittest
@@ -133,13 +135,40 @@ class AuthenticatedRealMediaDocker(unittest.TestCase):
         self.assertEqual(code, 403)
         self.assertFalse(storage.list_video_records("video_assembly_job"))
 
-        code, _, receipt = json_api(
-            "POST", queue, {"expected_revision": 3}, auth="valid"
+        # Eight real simultaneous authorized HTTP submissions model repeated
+        # mobile taps/reconnects. All must share the one *active* durable
+        # receipt rather than creating duplicate FFmpeg work. This uses the
+        # actual HTTP server, SQLite admission and real assembly worker.
+        callers = 8
+        start = Barrier(callers)
+
+        def admit(_index: int):
+            start.wait(timeout=15)
+            return json_api(
+                "POST", queue, {"expected_revision": 3}, auth="valid"
+            )
+
+        with ThreadPoolExecutor(max_workers=callers) as pool:
+            admissions = list(pool.map(admit, range(callers)))
+        self.assertTrue(
+            all(code == 202 for code, _, _ in admissions), admissions
         )
-        self.assertEqual(code, 202, receipt)
-        self.assertEqual(receipt["status"], "queued")
-        self.assertNotIn(private_prompt, json.dumps(receipt))
-        self.assertNotIn(TOKEN, json.dumps(receipt))
+        receipts = [body for _, _, body in admissions]
+        self.assertEqual(
+            len({item["id"] for item in receipts}), 1,
+            "Concurrent requests must not enqueue duplicate active work",
+        )
+        self.assertTrue(
+            all(item["status"] in {"queued", "running"} for item in receipts),
+            receipts,
+        )
+        self.assertEqual(
+            len(storage.list_video_records("video_assembly_job")), 1,
+            "One project/revision must have one durable active receipt",
+        )
+        receipt = receipts[0]
+        self.assertNotIn(private_prompt, json.dumps(receipts))
+        self.assertNotIn(TOKEN, json.dumps(receipts))
         job_url = queue + "/" + receipt["id"]
         for auth in ("none", "wrong"):
             self.assertEqual(api("GET", job_url, auth=auth)[0], 401)
