@@ -59,7 +59,7 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
                 malformed += 1
                 continue
             status = payload.get("status")
-            if kind == "video_job" and status in {"queued", "running"}:
+            if kind == "video_job" and isinstance(status, str) and status in {"queued", "running"}:
                 active_jobs += 1
             identifier = payload.get("asset_id")
             if identifier is None:
