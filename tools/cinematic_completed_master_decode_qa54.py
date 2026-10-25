@@ -6,8 +6,10 @@ quiescent owner-selected workspace. Results contain only aggregate counts.
 from __future__ import annotations
 
 from contextlib import closing
+import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -15,6 +17,7 @@ import stat
 import subprocess
 
 _ID = re.compile(r"^[a-f0-9]{32}$")
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
 def _pts_cadence(path: Path, frames: int, fps: int, timeout: int) -> bool | None:
@@ -78,6 +81,35 @@ def _pts_cadence(path: Path, frames: int, fps: int, timeout: int) -> bool | None
         return None
 
 
+
+def _stable_file_sha256(path: Path, original: os.stat_result) -> str | None:
+    """Hash only a stable regular single-link file; never report its bytes/path.
+
+    Quiescence is still required: this is not an atomic multi-process snapshot.
+    """
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                return None
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            after = os.fstat(handle.fileno())
+        current = path.lstat()
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns", "st_nlink")
+        if any(
+            getattr(original, field) != getattr(before, field)
+            or getattr(before, field) != getattr(after, field)
+            or getattr(after, field) != getattr(current, field)
+            for field in fields
+        ):
+            return None
+        return digest
+    except OSError:
+        return None
+
+
 def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, int | bool]:
     """Fully decode each distinct ready master; report only sanitized counts.
 
@@ -104,6 +136,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     # unattested, even if its H.264 frames can be decoded.
     timeline_claims: dict[str, set[int | None]] = {}
     timing_claims: dict[str, set[tuple[int, int] | None]] = {}
+    hash_claims: dict[str, set[str | None]] = {}
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=10)) as db:
         db.execute("PRAGMA query_only=ON")
         for (raw,) in db.execute("SELECT data FROM records WHERE kind='video_master'"):
@@ -121,6 +154,11 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
                 invalid_records += 1
                 continue
             identifiers.add(identifier)
+            stored_hash = record.get("sha256")
+            hash_claims.setdefault(identifier, set()).add(
+                stored_hash if isinstance(stored_hash, str) and _SHA256.fullmatch(stored_hash)
+                else None
+            )
             frames = record.get("timeline_frames")
             stored_probe = record.get("probe")
             if (type(frames) is int and frames > 0
@@ -149,6 +187,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     timeline_mismatches = 0
     timing_attested = 0
     timing_anomalies = 0
+    hash_attested = 0
+    hash_mismatches = 0
     for identifier in sorted(identifiers):
         path = media_dir / (identifier + ".mp4")
         try:
@@ -211,6 +251,16 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             failed_decode += 1
         else:
             verified += 1
+            stored_hashes = hash_claims.get(identifier, {None})
+            if len(stored_hashes) == 1:
+                stored_hash = next(iter(stored_hashes))
+                if stored_hash is not None:
+                    actual_hash = _stable_file_sha256(path, metadata)
+                    if actual_hash is not None:
+                        if actual_hash == stored_hash:
+                            hash_attested += 1
+                        else:
+                            hash_mismatches += 1
             claims = timeline_claims.get(identifier, {None})
             if len(claims) == 1:
                 claimed_frames = next(iter(claims))
@@ -244,6 +294,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     unverified = len(identifiers) - verified
     timeline_unattested = len(identifiers) - timeline_attested
     timing_unattested = len(identifiers) - timing_attested
+    hash_unattested = len(identifiers) - hash_attested
     return {
         "ready_master_records": ready_records,
         "unique_ready_assets": len(identifiers),
@@ -255,6 +306,12 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "timing_attested_masters": timing_attested,
         "timing_unattested_masters": timing_unattested,
         "timing_anomaly_count": timing_anomalies,
+        "hash_attested_masters": hash_attested,
+        "hash_unattested_masters": hash_unattested,
+        "hash_mismatch_count": hash_mismatches,
+        "hash_attestation_complete": (
+            bool(identifiers) and hash_unattested == 0 and invalid_records == 0
+        ),
         "timing_attestation_complete": (
             bool(identifiers) and timing_unattested == 0 and invalid_records == 0
         ),
