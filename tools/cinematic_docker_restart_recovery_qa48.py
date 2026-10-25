@@ -35,7 +35,7 @@ def run(*args: str, timeout: int = 120) -> bytes:
 
 def synthetic_clip(path: Path, color: str, fps: int) -> None:
     run("ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi",
-        "-i", f"color=c={color}:s=160x90:r={fps}:d=2",
+        "-i", f"color=c={color}:s=160x90:r={fps}:d=5",
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", str(path))
     assert path.is_file() and path.stat().st_size > 128
@@ -55,7 +55,7 @@ def prepare() -> None:
     created = service.create_project(models.ProjectCreateRequest(
         title="Synthetic restart recovery",
         master_prompt=CANARY,
-        target_duration_seconds=4,
+        target_duration_seconds=10,
         delivery_fps=24,
         delivery_resolution="480p",
         aspect_ratio="16:9",
@@ -65,12 +65,12 @@ def prepare() -> None:
     shots = [
         models.CinematicShot(shot_id=uuid4().hex, ordinal=i + 1,
             title=f"Synthetic {i+1}", prompt="color bars",
-            duration_seconds=2)
+            duration_seconds=5)
         for i in range(2)
     ]
     scene = models.CinematicScene(
         scene_id=scene_id, ordinal=1, title="Synthetic scene",
-        target_duration_seconds=4, shots=shots,
+        target_duration_seconds=10, shots=shots,
     )
     project = service.update_project(
         created.id, models.ProjectUpdateRequest(expected_revision=1, scenes=[scene])
@@ -164,8 +164,8 @@ def verify(stable: bool = False) -> None:
     stream = probe["streams"][0]
     assert stream["codec_name"] == "h264"
     assert (stream["width"], stream["height"]) == (854, 480)
-    assert int(stream["nb_frames"]) == 96
-    assert abs(float(probe["format"]["duration"]) - 4) < 0.25
+    assert int(stream["nb_frames"]) == 240
+    assert abs(float(probe["format"]["duration"]) - 10) < 0.25
     run("ffmpeg", "-nostdin", "-v", "error", "-xerror",
         "-i", str(output), "-an", "-f", "null", "-")
     if stable:
@@ -175,7 +175,7 @@ def verify(stable: bool = False) -> None:
         receipt = STATE.parent / "qa48-master-receipt.json"
         receipt.write_text(json.dumps({"id": master["id"], "sha256": digest}))
         receipt.chmod(0o600)
-    print("QA48 VERIFIED: actual startup recovery, private HTTP, SHA, 96-frame full decode"
+    print("QA48 VERIFIED: actual startup recovery, private HTTP, SHA, 240-frame full decode"
           + (", second restart stable" if stable else ""))
 
 
