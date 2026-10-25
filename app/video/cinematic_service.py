@@ -451,6 +451,7 @@ def render_shot(
 import hashlib
 import json
 import os
+import stat
 import math
 import subprocess
 import tempfile
@@ -723,12 +724,43 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         probe = existing.get('probe')
         if (isinstance(probe, dict) and probe.get('probe_metadata_verified') is True
                 and path.is_file() and path.stat().st_size >= 12):
-            with path.open('rb') as cached_file:
-                cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
-                # Check the actual opened inode, not a separate pathname stat.
-                # Older masters may have been written 0644 before the private
-                # FFmpeg output creation fix. Valid SHA alone is insufficient.
-                cached_mode = os.fstat(cached_file.fileno()).st_mode
+            # The storage resolver's symlink check precedes this open. A
+            # pathname can be replaced after validation, so the cached inode
+            # must be opened without following symlinks on POSIX.
+            if os.name == 'posix' and not hasattr(os, 'O_NOFOLLOW'):
+                raise MasterAssemblyNotReady(
+                    'Safe cached master open is unavailable on this filesystem'
+                )
+            flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+            if os.name == 'posix':
+                flags |= os.O_NOFOLLOW
+            try:
+                descriptor = os.open(path, flags)
+                try:
+                    with os.fdopen(descriptor, 'rb') as cached_file:
+                        descriptor = -1  # fdopen now owns the descriptor.
+                        opened = os.fstat(cached_file.fileno())
+                        if not stat.S_ISREG(opened.st_mode):
+                            raise MasterAssemblyNotReady('Cached master is not a regular file')
+                        cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
+                        cached_mode = opened.st_mode
+                        if os.name == 'posix':
+                            # Reject a pathname replaced while the bytes were
+                            # hashed; do not attest a different external inode.
+                            current = os.lstat(path)
+                            if (not stat.S_ISREG(current.st_mode)
+                                    or (current.st_dev, current.st_ino)
+                                    != (opened.st_dev, opened.st_ino)):
+                                raise MasterAssemblyNotReady(
+                                    'Cached master path changed during lookup; retry'
+                                )
+                finally:
+                    if descriptor != -1:
+                        os.close(descriptor)
+            except OSError as exc:
+                raise MasterAssemblyNotReady(
+                    'Cached master cannot be safely opened; retry'
+                ) from exc
             if cached_hash == existing.get('sha256'):
                 if os.name == 'posix' and cached_mode & 0o077:
                     raise MasterAssemblyNotReady(
