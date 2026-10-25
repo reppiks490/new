@@ -46,9 +46,9 @@ def json_api(method: str, path: str, payload: dict | None = None):
     return code, headers, json.loads(body)
 
 
-def synthetic_clip(path: Path, color: str, fps: int) -> None:
+def synthetic_clip(path: Path, color: str, fps: int, duration: int = 5) -> None:
     run("ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi",
-        "-i", f"color=c={color}:s=160x90:r={fps}:d=5",
+        "-i", f"color=c={color}:s=160x90:r={fps}:d={duration}",
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", str(path))
     assert path.is_file() and path.stat().st_size > 128
@@ -262,25 +262,25 @@ class RealCinematicDockerAssembly(unittest.TestCase):
         other = service.create_project(models.ProjectCreateRequest(
             title="Independent offline project",
             master_prompt="SYNTHETIC_SECOND_PROJECT_SECRET_CANARY",
-            target_duration_seconds=5, delivery_fps=24,
+            target_duration_seconds=10, delivery_fps=24,
             delivery_resolution="480p", aspect_ratio="16:9",
             reference_image_ids=[],
         ))
         other_scene_id, other_shot_id = uuid4().hex, uuid4().hex
         other_shot = models.CinematicShot(
             shot_id=other_shot_id, ordinal=1, title="Yellow slate",
-            prompt="Synthetic yellow only", duration_seconds=5,
+            prompt="Synthetic yellow only", duration_seconds=10,
         )
         other_scene = models.CinematicScene(
             scene_id=other_scene_id, ordinal=1, title="Other project",
-            target_duration_seconds=5, shots=[other_shot],
+            target_duration_seconds=10, shots=[other_shot],
         )
         other = service.update_project(other.id, models.ProjectUpdateRequest(
             expected_revision=1, scenes=[other_scene],
         ))
         other_asset_id = uuid4().hex
         other_source = storage.video_asset_path(other_asset_id, "mp4")
-        synthetic_clip(other_source, "yellow", 24)
+        synthetic_clip(other_source, "yellow", 24, duration=10)
         other_job = storage.put_video_record("video_job", {
             "status": "succeeded", "stage": "Ready", "progress": 100,
             "project_id": other.id, "scene_id": other_scene_id,
@@ -338,7 +338,7 @@ class RealCinematicDockerAssembly(unittest.TestCase):
             s for s in other_probe["streams"] if s["codec_type"] == "video"
         ]
         self.assertEqual(len(other_videos), 1)
-        self.assertEqual(int(other_videos[0]["nb_frames"]), 120)
+        self.assertEqual(int(other_videos[0]["nb_frames"]), 240)
         run("ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i",
             str(other_master_path), "-an", "-f", "null", "-")
 
