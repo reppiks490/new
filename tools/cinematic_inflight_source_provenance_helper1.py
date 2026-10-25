@@ -638,5 +638,41 @@ class InFlightSourceProvenance(unittest.TestCase):
         )
 
 
+    @unittest.skipUnless(os.name == "posix", "POSIX private cached-master mode")
+    def test_cache_hit_must_not_reuse_group_readable_legacy_master(self):
+        """A valid SHA and source fingerprint do not make an MP4 private.
+
+        Simulate a legacy 0644 master created before the 0600 output fix.
+        Its bytes, FFprobe metadata, source SHA and project revision remain
+        valid, so this exercises the real cache-hit authorization/privacy
+        decision rather than a broken media record. A returned master must
+        be private; fail-closed refusal is also acceptable.
+        """
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        first = service.assemble_project_master(project.id, request)
+        self.assert_real_media(first, "red")
+        output = storage.video_asset_path(first["asset_id"], "mp4")
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+        original_hash = sha256(output)
+        os.chmod(output, 0o644)
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o644)
+        self.assertEqual(sha256(output), original_hash)
+        self.assertEqual(first["source_asset_hashes"], [sha256(source)])
+
+        try:
+            reused = service.assemble_project_master(project.id, request)
+        except service.MasterAssemblyNotReady:
+            # Explicit rejection is safer than reusing the public inode.
+            return
+        self.assert_real_media(reused, "red")
+        reused_path = storage.video_asset_path(reused["asset_id"], "mp4")
+        self.assertEqual(
+            stat.S_IMODE(reused_path.stat().st_mode) & 0o077, 0,
+            "Cache served a group/other-readable legacy master despite "
+            "valid media SHA, source fingerprint and project revision",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
