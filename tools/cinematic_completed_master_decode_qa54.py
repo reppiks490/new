@@ -156,6 +156,26 @@ _SAFE_FORMAT_TAGS = frozenset({
 _SAFE_STREAM_TAGS = frozenset({
     "language", "handler_name", "vendor_id", "encoder",
 })
+# FFmpeg writes an encoder tag by default, but the MP4 muxer also accepts an
+# arbitrary user-supplied value for the SAME structural key. Checking keys
+# alone therefore permits private prompt/identity text to be embedded in an
+# otherwise valid master. Allow only known FFmpeg version + codec identities;
+# unknown encoders are conservatively unattested by the strict privacy gate.
+_SAFE_ENCODER_NAMES = frozenset({
+    "libx264", "h264", "h264_nvenc", "h264_qsv", "h264_amf",
+    "h264_vaapi", "h264_videotoolbox", "h264_mf",
+    "aac", "libfdk_aac", "libmp3lame", "mpeg4", "libx265",
+    "hevc", "hevc_nvenc", "libvpx", "libvpx-vp9",
+})
+
+
+def _expected_encoder_tag(value: object, *, format_tag: bool) -> bool:
+    if not isinstance(value, str):
+        return False
+    if format_tag:
+        return re.fullmatch(r"Lavf[0-9]+\\.[0-9]+\\.[0-9]+", value) is not None
+    match = re.fullmatch(r"Lavc[0-9]+\\.[0-9]+\\.[0-9]+ ([A-Za-z0-9_.+-]+)", value)
+    return match is not None and match.group(1) in _SAFE_ENCODER_NAMES
 
 
 def _freeform_metadata_present(container: dict, streams: list) -> bool:
@@ -176,6 +196,11 @@ def _freeform_metadata_present(container: dict, streams: list) -> bool:
         handler = tags.get("handler_name")
         if handler is not None and handler not in (
             "VideoHandler", "SoundHandler", "AudioHandler"
+        ):
+            return True
+        encoder = tags.get("encoder")
+        if encoder is not None and not _expected_encoder_tag(
+            encoder, format_tag=source is container
         ):
             return True
     return False
