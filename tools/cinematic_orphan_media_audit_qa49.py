@@ -43,6 +43,9 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
     completed: set[str] = set()
     malformed = 0
     invalid_asset_ids = 0
+    invalid_video_job_status_rows = 0
+    invalid_video_master_status_rows = 0
+    invalid_completed_asset_reference_rows = 0
     active_jobs = 0
     active_master_assembly_jobs = 0
     invalid_master_assembly_status_rows = 0
@@ -74,11 +77,20 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
                 }:
                     invalid_master_assembly_status_rows += 1
                 continue
-            if kind == "video_job" and isinstance(status, str) and status in {"queued", "running"}:
-                active_jobs += 1
+            if kind == "video_job":
+                if isinstance(status, str) and status in {"queued", "running"}:
+                    active_jobs += 1
+                elif not isinstance(status, str) or status not in {"succeeded", "failed"}:
+                    invalid_video_job_status_rows += 1
+            elif not isinstance(status, str) or status != "ready":
+                invalid_video_master_status_rows += 1
             identifier = payload.get("asset_id")
             if identifier is None:
-                continue  # Unfinished jobs may not yet have an output ID.
+                # A failed or in-flight job need not have produced media.
+                # A succeeded job or ready master must identify its output.
+                if status == _COMPLETE[kind]:
+                    invalid_completed_asset_reference_rows += 1
+                continue
             if not isinstance(identifier, str) or not _ID.fullmatch(identifier):
                 invalid_asset_ids += 1
                 continue
@@ -119,11 +131,16 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
         "active_video_jobs": active_jobs,
         "master_assembly_jobs_pending_or_running": active_master_assembly_jobs,
         "invalid_master_assembly_status_rows": invalid_master_assembly_status_rows,
+        "invalid_video_job_status_rows": invalid_video_job_status_rows,
+        "invalid_video_master_status_rows": invalid_video_master_status_rows,
+        "invalid_completed_asset_reference_rows": invalid_completed_asset_reference_rows,
         # A false value only means no known DB-level blockers were found.
         # External FFmpeg processes and filesystem races are not inspected.
         "candidate_inventory_not_quiescent": bool(
             active_jobs or active_master_assembly_jobs
             or malformed or invalid_master_assembly_status_rows
+            or invalid_video_job_status_rows or invalid_video_master_status_rows
+            or invalid_completed_asset_reference_rows or invalid_asset_ids
         ),
         "malformed_record_count": malformed,
         "invalid_asset_id_count": invalid_asset_ids,
