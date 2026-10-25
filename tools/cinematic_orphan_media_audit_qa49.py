@@ -103,6 +103,7 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
     candidates = 0
     candidate_bytes = 0
     small_candidates = 0
+    zero_byte_completed = 0
     unsafe_entries = 0
     for entry in media_dir.iterdir():
         if not _MP4.fullmatch(entry.name):
@@ -118,6 +119,10 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
             continue
         identifier = entry.stem
         seen.add(identifier)
+        # A completed zero-byte MP4 cannot decode. This is an inventory
+        # integrity warning, not an authorization to delete or repair media.
+        if identifier in completed and metadata.st_size == 0:
+            zero_byte_completed += 1
         if identifier not in referenced:
             candidates += 1
             size = metadata.st_size
@@ -129,6 +134,7 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
         "tracked_mp4_ids": len(referenced),
         "completed_mp4_ids": len(completed),
         "missing_completed_mp4_ids": len(completed - seen),
+        "zero_byte_completed_mp4_files": zero_byte_completed,
         "candidate_untracked_mp4_files": candidates,
         "candidate_untracked_bytes": candidate_bytes,
         "candidate_small_files_under_128_bytes": small_candidates,
@@ -145,7 +151,7 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
             or malformed or invalid_master_assembly_status_rows
             or invalid_video_job_status_rows or invalid_video_master_status_rows
             or invalid_completed_asset_reference_rows or invalid_asset_ids
-            or unsafe_entries
+            or unsafe_entries or zero_byte_completed
         ),
         "malformed_record_count": malformed,
         "invalid_asset_id_count": invalid_asset_ids,
