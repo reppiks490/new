@@ -674,5 +674,57 @@ class InFlightSourceProvenance(unittest.TestCase):
         )
 
 
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "O_NOFOLLOW"),
+        "POSIX no-follow private master cache",
+    )
+    def test_cache_hit_must_not_follow_symlinked_master_outside_asset_store(self):
+        """A valid hash and 0600 target cannot authorize a symlinked master.
+
+        A local file replacement can make a cached master path a symlink to
+        bytes outside the managed asset directory. The media, persisted hash,
+        source fingerprint, revision and target file mode all remain valid.
+        Cache reuse must fail closed or return a regular managed output; a
+        path-following cache check would accept an unsafe filesystem entry.
+        This is synthetic filesystem-integrity QA, not a remote exploit.
+        """
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        first = service.assemble_project_master(project.id, request)
+        self.assert_real_media(first, "red")
+        output = storage.video_asset_path(first["asset_id"], "mp4")
+        self.assertFalse(output.is_symlink())
+        original_sha = sha256(output)
+        external = output.parent.parent / (
+            f".synthetic-cinematic-external-{uuid4().hex}.mp4"
+        )
+        shutil.copyfile(output, external)
+        os.chmod(external, 0o600)
+        self.assertEqual(sha256(external), original_sha)
+        self.assertEqual(first["source_asset_hashes"], [sha256(source)])
+        output.unlink()
+        output.symlink_to(external)
+        try:
+            self.assertTrue(output.is_symlink())
+            self.assertEqual(sha256(output), original_sha)
+            self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o600)
+            try:
+                reused = service.assemble_project_master(project.id, request)
+            except service.MasterAssemblyNotReady:
+                return
+            reused_path = storage.video_asset_path(reused["asset_id"], "mp4")
+            self.assertFalse(
+                reused_path.is_symlink(),
+                "Cache accepted a symlinked master pointing outside "
+                "the private asset directory despite valid SHA and mode",
+            )
+            self.assert_real_media(reused, "red")
+        finally:
+            if output.is_symlink():
+                output.unlink()
+            external.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
