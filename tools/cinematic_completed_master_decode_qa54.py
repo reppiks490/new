@@ -323,6 +323,11 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "missing_or_unsafe_count": missing_or_unsafe,
         "timed_out_count": timed_out,
         "malformed_or_invalid_records": invalid_records,
+        "integrity_attestation_complete": (
+            bool(identifiers) and invalid_records == 0 and unverified == 0
+            and timeline_unattested == 0 and timing_unattested == 0
+            and hash_unattested == 0
+        ),
         "verification_complete": bool(identifiers) and unverified == 0 and invalid_records == 0,
         "safe_to_delete_automatically": False,
     }
@@ -334,6 +339,10 @@ def main() -> int:
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--database", required=True, type=Path)
     parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument(
+        "--require-integrity", action="store_true",
+        help="Fail closed unless every completed master has decode, frame, timing and SHA attestation",
+    )
     args = parser.parse_args()
     try:
         report = inspect(args.workspace, args.database, timeout=args.timeout)
@@ -341,7 +350,9 @@ def main() -> int:
         print('{"error":"audit_failed"}')
         return 2
     print(json.dumps(report, sort_keys=True, separators=(",", ":")))
-    return 0 if report["verification_complete"] else 1
+    passed = (report["integrity_attestation_complete"] if args.require_integrity
+              else report["verification_complete"])
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
