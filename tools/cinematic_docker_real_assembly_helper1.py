@@ -256,5 +256,126 @@ class RealCinematicDockerAssembly(unittest.TestCase):
         self.assertEqual(service.get_project(project.id).revision, 3)
 
 
+        # Independent *real-service* project-isolation contract. Both projects
+        # have persisted clips and actual FFmpeg masters; a guessed job ID in
+        # another project's URL must not reveal or cancel that job.
+        other = service.create_project(models.ProjectCreateRequest(
+            title="Independent offline project",
+            master_prompt="SYNTHETIC_SECOND_PROJECT_SECRET_CANARY",
+            target_duration_seconds=5, delivery_fps=24,
+            delivery_resolution="480p", aspect_ratio="16:9",
+            reference_image_ids=[],
+        ))
+        other_scene_id, other_shot_id = uuid4().hex, uuid4().hex
+        other_shot = models.CinematicShot(
+            shot_id=other_shot_id, ordinal=1, title="Yellow slate",
+            prompt="Synthetic yellow only", duration_seconds=5,
+        )
+        other_scene = models.CinematicScene(
+            scene_id=other_scene_id, ordinal=1, title="Other project",
+            target_duration_seconds=5, shots=[other_shot],
+        )
+        other = service.update_project(other.id, models.ProjectUpdateRequest(
+            expected_revision=1, scenes=[other_scene],
+        ))
+        other_asset_id = uuid4().hex
+        other_source = storage.video_asset_path(other_asset_id, "mp4")
+        synthetic_clip(other_source, "yellow", 24)
+        other_job = storage.put_video_record("video_job", {
+            "status": "succeeded", "stage": "Ready", "progress": 100,
+            "project_id": other.id, "scene_id": other_scene_id,
+            "shot_id": other_shot_id, "project_revision": 2,
+            "asset_id": other_asset_id,
+            "asset_url": f"/api/video/assets/{other_asset_id}.mp4",
+        })
+        other = service.update_project(other.id, models.ProjectUpdateRequest(
+            expected_revision=2,
+            scenes=[other_scene.model_copy(update={"shots": [
+                other_shot.model_copy(update={
+                    "latest_job_id": other_job["id"],
+                    "latest_rendered_project_revision": 2,
+                }),
+            ]})],
+        ))
+        self.assertEqual(other.revision, 3)
+        other_endpoint = f"/api/video/projects/{other.id}/assembly-jobs"
+        code, _, other_receipt = json_api(
+            "POST", other_endpoint, {"expected_revision": 3}
+        )
+        self.assertEqual(code, 202, other_receipt)
+        deadline = time.monotonic() + 120
+        while True:
+            code, _, other_finished = json_api(
+                "GET", f"{other_endpoint}/{other_receipt['id']}"
+            )
+            self.assertEqual(code, 200)
+            if other_finished["status"] in {"succeeded", "failed", "cancelled"}:
+                break
+            self.assertLess(time.monotonic(), deadline, "Second project timed out")
+            time.sleep(0.35)
+        self.assertEqual(other_finished["status"], "succeeded", other_finished)
+        self.assertNotEqual(other_finished["master_id"], changed["master_id"])
+        self.assertEqual(
+            storage.get_video_record("video_master", other_finished["master_id"])[
+                "source_asset_hashes"
+            ],
+            [hashlib.sha256(other_source.read_bytes()).hexdigest()],
+        )
+        code, headers, other_media = api("GET", other_finished["asset_url"])
+        self.assertEqual(code, 200)
+        self.assertEqual(headers.get("cache-control"), "no-store")
+        self.assertEqual(
+            hashlib.sha256(other_media).hexdigest(), other_finished["sha256"]
+        )
+        other_master_path = storage.video_asset_path(
+            other_finished["asset_id"], "mp4"
+        )
+        other_probe = json.loads(run(
+            "ffprobe", "-v", "error", "-show_streams", "-of", "json",
+            str(other_master_path),
+        ))
+        other_videos = [
+            s for s in other_probe["streams"] if s["codec_type"] == "video"
+        ]
+        self.assertEqual(len(other_videos), 1)
+        self.assertEqual(int(other_videos[0]["nb_frames"]), 120)
+        run("ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i",
+            str(other_master_path), "-an", "-f", "null", "-")
+
+        # Project-scoped polling, listing, cancellation and master history
+        # must never cross-link otherwise valid completed jobs.
+        for wrong_project, foreign_id in (
+            (project.id, other_receipt["id"]),
+            (other.id, changed_receipt["id"]),
+        ):
+            wrong_path = (
+                f"/api/video/projects/{wrong_project}/assembly-jobs/{foreign_id}"
+            )
+            code, _, _ = api("GET", wrong_path)
+            self.assertEqual(code, 404, wrong_path)
+            code, _, _ = api("POST", wrong_path + "/cancel")
+            self.assertEqual(code, 404, wrong_path)
+        for own_project, expected_job_ids, expected_master_ids in (
+            (project.id, {queued["id"], retry["id"], changed_receipt["id"]},
+             {job["master_id"], changed["master_id"]}),
+            (other.id, {other_receipt["id"]}, {other_finished["master_id"]}),
+        ):
+            root = f"/api/video/projects/{own_project}"
+            code, _, history = json_api("GET", root + "/assembly-jobs")
+            self.assertEqual(code, 200)
+            self.assertEqual(
+                {entry["id"] for entry in history["jobs"]},
+                expected_job_ids,
+            )
+            code, _, masters = json_api("GET", root + "/masters")
+            self.assertEqual(code, 200)
+            self.assertEqual({entry["id"] for entry in masters},
+                             expected_master_ids)
+            self.assertNotIn(
+                "SYNTHETIC_SECOND_PROJECT_SECRET_CANARY",
+                json.dumps(history) + json.dumps(masters),
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
