@@ -207,6 +207,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     timing_anomalies = 0
     hash_attested = 0
     hash_mismatches = 0
+    video_stream_anomalies = 0
     for identifier in sorted(identifiers):
         path = media_dir / (identifier + ".mp4")
         try:
@@ -251,6 +252,15 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         if not valid:
             failed_probe += 1
             continue
+        # The strict delivery contract is a single unambiguous video track.
+        # Decode/timing checks intentionally select v:0, so extra video
+        # streams could otherwise escape inspection and alter phone playback.
+        # Preserve decode-only compatibility; gate only strict attestation.
+        if sum(
+            isinstance(stream, dict) and stream.get("codec_type") == "video"
+            for stream in streams
+        ) != 1:
+            video_stream_anomalies += 1
         try:
             decode = subprocess.run([
                 "ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-xerror",
@@ -333,6 +343,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "timing_attested_masters": timing_attested,
         "timing_unattested_masters": timing_unattested,
         "timing_anomaly_count": timing_anomalies,
+        "video_stream_anomaly_count": video_stream_anomalies,
         "hash_attested_masters": hash_attested,
         "hash_unattested_masters": hash_unattested,
         "hash_mismatch_count": hash_mismatches,
@@ -353,7 +364,7 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "integrity_attestation_complete": (
             bool(identifiers) and invalid_records == 0 and unverified == 0
             and timeline_unattested == 0 and timing_unattested == 0
-            and hash_unattested == 0
+            and hash_unattested == 0 and video_stream_anomalies == 0
         ),
         "verification_complete": bool(identifiers) and unverified == 0 and invalid_records == 0,
         "safe_to_delete_automatically": False,
