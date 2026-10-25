@@ -1,0 +1,56 @@
+name: Cinematic in-flight source provenance FFmpeg QA (Helper 1)
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile.cinematic'
+      - '.github/workflows/cinematic-inflight-source-provenance-helper1.yml'
+      - 'tools/cinematic_inflight_source_provenance_helper1.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_editing.py'
+      - 'app/video/storage.py'
+      - 'app/video/cinematic_requests.py'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-source-provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build isolated opt-in cinematic image with real FFmpeg
+        run: |
+          set -euo pipefail
+          docker build --file Dockerfile.cinematic \
+            --build-arg PYTHON_VERSION=${{ matrix.python-version }} \
+            --tag cinematic-helper1-inflight:qa .
+
+      - name: Run baseline and deterministic in-flight mutation with real media
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm -i --network none --read-only \
+            --pids-limit 128 --memory 1g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=256m,uid=10001,gid=10001 \
+            cinematic-helper1-inflight:qa python - \
+            < tools/cinematic_inflight_source_provenance_helper1.py \
+            2>&1 | tee test-results/inflight-source-provenance.txt
+
+      - name: Preserve exact-head red or green evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-inflight-source-py${{ matrix.python-version }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
