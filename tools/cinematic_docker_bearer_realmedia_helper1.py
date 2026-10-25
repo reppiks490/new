@@ -218,6 +218,98 @@ class AuthenticatedRealMediaDocker(unittest.TestCase):
         run("ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i",
             str(output), "-an", "-f", "null", "-")
 
+        # Regression: after the first real master completes, the source MP4
+        # can change *without* changing its asset ID or project revision.
+        # Concurrent authenticated retries must never return the old cached
+        # master or publish multiple distinct masters for those new bytes.
+        original_master_id = finished["master_id"]
+        original_master_bytes = media
+        run("ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi",
+            "-i", "color=c=blue:s=160x90:r=24:d=10", "-an",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(source))
+        refreshed_source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+        self.assertNotEqual(refreshed_source_sha, source_sha)
+        self.assertEqual(service.get_project(project.id).revision, 3)
+
+        retry_barrier = Barrier(callers)
+
+        def refresh_admission(_index: int):
+            retry_barrier.wait(timeout=15)
+            return json_api("POST", queue, {"expected_revision": 3})
+
+        with ThreadPoolExecutor(max_workers=callers) as pool:
+            refresh_responses = list(pool.map(refresh_admission, range(callers)))
+        self.assertTrue(
+            all(code == 202 for code, _, _ in refresh_responses),
+            refresh_responses,
+        )
+        refresh_receipts = [body for _, _, body in refresh_responses]
+        self.assertEqual(
+            len({item["id"] for item in refresh_receipts}), 1,
+            "Concurrent refreshes must share one active assembly receipt",
+        )
+        self.assertNotEqual(refresh_receipts[0]["id"], receipt["id"])
+        self.assertNotIn(private_prompt, json.dumps(refresh_receipts))
+        self.assertNotIn(TOKEN, json.dumps(refresh_receipts))
+
+        refresh_url = queue + "/" + refresh_receipts[0]["id"]
+        deadline = time.monotonic() + 120
+        while True:
+            code, _, refreshed = json_api("GET", refresh_url)
+            self.assertEqual(code, 200)
+            if refreshed["status"] in {"succeeded", "failed", "cancelled"}:
+                break
+            self.assertLess(time.monotonic(), deadline, "Refresh timed out")
+            time.sleep(0.35)
+        self.assertEqual(refreshed["status"], "succeeded", refreshed)
+        self.assertTrue(refreshed["probe_metadata_verified"])
+        self.assertNotEqual(refreshed["master_id"], original_master_id)
+        self.assertNotEqual(refreshed["sha256"], finished["sha256"])
+        self.assertEqual(
+            storage.get_video_record("video_master", refreshed["master_id"])[
+                "source_asset_hashes"
+            ], [refreshed_source_sha],
+        )
+        self.assertEqual(
+            len(storage.list_video_records("video_master")), 2,
+            "One historical and one refreshed master, not eight outputs",
+        )
+        self.assertEqual(output.read_bytes(), original_master_bytes)
+        self.assertEqual(service.get_project(project.id).revision, 3)
+
+        for auth in ("none", "wrong"):
+            self.assertEqual(api("GET", refreshed["asset_url"], auth=auth)[0], 401)
+        code, headers, refreshed_media = api("GET", refreshed["asset_url"])
+        self.assertEqual(code, 200)
+        self.assertEqual(headers.get("cache-control"), "no-store")
+        self.assertEqual(
+            hashlib.sha256(refreshed_media).hexdigest(), refreshed["sha256"]
+        )
+        refreshed_path = storage.video_asset_path(refreshed["asset_id"], "mp4")
+        self.assertEqual(refreshed_path.read_bytes(), refreshed_media)
+        refreshed_probe = json.loads(run(
+            "ffprobe", "-v", "error", "-show_streams", "-of", "json",
+            str(refreshed_path),
+        ))
+        refreshed_video = [
+            stream for stream in refreshed_probe["streams"]
+            if stream["codec_type"] == "video"
+        ]
+        self.assertEqual(len(refreshed_video), 1)
+        self.assertEqual(refreshed_video[0]["codec_name"], "h264")
+        self.assertEqual(int(refreshed_video[0]["nb_frames"]), 240)
+        run("ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i",
+            str(refreshed_path), "-an", "-f", "null", "-")
+        center_pixel = run(
+            "ffmpeg", "-nostdin", "-v", "error", "-ss", "5",
+            "-i", str(refreshed_path), "-vf", "scale=1:1",
+            "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"
+        )
+        self.assertEqual(len(center_pixel), 3)
+        self.assertGreater(center_pixel[2], center_pixel[0] + 70)
+        self.assertGreater(center_pixel[2], center_pixel[1] + 70)
+
         # Correct bearer is not an entitlement to poll another project ID.
         foreign = service.create_project(models.ProjectCreateRequest(
             title="Other synthetic project",
