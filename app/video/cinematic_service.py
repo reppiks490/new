@@ -768,6 +768,7 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
     # against the cache fingerprint BEFORE passing any input path to FFmpeg.
     # Never hardlink: hardlinks would share mutable source bytes.
     snapshots = None
+    output_created = False
     try:
         try:
             from app.video.cinematic_source_snapshots import PrivateSourceSnapshots
@@ -825,11 +826,33 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             '-movflags', '+faststart',
             str(output_path),
         ])
+        # FFmpeg normally creates output with the process umask (0644 under
+        # umask 022). A bearer-protected private film must never become
+        # group/other-readable even transiently during encoding. Precreate
+        # the UUID output exclusively as 0600; FFmpeg -y truncates the same
+        # inode, preserving its permissions. O_EXCL also rejects collisions.
+        try:
+            output_fd = os.open(
+                output_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
+                0o600,
+            )
+        except OSError as exc:
+            raise MasterAssemblyNotReady(
+                'Unable to create private master output; retry'
+            ) from exc
+        output_created = True
+        os.close(output_fd)
         execution = _run_master_ffmpeg(
             command, capture_output=True, text=True, timeout=43200, check=False,
         )
         if execution.returncode != 0:
             raise RuntimeError(f'FFmpeg master assembly failed with exit code {execution.returncode}')
+        # Fail closed if a platform/encoder replaced the precreated inode
+        # with a group/other-readable file instead of preserving mode 0600.
+        if os.name == 'posix' and output_path.stat().st_mode & 0o077:
+            raise MasterAssemblyNotReady('Master output permissions are unsafe')
         # A valid MP4 signature guards against absent or empty output.
         # A separate full media probe is required before production release.
         from app.video.jobs import _valid_mp4
@@ -889,7 +912,7 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         })
         return record
     except Exception:
-        if output_path.exists():
+        if output_created and output_path.exists():
             output_path.unlink()
         raise
     finally:
