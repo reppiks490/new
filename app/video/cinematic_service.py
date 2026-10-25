@@ -726,6 +726,24 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             with path.open('rb') as cached_file:
                 cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
             if cached_hash == existing.get('sha256'):
+                # A source may change after the initial fingerprint and before
+                # cached-record enumeration. Never return a master for source
+                # bytes that no longer match its recorded provenance.
+                try:
+                    for source_id, expected_hash in zip(source_ids, source_hashes):
+                        with video_asset_path(source_id, 'mp4').open('rb') as source_file:
+                            current_hash = hashlib.file_digest(source_file, 'sha256').hexdigest()
+                        if current_hash != expected_hash:
+                            raise MasterAssemblyNotReady(
+                                'Source media changed during cached master lookup; retry'
+                            )
+                except (OSError, ValueError) as exc:
+                    raise MasterAssemblyNotReady(
+                        'Source media became unavailable during cached master lookup; retry'
+                    ) from exc
+                latest_revision = get_project(project_id).revision
+                if latest_revision != project.revision:
+                    raise ProjectRevisionConflict(project_id, project.revision, latest_revision)
                 return existing
 
     width, height = _master_size(project)
