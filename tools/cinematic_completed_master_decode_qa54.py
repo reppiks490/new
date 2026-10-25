@@ -252,8 +252,9 @@ def _opaque_mp4_moov_child_payload_present(
     """Reject opaque moov and immediate trak children in a narrow MP4 envelope.
 
     QA68 checks top-level boxes; QA69 checks immediate moov children; QA70
-    also checks immediate trak children. Scan only bounded box headers, never
-    encoded payloads or deeper mdia/meta descendants. False is a clean
+    checks immediate trak children; QA71 checks immediate mdia children.
+    Scan bounded headers only, never encoded payloads or deeper descendants.
+    False is a clean
     *narrow* check, NOT comprehensive MP4 sanitization. None means unstable
     file evidence.
     """
