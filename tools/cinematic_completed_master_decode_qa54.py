@@ -245,6 +245,95 @@ def _opaque_mp4_top_level_payload_present(
         return None
 
 
+
+def _opaque_mp4_moov_child_payload_present(
+    path: Path, original: os.stat_result
+) -> bool | None:
+    """Reject opaque immediate moov children in the strict FFmpeg-master envelope.
+
+    QA68's top-level check does not descend into moov. Walk only immediate
+    moov child headers in bounded constant memory; never read encoded payload
+    or recurse into trak/meta boxes. False is a clean narrow check, NOT proof
+    of comprehensive MP4 sanitization. None means unstable file evidence.
+    """
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns", "st_nlink")
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or any(getattr(before, key) != getattr(original, key) for key in fields)
+            ):
+                return None
+
+            def header_at(position: int, limit: int) -> tuple[int | None, bytes | None, int | None]:
+                if limit - position < 8:
+                    return None, None, None
+                handle.seek(position)
+                header = handle.read(8)
+                if len(header) != 8:
+                    return None, None, None
+                size = int.from_bytes(header[:4], "big")
+                kind = header[4:8]
+                header_size = 8
+                if size == 1:
+                    extra = handle.read(8)
+                    if len(extra) != 8:
+                        return None, None, None
+                    size = int.from_bytes(extra, "big")
+                    header_size = 16
+                elif size == 0:
+                    size = limit - position
+                if size < header_size or size > limit - position:
+                    return None, None, None
+                return size, kind, header_size
+
+            position = 0
+            moov_position = None
+            moov_size = None
+            moov_header_size = None
+            for _ in range(4096):
+                if position >= before.st_size:
+                    break
+                size, kind, header_size = header_at(position, before.st_size)
+                if size is None:
+                    return True
+                if kind == b"moov":
+                    moov_position, moov_size, moov_header_size = position, size, header_size
+                    break
+                position += size
+            if moov_position is None:
+                return True
+
+            position = moov_position + moov_header_size
+            limit = moov_position + moov_size
+            for _ in range(4096):
+                if position >= limit:
+                    break
+                size, kind, header_size = header_at(position, limit)
+                if size is None:
+                    return True
+                if kind == b"uuid" or (kind == b"free" and size != header_size):
+                    return True
+                position += size
+            if position != limit:
+                return True
+            after = os.fstat(handle.fileno())
+            current = path.lstat()
+            if any(
+                getattr(before, key) != getattr(after, key)
+                or getattr(after, key) != getattr(current, key)
+                for key in fields
+            ):
+                return None
+            return False
+    except OSError:
+        return None
+
+
 def _freeform_metadata_present(container: dict, streams: list) -> bool:
     """Conservatively flag unexpected FFprobe tag keys without emitting values.
 
@@ -357,6 +446,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
     freeform_metadata_anomalies = 0
     opaque_mp4_payload_anomalies = 0
     opaque_mp4_payload_unattested = 0
+    nested_mp4_payload_anomalies = 0
+    nested_mp4_payload_unattested = 0
     chapter_anomalies = 0
     chapter_unattested = 0
     video_codec_anomalies = 0
@@ -434,6 +525,14 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             opaque_mp4_payload_anomalies += 1
         elif opaque_payload is None:
             opaque_mp4_payload_unattested += 1
+        # Top-level boxes may be clean while a moov child carries opaque
+        # private text. Inspect immediate children only, without publishing
+        # bytes, filenames, hashes or other owner-identifying details.
+        nested_payload = _opaque_mp4_moov_child_payload_present(path, metadata)
+        if nested_payload is True:
+            nested_mp4_payload_anomalies += 1
+        elif nested_payload is None:
+            nested_mp4_payload_unattested += 1
         chapters = details.get("chapters")
         if not isinstance(chapters, list):
             chapter_unattested += 1
@@ -603,6 +702,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         "freeform_metadata_anomaly_count": freeform_metadata_anomalies,
         "opaque_mp4_payload_anomaly_count": opaque_mp4_payload_anomalies,
         "opaque_mp4_payload_unattested_count": opaque_mp4_payload_unattested,
+        "nested_mp4_payload_anomaly_count": nested_mp4_payload_anomalies,
+        "nested_mp4_payload_unattested_count": nested_mp4_payload_unattested,
         "chapter_anomaly_count": chapter_anomalies,
         "chapter_unattested_count": chapter_unattested,
         "video_codec_anomaly_count": video_codec_anomalies,
@@ -641,6 +742,8 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             and freeform_metadata_anomalies == 0
             and opaque_mp4_payload_anomalies == 0
             and opaque_mp4_payload_unattested == 0
+            and nested_mp4_payload_anomalies == 0
+            and nested_mp4_payload_unattested == 0
             and chapter_anomalies == 0 and chapter_unattested == 0
             and video_codec_anomalies == 0 and video_codec_unattested == 0
             and video_pixel_format_anomalies == 0
