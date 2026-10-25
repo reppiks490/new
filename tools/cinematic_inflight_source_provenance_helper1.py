@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import shutil
 import json
 from pathlib import Path
@@ -225,6 +226,39 @@ class InFlightSourceProvenance(unittest.TestCase):
                 "post-FFmpeg source rehash alone cannot prove input provenance"
             )
 
+
+    def test_private_staged_mp4_mode_is_0600_with_standard_umask(self):
+        """Genuine FFmpeg input copies must remain owner-only if parent perms drift.
+
+        The 0700 staging directory already prevents other users from entering,
+        but copied footage must not inherit a 0644 file mode from umask 022.
+        The test records permissions while FFmpeg still owns the private copy.
+        """
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        original_runner = service._run_master_ffmpeg
+        observed = []
+
+        def encode_and_capture_private_input_mode(command, **kwargs):
+            staged = [
+                Path(command[i + 1])
+                for i, arg in enumerate(command[:-1]) if arg == "-i"
+            ]
+            self.assertEqual(len(staged), 1)
+            self.assertNotEqual(staged[0], source)
+            observed.append(stat.S_IMODE(staged[0].stat().st_mode))
+            return original_runner(command, **kwargs)
+
+        old_umask = os.umask(0o022)
+        try:
+            with patch.object(service, "_run_master_ffmpeg",
+                              side_effect=encode_and_capture_private_input_mode):
+                master = service.assemble_project_master(project.id, request)
+        finally:
+            os.umask(old_umask)
+        self.assert_real_media(master, "red")
+        self.assertEqual(observed, [0o600],
+                         "Private source MP4 was staged with group/other-readable mode")
 
     def test_ffmpeg_failure_discards_private_input_snapshots(self):
         """A failed encode must not leave staged copies or publish a master."""
