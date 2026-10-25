@@ -110,6 +110,24 @@ def _stable_file_sha256(path: Path, original: os.stat_result) -> str | None:
         return None
 
 
+
+def _container_duration_matches(container: dict, frames: int, fps: int) -> bool | None:
+    """Attest MP4 playback length, not just the decoded video frame cadence.
+
+    A second stream or an MP4 edit list can extend the container beyond the
+    valid video timeline. Missing/nonfinite duration evidence is unattested.
+    Allow at most one frame of muxer rounding; no audio-sync claim is made.
+    """
+    try:
+        duration = float(container["duration"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(duration) or duration <= 0:
+        return None
+    expected = frames / fps
+    return abs(duration - expected) <= max(0.01, 1.0 / fps)
+
+
 def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, int | bool]:
     """Fully decode each distinct ready master; report only sanitized counts.
 
@@ -285,7 +303,16 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
                                             path, timing_claim[0], timing_claim[1], timeout
                                         )
                                         if cadence is True:
-                                            timing_attested += 1
+                                            # Frame PTS/durations can all be valid
+                                            # while a longer audio/data stream
+                                            # extends overall MP4 playback.
+                                            container_match = _container_duration_matches(
+                                                container, timing_claim[0], timing_claim[1]
+                                            )
+                                            if container_match is True:
+                                                timing_attested += 1
+                                            elif container_match is False:
+                                                timing_anomalies += 1
                                         elif cadence is False:
                                             timing_anomalies += 1
                             else:
