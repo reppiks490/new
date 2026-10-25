@@ -455,9 +455,12 @@ class InFlightSourceProvenance(unittest.TestCase):
 
         def run_recovery_before_first_lease_lock(fd, operation):
             if not observed_recovery:
+                # Set the guard before cleanup invokes flock itself, so its
+                # nested lock attempt uses the original function directly.
+                observed_recovery.append(None)
                 # The lease marker already exists but the worker has not yet
                 # acquired its advisory lock. Exercise the REAL cleanup code.
-                observed_recovery.append(
+                observed_recovery[0] = (
                     snapshot_module.cleanup_abandoned_source_snapshots(source.parent)
                 )
             return original_flock(fd, operation)
