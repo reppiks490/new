@@ -151,7 +151,7 @@ def _asset_byte_ranges(header: str, size: int) -> list[tuple[int, int]]:
         raise ValueError('Invalid range count')
     ranges = []
     for component in components:
-        match = re.fullmatch(r'(\\d*)-(\\d*)', component.strip())
+        match = re.fullmatch(r'(\d*)-(\d*)', component.strip())
         if not match or (not match.group(1) and not match.group(2)):
             raise ValueError('Invalid byte range')
         if not match.group(1):
@@ -199,12 +199,12 @@ class _OpenedAssetResponse(Response):
 
     def _part_header(self, start, end):
         return (
-            f'--{self._boundary}\\r\\nContent-Type: {self._media_type}\\r\\n'
-            f'Content-Range: bytes {start}-{end}/{self._size}\\r\\n\\r\\n'
+            f'--{self._boundary}\r\nContent-Type: {self._media_type}\r\n'
+            f'Content-Range: bytes {start}-{end}/{self._size}\r\n\r\n'
         ).encode('ascii')
 
     def _closing_boundary(self):
-        return f'--{self._boundary}--\\r\\n'.encode('ascii')
+        return f'--{self._boundary}--\r\n'.encode('ascii')
 
     async def __call__(self, scope, receive, send):
         import anyio
@@ -245,7 +245,7 @@ class _OpenedAssetResponse(Response):
                         offset += len(data)
                     if self._boundary:
                         await send({
-                            'type': 'http.response.body', 'body': b'\\r\\n',
+                            'type': 'http.response.body', 'body': b'\r\n',
                             'more_body': True,
                         })
                 if self._boundary:
