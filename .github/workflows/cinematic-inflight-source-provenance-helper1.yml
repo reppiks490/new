@@ -7,6 +7,8 @@ on:
       - '.github/workflows/cinematic-inflight-source-provenance-helper1.yml'
       - 'tools/cinematic_inflight_source_provenance_helper1.py'
       - 'app/video/cinematic_service.py'
+      - 'app/video/router.py'
+      - 'app/studio/server.py'
       - 'app/video/cinematic_source_snapshots.py'
       - 'app/video/cinematic_assembly_jobs.py'
       - 'tests/test_cinematic_provenance_workflow_triggers_helper1.py'
