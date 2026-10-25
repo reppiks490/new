@@ -249,12 +249,13 @@ def _opaque_mp4_top_level_payload_present(
 def _opaque_mp4_moov_child_payload_present(
     path: Path, original: os.stat_result
 ) -> bool | None:
-    """Reject opaque immediate moov children in the strict FFmpeg-master envelope.
+    """Reject opaque moov and immediate trak children in a narrow MP4 envelope.
 
-    QA68's top-level check does not descend into moov. Walk only immediate
-    moov child headers in bounded constant memory; never read encoded payload
-    or recurse into trak/meta boxes. False is a clean narrow check, NOT proof
-    of comprehensive MP4 sanitization. None means unstable file evidence.
+    QA68 checks top-level boxes; QA69 checks immediate moov children; QA70
+    also checks immediate trak children. Scan only bounded box headers, never
+    encoded payloads or deeper mdia/meta descendants. False is a clean
+    *narrow* check, NOT comprehensive MP4 sanitization. None means unstable
+    file evidence.
     """
     try:
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -318,6 +319,27 @@ def _opaque_mp4_moov_child_payload_present(
                     return True
                 if kind == b"uuid" or (kind == b"free" and size != header_size):
                     return True
+                if kind == b"trak":
+                    # A valid track can hide opaque padding invisible to
+                    # ffprobe's tags, stream inventory and full video decode.
+                    # Scan immediate children only; never load their payloads.
+                    track_position = position + header_size
+                    track_limit = position + size
+                    for _ in range(4096):
+                        if track_position >= track_limit:
+                            break
+                        track_size, track_kind, track_header_size = header_at(
+                            track_position, track_limit
+                        )
+                        if track_size is None:
+                            return True
+                        if track_kind == b"uuid" or (
+                            track_kind == b"free" and track_size != track_header_size
+                        ):
+                            return True
+                        track_position += track_size
+                    if track_position != track_limit:
+                        return True
                 position += size
             if position != limit:
                 return True
