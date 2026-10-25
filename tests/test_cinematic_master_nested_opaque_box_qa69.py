@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
-import os
 from pathlib import Path
 import struct
 import subprocess
@@ -26,7 +25,7 @@ qa58 = qa62.qa58
 CANARY = b"QA69_PRIVATE_CANARY_SYNTHETIC"
 
 
-def _inject_moov_child(media: Path, workspace: Path, kind: bytes) -> None:
+def _inject_moov_child(media: Path, workspace: Path, kind: bytes, *, empty: bool = False) -> None:
     # Remux to place moov AFTER mdat. Inserting a child there preserves stco
     # offsets, so the test is a genuinely decodable MP4, not a broken fixture.
     remux = workspace / "qa69-end-moov.mp4"
@@ -49,7 +48,7 @@ def _inject_moov_child(media: Path, workspace: Path, kind: bytes) -> None:
         position += size
     assert moov_offset is not None and moov_size is not None
     assert moov_offset + moov_size == len(data), "moov must be after mdat"
-    payload = CANARY if kind == b"free" else b"0123456789ABCDEF" + CANARY
+    payload = b"" if empty else (CANARY if kind == b"free" else b"0123456789ABCDEF" + CANARY)
     child = struct.pack(">I4s", 8 + len(payload), kind) + payload
     assert moov_size + len(child) < 2**32
     patched = (
@@ -61,11 +60,13 @@ def _inject_moov_child(media: Path, workspace: Path, kind: bytes) -> None:
     )
     media.write_bytes(patched)
     remux.unlink()
-    assert CANARY in media.read_bytes()
+    if not empty:
+        assert CANARY in media.read_bytes()
 
 
 @pytest.mark.parametrize("case,expected_pass", [
     ("clean", True),
+    ("moov_empty_free", True),
     ("moov_free", False),
     ("moov_uuid", False),
 ])
@@ -74,7 +75,10 @@ def test_strict_master_rejects_opaque_moov_child(
 ):
     media, db, workspace = qa58._workspace(tmp_path)
     if case != "clean":
-        _inject_moov_child(media, workspace, b"free" if case == "moov_free" else b"uuid")
+        _inject_moov_child(
+            media, workspace, b"uuid" if case == "moov_uuid" else b"free",
+            empty=case == "moov_empty_free",
+        )
 
     probe = json.loads(subprocess.run([
         "ffprobe", "-v", "error",
