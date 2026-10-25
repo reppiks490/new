@@ -858,6 +858,44 @@ class InFlightSourceProvenance(unittest.TestCase):
                     self.assertEqual(
                         baseline.headers.get("cache-control"), "no-store",
                     )
+                    # Preserve genuine private-media mobile seek semantics
+                    # while closing the post-validation pathname race.
+                    first_range = client.get(
+                        url, headers={**headers, "Range": "bytes=0-31"},
+                    )
+                    self.assertEqual(first_range.status_code, 206)
+                    self.assertEqual(first_range.content, baseline.content[:32])
+                    self.assertEqual(
+                        first_range.headers.get("content-range"),
+                        f"bytes 0-31/{len(baseline.content)}",
+                    )
+                    suffix_range = client.get(
+                        url, headers={**headers, "Range": "bytes=-32"},
+                    )
+                    self.assertEqual(suffix_range.status_code, 206)
+                    self.assertEqual(suffix_range.content, baseline.content[-32:])
+                    multipart = client.get(
+                        url, headers={**headers, "Range": "bytes=0-3,8-11"},
+                    )
+                    self.assertEqual(multipart.status_code, 206)
+                    self.assertIn(
+                        "multipart/byteranges",
+                        multipart.headers.get("content-type", ""),
+                    )
+                    self.assertIn(baseline.content[:4], multipart.content)
+                    self.assertIn(baseline.content[8:12], multipart.content)
+                    unsatisfiable = client.get(
+                        url,
+                        headers={
+                            **headers,
+                            "Range": f"bytes={len(baseline.content)}-",
+                        },
+                    )
+                    self.assertEqual(unsatisfiable.status_code, 416)
+                    self.assertEqual(
+                        unsatisfiable.headers.get("content-range"),
+                        f"bytes */{len(baseline.content)}",
+                    )
                     with patch.object(
                         video_router, "video_asset_path",
                         side_effect=replace_after_validation,
