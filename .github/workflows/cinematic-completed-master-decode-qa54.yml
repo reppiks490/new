@@ -27,6 +27,10 @@ jobs:
       - name: Require genuine FFmpeg and ffprobe
         run: |
           set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
           command -v ffmpeg
           command -v ffprobe
           ffmpeg -hide_banner -encoders 2>/dev/null | grep -F libx264 >/dev/null
