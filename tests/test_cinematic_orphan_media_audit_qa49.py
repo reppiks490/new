@@ -154,3 +154,15 @@ def test_real_synthetic_ffmpeg_mp4_and_truncated_untracked_candidate(tmp_path):
     assert result["candidate_untracked_bytes"] == 64
     # A truncated MP4 is a synthetic crash-like artifact, not a verified
     # interrupted production FFmpeg process or a safe deletion target.
+
+
+def test_unhashable_status_type_does_not_abort_or_leak(tmp_path):
+    db, media = setup(tmp_path)
+    insert(db, "video_job", {"status": ["running"], "asset_id": "a" * 32}, 1)
+    insert(db, "video_master", {"status": {"invalid": True}, "asset_id": "b" * 32}, 2)
+    (media / ("c" * 32 + ".mp4")).write_bytes(b"candidate")
+    result = mod.audit(tmp_path, db)
+    assert result["active_video_jobs"] == 0
+    assert result["tracked_mp4_ids"] == 2
+    assert result["candidate_untracked_mp4_files"] == 1
+    assert result["safe_to_delete_automatically"] is False
