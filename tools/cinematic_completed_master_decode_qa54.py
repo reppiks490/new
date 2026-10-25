@@ -304,9 +304,15 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
             # evidence is unattested, not a fabricated codec mismatch.
             codec = audio_streams[0].get("codec_name")
             profile = audio_streams[0].get("profile")
-            if not isinstance(codec, str) or not isinstance(profile, str):
+            if not isinstance(codec, str):
                 audio_codec_unattested += 1
-            elif codec != "aac" or profile != "LC":
+            elif codec != "aac":
+                # A known non-AAC codec is anomalous even if that codec
+                # has no meaningful FFprobe AAC profile field.
+                audio_codec_anomalies += 1
+            elif not isinstance(profile, str):
+                audio_codec_unattested += 1
+            elif profile != "LC":
                 audio_codec_anomalies += 1
             timing = timing_claims.get(identifier, {None})
             claim = next(iter(timing)) if len(timing) == 1 else None
