@@ -726,5 +726,66 @@ class InFlightSourceProvenance(unittest.TestCase):
             external.unlink(missing_ok=True)
 
 
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "O_NOFOLLOW"),
+        "POSIX no-follow cached master path race",
+    )
+    def test_cache_hit_must_not_follow_symlink_swapped_after_path_validation(self):
+        """Do not trust a pathname check made before opening cached footage.
+
+        This deterministic interleaving replaces the already-validated cached
+        path with a symlink to an outside-asset-store 0600 copy *after*
+        video_asset_path's symlink guard, before the cached file is opened.
+        Real H.264, SHA, source identity and revision all remain unchanged.
+        A safe implementation must reject or rebuild, never reuse the
+        symlinked record. This is a local race proof, not remote exploitation.
+        """
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        first = service.assemble_project_master(project.id, request)
+        self.assert_real_media(first, "red")
+        output = storage.video_asset_path(first["asset_id"], "mp4")
+        original_sha = sha256(output)
+        external = output.parent.parent / (
+            f".synthetic-cinematic-race-{uuid4().hex}.mp4"
+        )
+        shutil.copyfile(output, external)
+        os.chmod(external, 0o600)
+        self.assertEqual(sha256(external), original_sha)
+        self.assertEqual(first["source_asset_hashes"], [sha256(source)])
+        original_resolver = service.video_asset_path
+        swapped = []
+
+        def replace_after_validation(identifier, extension):
+            validated = original_resolver(identifier, extension)
+            if identifier == first["asset_id"] and extension == "mp4" and not swapped:
+                validated.unlink()
+                validated.symlink_to(external)
+                swapped.append(True)
+            return validated
+
+        try:
+            with patch.object(
+                service, "video_asset_path", side_effect=replace_after_validation,
+            ):
+                try:
+                    reused = service.assemble_project_master(project.id, request)
+                except service.MasterAssemblyNotReady:
+                    self.assertEqual(swapped, [True])
+                    return
+            self.assertEqual(swapped, [True], "Cache path race hook never fired")
+            self.assertNotEqual(
+                reused["id"], first["id"],
+                "Cache reused a symlinked master swapped in after the "
+                "asset-path validation, despite SHA and 0600 target mode",
+            )
+            self.assert_real_media(reused, "red")
+        finally:
+            if output.is_symlink():
+                output.unlink()
+            external.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
