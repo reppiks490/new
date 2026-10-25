@@ -301,16 +301,16 @@ class InFlightSourceProvenance(unittest.TestCase):
             os._exit(82)
 
         _, status = os.waitpid(pid, 0)
-        self.assertTrue(os.WIFEXITED(status), "Synthetic worker must exit cleanly")
-        self.assertEqual(os.WEXITSTATUS(status), 83,
-                         "Worker must exit only after real source-snapshot decode")
         orphan_dirs = [
             p for p in asset_dir.glob(prefix + "*")
             if p.name not in before and p.is_dir()
         ]
-        self.assertEqual(len(orphan_dirs), 1,
-                         "The test must demonstrate an abandoned private source copy")
         try:
+            self.assertTrue(os.WIFEXITED(status), "Synthetic worker must exit cleanly")
+            self.assertEqual(os.WEXITSTATUS(status), 83,
+                             "Worker must exit only after real source-snapshot decode")
+            self.assertEqual(len(orphan_dirs), 1,
+                             "The test must demonstrate an abandoned private source copy")
             self.assertEqual(
                 len(list(orphan_dirs[0].glob("*.mp4"))), 1,
                 "Abandoned directory must contain one copied synthetic H.264 MP4",
