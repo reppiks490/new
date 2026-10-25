@@ -1,0 +1,40 @@
+name: Cinematic master audio coverage QA62
+
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_completed_master_decode_qa54.py'
+      - 'tests/test_cinematic_master_audio_coverage_qa62.py'
+      - '.github/workflows/cinematic-master-audio-coverage-qa62.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-audio-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require genuine FFmpeg FFprobe and libx264
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -hide_banner -encoders 2>/dev/null | grep -F libx264 >/dev/null
+      - name: Install pytest
+        run: python -m pip install 'pytest>=8,<10'
+      - name: Genuine H.264/AAC strict audio-coverage regression
+        env:
+          CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+        run: python -m pytest -q -W error tests/test_cinematic_master_audio_coverage_qa62.py
