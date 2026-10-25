@@ -169,5 +169,52 @@ class InFlightSourceProvenance(unittest.TestCase):
         )
 
 
+    def test_mutate_and_revert_during_real_ffmpeg_must_not_publish_false_lineage(self):
+        """A matching post-encode SHA alone cannot attest the encoded input bytes."""
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        original_bytes = source.read_bytes()
+        original_sha = sha256(source)
+        original_runner = service._run_master_ffmpeg
+        mutation_hashes = []
+
+        def encode_changed_bytes_then_restore(command, **kwargs):
+            # Only instrument FFmpeg's scheduling seam; the actual FFmpeg
+            # encoder runs to completion against synthetic BLUE footage.
+            # Restore the exact original RED bytes before service post-hash.
+            encode_synthetic(source, "blue")
+            mutation_hashes.append(sha256(source))
+            try:
+                return original_runner(command, **kwargs)
+            finally:
+                source.write_bytes(original_bytes)
+
+        with patch.object(service, "_run_master_ffmpeg",
+                          side_effect=encode_changed_bytes_then_restore):
+            try:
+                master = service.assemble_project_master(project.id, request)
+            except service.MasterAssemblyNotReady:
+                # Immutable snapshots/locking or explicit rejection are valid.
+                self.assertEqual(len(mutation_hashes), 1)
+                self.assertNotEqual(mutation_hashes[0], original_sha)
+                self.assertEqual(sha256(source), original_sha)
+                self.assertFalse([
+                    row for row in storage.list_video_records("video_master")
+                    if row.get("project_id") == project.id
+                    and row.get("status") == "ready"
+                ])
+                return
+
+        self.assertEqual(len(mutation_hashes), 1, "Real FFmpeg hook must run once")
+        self.assertNotEqual(mutation_hashes[0], original_sha)
+        self.assertEqual(sha256(source), original_sha)
+        self.assertEqual(master["source_asset_hashes"], [original_sha])
+        # The persisted RED lineage and cache fingerprint are false when
+        # the real master actually decodes BLUE. This must reject or produce
+        # a master that matches the attested source bytes.
+        self.assert_real_media(master, "red")
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
