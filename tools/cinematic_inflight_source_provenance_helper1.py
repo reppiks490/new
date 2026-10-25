@@ -373,5 +373,30 @@ class InFlightSourceProvenance(unittest.TestCase):
             "A normally completed worker must remove its private snapshot",
         )
 
+
+    @unittest.skipUnless(hasattr(os, "fork"), "POSIX filesystem safety gate")
+    def test_recovery_skips_unmarked_and_symlinked_private_paths(self):
+        """Startup cleanup must not traverse lookalike or linked paths."""
+        from app.video.cinematic_assembly_jobs import recover_assembly_queue
+
+        project, source = self.make_ready_project()
+        root = source.parent
+        unmarked = root / (".cinematic-source-snapshot-" + uuid4().hex)
+        linked = root / (".cinematic-source-snapshot-" + uuid4().hex)
+        unmarked.mkdir(mode=0o700)
+        try:
+            (unmarked / "synthetic-sentinel").write_text("NO_PRIVATE_MEDIA")
+            linked.symlink_to(unmarked, target_is_directory=True)
+            recover_assembly_queue()
+            self.assertTrue(unmarked.is_dir())
+            self.assertEqual(
+                (unmarked / "synthetic-sentinel").read_text(), "NO_PRIVATE_MEDIA",
+            )
+            self.assertTrue(linked.is_symlink())
+        finally:
+            if linked.is_symlink():
+                linked.unlink()
+            shutil.rmtree(unmarked, ignore_errors=True)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
