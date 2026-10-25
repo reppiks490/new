@@ -21,14 +21,15 @@ def _pts_cadence(path: Path, frames: int, fps: int, timeout: int) -> bool | None
     """Verify every presentation timestamp, independently of decoded frame parity.
 
     None means timing evidence unavailable; False means an actual mismatch.
-    This checks video presentation cadence, not audio synchronization.
+    This checks video presentation cadence AND each frame's display duration,
+    including the last frame. It does not check audio synchronization.
     Read-only FFprobe; no owner paths, metadata or stderr in the report.
     """
     try:
         probe = subprocess.run([
             "ffprobe", "-v", "error", "-protocol_whitelist", "file",
             "-select_streams", "v:0", "-show_frames",
-            "-show_entries", "frame=best_effort_timestamp_time",
+            "-show_entries", "frame=best_effort_timestamp_time,duration_time,pkt_duration_time",
             "-of", "json", "-i", str(path),
         ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
            timeout=timeout, check=False)
@@ -53,6 +54,20 @@ def _pts_cadence(path: Path, frames: int, fps: int, timeout: int) -> bool | None
             stamp = float(entry["best_effort_timestamp_time"])
             if not math.isfinite(stamp):
                 return None
+            # FFprobe uses duration_time on newer builds and
+            # pkt_duration_time on older ones. Without a frame duration,
+            # especially the last packet's, a PTS-only pass is not proof
+            # of total presentation length: report unattested instead.
+            raw_duration = entry.get("duration_time")
+            if raw_duration is None:
+                raw_duration = entry.get("pkt_duration_time")
+            if raw_duration is None:
+                return None
+            duration = float(raw_duration)
+            if not math.isfinite(duration):
+                return None
+            if duration <= 0 or abs(duration - expected_step) > tolerance:
+                return False
             if abs(stamp - index * expected_step) > tolerance:
                 return False
             if previous is not None and abs((stamp - previous) - expected_step) > tolerance:
