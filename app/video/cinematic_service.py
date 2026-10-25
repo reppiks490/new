@@ -450,6 +450,7 @@ def render_shot(
 # Keep master assets separate from mutable project documents.
 import hashlib
 import json
+import os
 import math
 import subprocess
 import tempfile
@@ -773,7 +774,9 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             snapshot = Path(snapshots.name) / f'{source_id}.mp4'
             snapshot_sha = hashlib.sha256()
             try:
-                with video_asset_path(source_id, 'mp4').open('rb') as original, snapshot.open('xb') as staged:
+                with video_asset_path(source_id, 'mp4').open('rb') as original, snapshot.open(
+                    'xb', opener=lambda path, flags: os.open(path, flags, 0o600)
+                ) as staged:
                     while True:
                         chunk = original.read(1024 * 1024)
                         if not chunk:
