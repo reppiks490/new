@@ -432,5 +432,62 @@ class InFlightSourceProvenance(unittest.TestCase):
                 linked.unlink()
             shutil.rmtree(unmarked, ignore_errors=True)
 
+
+    @unittest.skipUnless(os.name == "posix", "POSIX flock startup race regression")
+    def test_recovery_cannot_delete_snapshot_during_lease_initialization(self):
+        """A just-created marker is not proof that its worker has acquired a lease.
+
+        Reproduce the precise ordering without sleeping or requiring owner
+        footage: pause at the constructor's first flock, run real startup
+        cleanup against the visible marker, then let construction proceed.
+        A valid live snapshot must survive until its creator releases it.
+        """
+        from app.video import cinematic_source_snapshots as snapshot_module
+
+        if snapshot_module.fcntl is None or not getattr(
+            shutil.rmtree, "avoids_symlink_attacks", False
+        ):
+            self.skipTest("Safe POSIX snapshot recovery unavailable")
+
+        _, source = self.make_ready_project()
+        original_flock = snapshot_module.fcntl.flock
+        observed_recovery = []
+
+        def run_recovery_before_first_lease_lock(fd, operation):
+            if not observed_recovery:
+                # The lease marker already exists but the worker has not yet
+                # acquired its advisory lock. Exercise the REAL cleanup code.
+                observed_recovery.append(
+                    snapshot_module.cleanup_abandoned_source_snapshots(source.parent)
+                )
+            return original_flock(fd, operation)
+
+        with patch.object(
+            snapshot_module.fcntl, "flock",
+            side_effect=run_recovery_before_first_lease_lock,
+        ):
+            live = snapshot_module.PrivateSourceSnapshots(source.parent)
+        try:
+            self.assertEqual(len(observed_recovery), 1)
+            self.assertEqual(
+                observed_recovery[0]["removed"], 0,
+                "Startup recovery removed a live worker's source snapshot "
+                "between creation of .active.lock and acquisition of flock",
+            )
+            self.assertTrue(
+                Path(live.name).is_dir(),
+                "Worker acquired a lease on a snapshot directory already removed",
+            )
+            staged = Path(live.name) / "synthetic.mp4"
+            shutil.copyfile(source, staged)
+            self.assertEqual(sha256(staged), sha256(source))
+            real_command(
+                "ffmpeg", "-nostdin", "-v", "error", "-xerror",
+                "-i", str(staged), "-an", "-f", "null", "-",
+            )
+        finally:
+            live.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
