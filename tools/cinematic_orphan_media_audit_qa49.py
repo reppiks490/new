@@ -3,8 +3,9 @@
 A process killed during FFmpeg output can bypass the assembler's Python
 exception cleanup. This utility never deletes, opens, probes, or hashes media.
 It deliberately cannot distinguish an orphan from an in-progress encoder or
-an intentionally retained, unregistered file. Run only against a quiescent,
-explicitly selected local cinematic workspace; do not publish the raw DB.
+an intentionally retained, unregistered file. It flags known active master
+queue rows but cannot prove the absence of detached FFmpeg processes. Run only
+against a quiescent, explicitly selected workspace; do not publish the raw DB.
 """
 from __future__ import annotations
 
@@ -43,11 +44,13 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
     malformed = 0
     invalid_asset_ids = 0
     active_jobs = 0
+    active_master_assembly_jobs = 0
+    invalid_master_assembly_status_rows = 0
     # URI mode=ro avoids the application's CREATE TABLE and WAL-setting writes.
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=10)) as db:
         db.execute("PRAGMA query_only=ON")
         rows = db.execute(
-            "SELECT kind,data FROM records WHERE kind IN ('video_job','video_master')"
+            "SELECT kind,data FROM records WHERE kind IN ('video_job','video_master','video_assembly_job')"
         )
         for kind, raw in rows:
             try:
@@ -59,6 +62,18 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
                 malformed += 1
                 continue
             status = payload.get("status")
+            if kind == "video_assembly_job":
+                # The async master worker creates its MP4 *before* a
+                # video_master row exists. Do not classify a candidate as
+                # quiescent while the queue may still write that output.
+                # Queue receipts are not authoritative asset references.
+                if isinstance(status, str) and status in {"queued", "running"}:
+                    active_master_assembly_jobs += 1
+                elif not isinstance(status, str) or status not in {
+                    "succeeded", "failed", "cancelled",
+                }:
+                    invalid_master_assembly_status_rows += 1
+                continue
             if kind == "video_job" and isinstance(status, str) and status in {"queued", "running"}:
                 active_jobs += 1
             identifier = payload.get("asset_id")
@@ -102,6 +117,14 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
         "candidate_untracked_bytes": candidate_bytes,
         "candidate_small_files_under_128_bytes": small_candidates,
         "active_video_jobs": active_jobs,
+        "master_assembly_jobs_pending_or_running": active_master_assembly_jobs,
+        "invalid_master_assembly_status_rows": invalid_master_assembly_status_rows,
+        # A false value only means no known DB-level blockers were found.
+        # External FFmpeg processes and filesystem races are not inspected.
+        "candidate_inventory_not_quiescent": bool(
+            active_jobs or active_master_assembly_jobs
+            or malformed or invalid_master_assembly_status_rows
+        ),
         "malformed_record_count": malformed,
         "invalid_asset_id_count": invalid_asset_ids,
         "unsafe_mp4_entries_skipped": unsafe_entries,
