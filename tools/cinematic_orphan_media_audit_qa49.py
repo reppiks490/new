@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import stat
 
 _MP4 = re.compile(r"^[a-f0-9]{32}\.mp4$")
 _ID = re.compile(r"^[a-f0-9]{32}$")
@@ -106,17 +107,20 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
     for entry in media_dir.iterdir():
         if not _MP4.fullmatch(entry.name):
             continue
-        if entry.is_symlink():
-            unsafe_entries += 1
-            continue
-        if not entry.is_file():
+        # One no-follow metadata lookup: do not follow a symlink even if an
+        # entry is swapped between separate is_symlink/is_file/stat calls.
+        # Multiple hardlinks mean this inode is not uniquely owned by the
+        # selected workspace; treat it as unsafe rather than measuring a
+        # potentially external owner's file as an orphan candidate.
+        metadata = entry.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             unsafe_entries += 1
             continue
         identifier = entry.stem
         seen.add(identifier)
         if identifier not in referenced:
             candidates += 1
-            size = entry.stat().st_size
+            size = metadata.st_size
             candidate_bytes += size
             if size < 128:
                 small_candidates += 1
@@ -141,6 +145,7 @@ def audit(workspace: Path, database: Path) -> dict[str, int | bool]:
             or malformed or invalid_master_assembly_status_rows
             or invalid_video_job_status_rows or invalid_video_master_status_rows
             or invalid_completed_asset_reference_rows or invalid_asset_ids
+            or unsafe_entries
         ),
         "malformed_record_count": malformed,
         "invalid_asset_id_count": invalid_asset_ids,
