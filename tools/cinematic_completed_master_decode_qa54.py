@@ -167,7 +167,8 @@ def _freeform_metadata_present(container: dict, streams: list) -> bool:
     """
     for source, allowed in (
         [(container, _SAFE_FORMAT_TAGS)]
-        + [(stream, _SAFE_STREAM_TAGS) for stream in streams if isinstance(stream, dict)]
+        + [(stream, _SAFE_STREAM_TAGS) for stream in streams
+           if isinstance(stream, dict) and stream.get("codec_type") in ("video", "audio")]
     ):
         tags = source.get("tags", {})
         if not isinstance(tags, dict) or not tags.keys() <= allowed:
