@@ -32,9 +32,11 @@ def _decode(path: Path, kind: str) -> int:
         qa58._require_ffmpeg(), "-nostdin", "-hide_banner", "-v", "error",
         "-xerror", "-protocol_whitelist", "file", "-i", str(path),
         *args, "-f", "null", "-",
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
        timeout=60, check=False)
-    return result.returncode
+    # Some FFmpeg builds conceal damaged AAC and exit 0 while emitting
+    # decoder errors at -v error. Neither condition is a clean decode.
+    return result.returncode or (1 if result.stderr else 0)
 
 
 @pytest.mark.parametrize("case,expected_pass", [
