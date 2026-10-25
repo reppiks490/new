@@ -9,6 +9,8 @@ owner-footage test, or proposed change to lead-owned production files.
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 import json
 from pathlib import Path
 import subprocess
@@ -253,6 +255,77 @@ class InFlightSourceProvenance(unittest.TestCase):
             if row.get("project_id") == project.id and row.get("status") == "ready"
         ])
 
+
+
+
+    @unittest.skipUnless(hasattr(os, "fork"), "POSIX-only isolated worker crash QA")
+    def test_abrupt_worker_exit_requires_startup_snapshot_orphan_recovery(self):
+        """A killed worker must not retain private copied footage after recovery.
+
+        This is intentionally test-first: TemporaryDirectory finally handlers
+        cannot execute after os._exit/SIGKILL. The child only handles disposable
+        synthetic media; the parent cleans its fixture even when assertion fails.
+        """
+        from app.video.cinematic_assembly_jobs import recover_assembly_queue
+
+        project, source = self.make_ready_project()
+        request = AssembleMasterRequest(expected_revision=project.revision)
+        asset_dir = source.parent
+        prefix = ".cinematic-source-snapshot-"
+        before = {p.name for p in asset_dir.glob(prefix + "*")}
+        pid = os.fork()
+        if pid == 0:
+            def terminate_after_staging(command, **kwargs):
+                try:
+                    inputs = [
+                        Path(command[i + 1])
+                        for i, arg in enumerate(command[:-1]) if arg == "-i"
+                    ]
+                    if len(inputs) != 1 or inputs[0] == source:
+                        os._exit(82)
+                    if sha256(inputs[0]) != sha256(source):
+                        os._exit(82)
+                    # Prove the staged copy contains genuinely decodable
+                    # H.264 bytes before simulating an abrupt worker death.
+                    real_command(
+                        "ffmpeg", "-nostdin", "-v", "error", "-xerror",
+                        "-i", str(inputs[0]), "-an", "-f", "null", "-",
+                    )
+                    os._exit(83)
+                except BaseException:
+                    os._exit(82)
+
+            with patch.object(service, "_run_master_ffmpeg",
+                              side_effect=terminate_after_staging):
+                service.assemble_project_master(project.id, request)
+            os._exit(82)
+
+        _, status = os.waitpid(pid, 0)
+        self.assertTrue(os.WIFEXITED(status), "Synthetic worker must exit cleanly")
+        self.assertEqual(os.WEXITSTATUS(status), 83,
+                         "Worker must exit only after real source-snapshot decode")
+        orphan_dirs = [
+            p for p in asset_dir.glob(prefix + "*")
+            if p.name not in before and p.is_dir()
+        ]
+        self.assertEqual(len(orphan_dirs), 1,
+                         "The test must demonstrate an abandoned private source copy")
+        try:
+            self.assertEqual(
+                len(list(orphan_dirs[0].glob("*.mp4"))), 1,
+                "Abandoned directory must contain one copied synthetic H.264 MP4",
+            )
+            # This is the same queue-recovery hook used at application startup.
+            recover_assembly_queue()
+            self.assertFalse(
+                orphan_dirs[0].exists(),
+                "Startup recovery left an orphan private source snapshot after "
+                "abrupt worker termination; disk/privacy cleanup is missing",
+            )
+        finally:
+            # Do not retain even synthetic test footage in the ephemeral CI image.
+            for orphan in orphan_dirs:
+                shutil.rmtree(orphan, ignore_errors=True)
 
 
 if __name__ == "__main__":
