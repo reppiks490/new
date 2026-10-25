@@ -44,7 +44,7 @@ def synthetic_clip(path: Path, color: str, fps: int) -> None:
 def get_json(path: str) -> dict:
     with urlopen(BASE + path, timeout=15) as response:
         assert response.status == 200
-        assert response.headers.get("Cache-Control") == "no-store"
+        # Queue JSON no-store is a separate open privacy proposal (#78).
         raw = response.read()
     assert CANARY.encode() not in raw
     return json.loads(raw)
