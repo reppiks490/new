@@ -759,7 +759,18 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
                 'Unable to stage private master inputs; check local storage'
             ) from exc
         staged_sources = []
+        staged_by_id = {}
         for source_id, expected_source_hash in zip(source_ids, source_hashes):
+            # A legitimate timeline may reuse one source asset in several shots.
+            # Reuse its verified copy rather than duplicating disk consumption.
+            if source_id in staged_by_id:
+                snapshot, staged_hash = staged_by_id[source_id]
+                if staged_hash != expected_source_hash:
+                    raise MasterAssemblyNotReady(
+                        'Source media changed while staging master inputs; retry'
+                    )
+                staged_sources.append(snapshot)
+                continue
             snapshot = Path(snapshots.name) / f'{source_id}.mp4'
             snapshot_sha = hashlib.sha256()
             try:
@@ -778,6 +789,7 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
                 raise MasterAssemblyNotReady(
                     'Source media changed while staging master inputs; retry'
                 )
+            staged_by_id[source_id] = (snapshot, expected_source_hash)
             staged_sources.append(snapshot)
 
         command = [request.ffmpeg_path, '-nostdin', '-y', '-hide_banner', '-loglevel', 'error']
