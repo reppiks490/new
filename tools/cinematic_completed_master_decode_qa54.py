@@ -337,6 +337,27 @@ def _opaque_mp4_moov_child_payload_present(
                             track_kind == b"free" and track_size != track_header_size
                         ):
                             return True
+                        if track_kind == b"mdia":
+                            # FFprobe does not inventory opaque boxes inside
+                            # the track media container. Read bounded headers
+                            # only; never read, retain or report payload bytes.
+                            media_position = track_position + track_header_size
+                            media_limit = track_position + track_size
+                            for _ in range(4096):
+                                if media_position >= media_limit:
+                                    break
+                                media_size, media_kind, media_header_size = header_at(
+                                    media_position, media_limit
+                                )
+                                if media_size is None:
+                                    return True
+                                if media_kind == b"uuid" or (
+                                    media_kind == b"free" and media_size != media_header_size
+                                ):
+                                    return True
+                                media_position += media_size
+                            if media_position != media_limit:
+                                return True
                         track_position += track_size
                     if track_position != track_limit:
                         return True
