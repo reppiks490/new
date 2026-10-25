@@ -1,0 +1,42 @@
+name: Cinematic master AAC decode QA64
+
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_completed_master_decode_qa54.py'
+      - 'tests/test_cinematic_master_audio_decode_qa64.py'
+      - '.github/workflows/cinematic-master-audio-decode-qa64.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-audio-decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require genuine FFmpeg FFprobe H264 and AAC encoders
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          for codec in libx264 aac; do
+            ffmpeg -hide_banner -encoders 2>/dev/null | grep -F "$codec" >/dev/null
+          done
+      - name: Install pytest
+        run: python -m pip install 'pytest>=8,<10'
+      - name: Real synthetic AAC packet corruption regression
+        env:
+          CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+        run: python -m pytest -q -W error tests/test_cinematic_master_audio_decode_qa64.py
