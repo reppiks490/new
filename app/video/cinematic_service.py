@@ -725,7 +725,15 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
                 and path.is_file() and path.stat().st_size >= 12):
             with path.open('rb') as cached_file:
                 cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
+                # Check the actual opened inode, not a separate pathname stat.
+                # Older masters may have been written 0644 before the private
+                # FFmpeg output creation fix. Valid SHA alone is insufficient.
+                cached_mode = os.fstat(cached_file.fileno()).st_mode
             if cached_hash == existing.get('sha256'):
+                if os.name == 'posix' and cached_mode & 0o077:
+                    raise MasterAssemblyNotReady(
+                        'Cached master permissions are unsafe; private remediation required'
+                    )
                 # A source may change after the initial fingerprint and before
                 # cached-record enumeration. Never return a master for source
                 # bytes that no longer match its recorded provenance.
