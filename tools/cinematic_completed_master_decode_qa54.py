@@ -173,8 +173,8 @@ def _expected_encoder_tag(value: object, *, format_tag: bool) -> bool:
     if not isinstance(value, str):
         return False
     if format_tag:
-        return re.fullmatch(r"Lavf[0-9]+\\.[0-9]+\\.[0-9]+", value) is not None
-    match = re.fullmatch(r"Lavc[0-9]+\\.[0-9]+\\.[0-9]+ ([A-Za-z0-9_.+-]+)", value)
+        return re.fullmatch(r"Lavf[0-9]+\.[0-9]+\.[0-9]+", value) is not None
+    match = re.fullmatch(r"Lavc[0-9]+\.[0-9]+\.[0-9]+ ([A-Za-z0-9_.+-]+)", value)
     return match is not None and match.group(1) in _SAFE_ENCODER_NAMES
 
 
