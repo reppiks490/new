@@ -21,6 +21,7 @@ def _pts_cadence(path: Path, frames: int, fps: int, timeout: int) -> bool | None
     """Verify every presentation timestamp, independently of decoded frame parity.
 
     None means timing evidence unavailable; False means an actual mismatch.
+    This checks video presentation cadence, not audio synchronization.
     Read-only FFprobe; no owner paths, metadata or stderr in the report.
     """
     try:
