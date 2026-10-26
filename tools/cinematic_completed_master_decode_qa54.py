@@ -285,7 +285,8 @@ def _unexpected_nested_mp4_child(
 
 
 def _opaque_mp4_moov_child_payload_present(
-    path: Path, original: os.stat_result
+    path: Path, original: os.stat_result,
+    *, expected_format_encoder: str | None = None,
 ) -> bool | None:
     """Reject opaque moov and immediate trak children in a narrow MP4 envelope.
 
@@ -359,6 +360,25 @@ def _opaque_mp4_moov_child_payload_present(
                     if parent_kind == b"\xa9too":
                         encoder_data_children += 1
                         if encoder_data_children > 1:
+                            return False
+                        # QA79: FFprobe truncates the visible Lavf tag at NUL.
+                        # An allowed 'data' box can still contain a private
+                        # suffix. Compare declared size with the already-probed
+                        # safe tag; do not read or report its payload bytes.
+                        if (
+                            not _expected_encoder_tag(
+                                expected_format_encoder, format_tag=True
+                            )
+                            or child_size != (
+                                child_header_size + 8
+                                + len(expected_format_encoder.encode("ascii"))
+                            )
+                        ):
+                            return False
+                        # Only inspect fixed nonprivate data-type/locale bytes:
+                        # FFmpeg writes UTF-8 (type 1), locale zero.
+                        handle.seek(child_position + child_header_size)
+                        if handle.read(8) != bytes((0, 0, 0, 1, 0, 0, 0, 0)):
                             return False
                     if child_kind == b"ilst" and not allowed_container_children_clean(
                         b"ilst", child_position, child_size, child_header_size
@@ -723,7 +743,13 @@ def inspect(workspace: Path, database: Path, *, timeout: int = 60) -> dict[str, 
         # Top-level boxes may be clean while a moov child carries opaque
         # private text. Inspect immediate children only, without publishing
         # bytes, filenames, hashes or other owner-identifying details.
-        nested_payload = _opaque_mp4_moov_child_payload_present(path, metadata)
+        format_tags = container.get("tags")
+        expected_format_encoder = (
+            format_tags.get("encoder") if isinstance(format_tags, dict) else None
+        )
+        nested_payload = _opaque_mp4_moov_child_payload_present(
+            path, metadata, expected_format_encoder=expected_format_encoder
+        )
         if nested_payload is True:
             nested_mp4_payload_anomalies += 1
         elif nested_payload is None:
