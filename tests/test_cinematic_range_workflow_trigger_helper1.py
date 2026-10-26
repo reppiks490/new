@@ -25,6 +25,9 @@ def test_private_master_range_workflow_covers_storage_and_assembly_changes():
     required = {
         "app/video/storage.py",  # persisted master size/SHA and asset lookup
         "app/video/cinematic_service.py",  # FFmpeg master assembly/cache behavior
+        "Dockerfile.cinematic",  # FFmpeg executable and container Python runtime
+        "pyproject.toml",  # installed application and test dependency versions
+        "app/video/jobs.py",  # MP4 signature and source asset validation
     }
     assert required <= watched, (
         "Private master storage or assembly edits must run genuine H.264/"
