@@ -335,6 +335,29 @@ def _opaque_mp4_moov_child_payload_present(
                     return None, None, None
                 return size, kind, header_size
 
+            def fixed_track_media_header_clean(
+                position: int, size: int, header_size: int, kind: bytes
+            ) -> bool:
+                """Attest fixed ISO-BMFF tkhd/mdhd FullBox lengths, not payloads.
+
+                A permitted header with a trailing opaque suffix can decode
+                normally and match persisted SHA. Only read version/flags;
+                leave owner-identifying fields untouched and unreported.
+                """
+                if size < header_size + 4:
+                    return False
+                handle.seek(position + header_size)
+                fullbox = handle.read(4)
+                if len(fullbox) != 4:
+                    return False
+                version = fullbox[0]
+                if version not in (0, 1):
+                    return False
+                payload_sizes = (
+                    (84, 96) if kind == b"tkhd" else (24, 36)
+                )
+                return size == header_size + payload_sizes[version]
+
             def allowed_container_children_clean(
                 parent_kind: bytes, container_position: int,
                 container_size: int, container_header_size: int
@@ -481,6 +504,10 @@ def _opaque_mp4_moov_child_payload_present(
                             b"trak", track_kind, track_size, track_header_size
                         ):
                             return True
+                        if track_kind == b"tkhd" and not fixed_track_media_header_clean(
+                            track_position, track_size, track_header_size, b"tkhd"
+                        ):
+                            return True
                         if track_kind == b"edts" and not allowed_container_children_clean(
                             b"edts", track_position, track_size, track_header_size
                         ):
@@ -501,6 +528,10 @@ def _opaque_mp4_moov_child_payload_present(
                                     return True
                                 if _unexpected_nested_mp4_child(
                                     b"mdia", media_kind, media_size, media_header_size
+                                ):
+                                    return True
+                                if media_kind == b"mdhd" and not fixed_track_media_header_clean(
+                                    media_position, media_size, media_header_size, b"mdhd"
                                 ):
                                     return True
                                 if media_kind == b"minf":
