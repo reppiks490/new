@@ -174,9 +174,14 @@ def _snapshot_private_asset(fd, opened, directory, ranges=None):
     with tempfile.TemporaryFile(mode='w+b', dir=directory) as temporary:
         # Only snapshot requested byte spans for mobile Range GETs. A tiny
         # metadata/sample request must not duplicate a multi-GB film on disk.
-        # Holes in the unlinked temporary file are never returned to clients.
+        # Pack only the selected byte spans contiguously. Seeking to the
+        # original source offsets creates a film-sized *logical* temp file
+        # for a tiny tail Range; non-sparse filesystems may allocate it all.
+        # The response uses these packed offsets to read the right bytes.
         spans = ranges if ranges is not None else [(0, opened.st_size - 1)]
+        packed_offsets = []
         for start, end in spans:
+            packed_offsets.append(temporary.tell())
             offset = start
             while offset <= end:
                 count = min(256 * 1024, end - offset + 1)
@@ -187,13 +192,12 @@ def _snapshot_private_asset(fd, opened, directory, ranges=None):
                     chunk = os.read(fd, count)
                 if not chunk:
                     raise ValueError('Asset truncated during private snapshot')
-                temporary.seek(offset)
                 temporary.write(chunk)
                 offset += len(chunk)
         if identity(os.fstat(fd)) != expected:
             raise ValueError('Asset changed during private snapshot')
         temporary.flush()
-        return os.dup(temporary.fileno())
+        return os.dup(temporary.fileno()), packed_offsets
 
 
 def _asset_byte_ranges(header: str, size: int) -> list[tuple[int, int]]:
@@ -244,9 +248,10 @@ class _OpenedAssetResponse(Response):
     """ASGI response reads exclusively from an opened inode, never its path."""
 
     def __init__(self, fd, size, ranges, media_type, headers, status_code,
-                 snapshot_slot=False):
+                 snapshot_slot=False, snapshot_offsets=None):
         self._fd = fd
         self._snapshot_slot = snapshot_slot
+        self._snapshot_offsets = snapshot_offsets
         self._ranges = ranges
         self._size = size
         self._media_type = media_type
@@ -296,7 +301,13 @@ class _OpenedAssetResponse(Response):
             })
             if scope.get('method') != 'HEAD':
                 spans = self._ranges if self._ranges is not None else [(0, self._size - 1)]
-                for start, end in spans:
+                for index, (start, end) in enumerate(spans):
+                    # Snapshot files store requested ranges back-to-back,
+                    # rather than at their potentially huge source offsets.
+                    packed_start = (
+                        self._snapshot_offsets[index]
+                        if self._snapshot_offsets is not None else start
+                    )
                     if self._boundary:
                         await send({
                             'type': 'http.response.body',
@@ -306,7 +317,8 @@ class _OpenedAssetResponse(Response):
                     offset = start
                     while offset <= end:
                         data = await anyio.to_thread.run_sync(
-                            read_at, offset, min(256 * 1024, end - offset + 1),
+                            read_at, packed_start + offset - start,
+                            min(256 * 1024, end - offset + 1),
                         )
                         if not data:
                             raise OSError('Asset changed during descriptor-backed streaming')
@@ -394,6 +406,7 @@ def asset(filename: str, request: Request):
         # Freeze bytes before response.start: an opened inode can otherwise be
         # rewritten by a concurrent local process while pread is streaming.
         # HEAD does not send a body, so it requires no on-disk snapshot.
+        snapshot_offsets = None
         if request.method != 'HEAD':
             if not _PRIVATE_ASSET_SNAPSHOT_SLOTS.acquire(blocking=False):
                 raise HTTPException(
@@ -402,7 +415,7 @@ def asset(filename: str, request: Request):
                 )
             snapshot_slot_held = True
             try:
-                snapshot_fd = _snapshot_private_asset(
+                snapshot_fd, snapshot_offsets = _snapshot_private_asset(
                     fd, opened, path.parent, ranges,
                 )
             except ValueError as exc:
@@ -421,6 +434,7 @@ def asset(filename: str, request: Request):
             fd, opened.st_size, ranges, media_type, headers,
             status_code=206 if ranges else 200,
             snapshot_slot=snapshot_slot_held,
+            snapshot_offsets=snapshot_offsets,
         )
         # Ownership of the permit transfers to the ASGI response; release
         # only after its final byte or client cancellation closes the fd.
