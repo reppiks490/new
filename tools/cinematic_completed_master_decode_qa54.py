@@ -252,7 +252,8 @@ def _opaque_mp4_moov_child_payload_present(
     """Reject opaque moov and immediate trak children in a narrow MP4 envelope.
 
     QA68 checks top-level boxes; QA69 checks immediate moov children; QA70
-    checks immediate trak children; QA71 checks immediate mdia children; QA72 checks immediate minf children.
+    checks immediate trak children; QA71 checks immediate mdia children; QA72 checks
+    immediate minf children; QA73 checks immediate stbl children.
     Scan bounded headers only, never encoded payloads or deeper descendants.
     False is a clean
     *narrow* check, NOT comprehensive MP4 sanitization. None means unstable
@@ -374,6 +375,28 @@ def _opaque_mp4_moov_child_payload_present(
                                             info_kind == b"free" and info_size != info_header_size
                                         ):
                                             return True
+                                        if info_kind == b"stbl":
+                                            # Sample-table children can contain
+                                            # opaque payloads invisible to FFprobe.
+                                            # Read only bounded box headers.
+                                            sample_position = info_position + info_header_size
+                                            sample_limit = info_position + info_size
+                                            for _ in range(4096):
+                                                if sample_position >= sample_limit:
+                                                    break
+                                                sample_size, sample_kind, sample_header_size = header_at(
+                                                    sample_position, sample_limit
+                                                )
+                                                if sample_size is None:
+                                                    return True
+                                                if sample_kind == b"uuid" or (
+                                                    sample_kind == b"free"
+                                                    and sample_size != sample_header_size
+                                                ):
+                                                    return True
+                                                sample_position += sample_size
+                                            if sample_position != sample_limit:
+                                                return True
                                         info_position += info_size
                                     if info_position != info_limit:
                                         return True
