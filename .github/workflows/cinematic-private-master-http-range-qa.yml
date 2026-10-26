@@ -1,9 +1,9 @@
 name: Cinematic private master HTTP Range real-media QA
 
+# Re-run genuine-media proof on the final combined cinematic integration SHA,
+# even if that push changes only integration metadata outside PR path filters.
+# Do not expand this expensive Docker matrix to unrelated branch pushes.
 on:
-  # Re-run genuine-media proof on the final combined cinematic integration SHA,
-  # even if that push changes only integration metadata outside PR path filters.
-  # Do not expand this expensive Docker matrix to unrelated branch pushes.
   push:
     branches:
       - 'feat/cinematic-orchestrator-v1'
