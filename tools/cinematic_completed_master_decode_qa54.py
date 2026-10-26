@@ -552,6 +552,18 @@ def _opaque_mp4_moov_child_payload_present(
                                             b"minf", info_kind, info_size, info_header_size
                                         ):
                                             return True
+                                        if info_kind == b"vmhd":
+                                            # QA82: ISO-BMFF video media header has a
+                                            # fixed 12-byte payload (FullBox 4,
+                                            # graphicsmode 2, opcolor 6). FFprobe
+                                            # ignores appended opaque bytes even
+                                            # when video decodes and SHA matches.
+                                            # Read only nonprivate version/flags.
+                                            if info_size != info_header_size + 12:
+                                                return True
+                                            handle.seek(info_position + info_header_size)
+                                            if handle.read(4) != bytes((0, 0, 0, 1)):
+                                                return True
                                         if info_kind == b"stbl":
                                             # Sample-table children can contain
                                             # opaque payloads invisible to FFprobe.
