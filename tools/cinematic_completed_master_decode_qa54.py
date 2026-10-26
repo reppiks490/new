@@ -260,6 +260,10 @@ _SAFE_NESTED_MP4_CHILDREN = {
         b"stco", b"co64", b"stss", b"stsh", b"stdp", b"padb",
         b"sdtp", b"sgpd", b"sbgp", b"subs", b"saiz", b"saio", b"free",
     }),
+    # FFmpeg's normal metadata and edit-list containers are allowed, but
+    # arbitrary opaque children inside them must not escape strict auditing.
+    b"udta": frozenset({b"meta", b"free"}),
+    b"edts": frozenset({b"elst", b"free"}),
 }
 
 
@@ -278,8 +282,9 @@ def _opaque_mp4_moov_child_payload_present(
 
     QA68 checks top-level boxes; QA69 checks immediate moov children; QA70
     checks immediate trak children; QA71 checks immediate mdia children; QA72 checks
-    immediate minf children; QA73 checks immediate stbl children.
-    Scan bounded headers and reject unknown child types at these five levels; never
+    immediate minf children; QA73 checks immediate stbl children; QA75
+    checks immediate udta/edts children.
+    Scan bounded headers and reject unknown child types at these levels; never
     inspect encoded payloads or deeper descendants.
     False is a clean
     *narrow* check, NOT comprehensive MP4 sanitization. None means unstable
@@ -320,6 +325,27 @@ def _opaque_mp4_moov_child_payload_present(
                     return None, None, None
                 return size, kind, header_size
 
+            def allowed_container_children_clean(
+                parent_kind: bytes, container_position: int,
+                container_size: int, container_header_size: int
+            ) -> bool:
+                """Read bounded immediate child headers; never read payload bytes."""
+                child_position = container_position + container_header_size
+                child_limit = container_position + container_size
+                for _ in range(4096):
+                    if child_position >= child_limit:
+                        break
+                    child_size, child_kind, child_header_size = header_at(
+                        child_position, child_limit
+                    )
+                    if child_size is None or _unexpected_nested_mp4_child(
+                        parent_kind, child_kind, child_size, child_header_size
+                    ):
+                        return False
+                    child_position += child_size
+                # Reaching the iteration cap without reaching the end is NOT clean.
+                return child_position == child_limit
+
             position = 0
             moov_position = None
             moov_size = None
@@ -347,6 +373,10 @@ def _opaque_mp4_moov_child_payload_present(
                     return True
                 if _unexpected_nested_mp4_child(b"moov", kind, size, header_size):
                     return True
+                if kind == b"udta" and not allowed_container_children_clean(
+                    b"udta", position, size, header_size
+                ):
+                    return True
                 if kind == b"trak":
                     # A valid track can hide opaque padding invisible to
                     # ffprobe's tags, stream inventory and full video decode.
@@ -363,6 +393,10 @@ def _opaque_mp4_moov_child_payload_present(
                             return True
                         if _unexpected_nested_mp4_child(
                             b"trak", track_kind, track_size, track_header_size
+                        ):
+                            return True
+                        if track_kind == b"edts" and not allowed_container_children_clean(
+                            b"edts", track_position, track_size, track_header_size
                         ):
                             return True
                         if track_kind == b"mdia":
