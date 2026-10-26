@@ -74,3 +74,41 @@ def test_private_master_range_workflow_tracks_imported_cinematic_models_and_comp
         "Strict FFmpeg/FFprobe/full-decode HTTP QA is skipped for cinematic "
         "project/assembly dependency-only edits: " + ", ".join(missing)
     )
+
+
+def test_private_master_range_workflow_tracks_shared_studio_persistence_and_routes():
+    """A shared SQLite/auth routing edit must not bypass strict media HTTP QA.
+
+    The real-media fixture imports app.studio.server, which includes the studio
+    router and invokes app.studio.storage for the persistent records that bind
+    cinematic master identity and authenticated asset delivery.
+    """
+    from fnmatch import fnmatchcase
+
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github/workflows/cinematic-private-master-http-range-qa.yml"
+    )
+    source = workflow.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?m)^on:\n  pull_request:\n    paths:\n(?P<entries>(?:      - .+\n)+)",
+        source,
+    )
+    assert match, "Strict media QA needs explicit pull_request paths"
+    watched = {
+        line.split(" - ", 1)[1].strip().strip("'\\\"")
+        for line in match["entries"].splitlines()
+    }
+    shared_dependencies = {
+        "app/studio/storage.py",  # SQLite persistence for master/job records
+        "app/studio/router.py",  # mounted routes alongside private video assets
+        "app/studio/parameters.py",  # server startup/static-root configuration
+    }
+    missing = sorted(
+        path for path in shared_dependencies
+        if not any(fnmatchcase(path, pattern) for pattern in watched)
+    )
+    assert not missing, (
+        "Shared studio persistence or routing edits could bypass real-media "
+        "private master HTTP QA: " + ", ".join(missing)
+    )
