@@ -34,3 +34,42 @@ def test_private_master_range_workflow_covers_storage_and_assembly_changes():
         "FFprobe/full-decode HTTP QA; missing: "
         + ", ".join(sorted(required - watched))
     )
+
+
+def test_private_master_range_workflow_tracks_imported_cinematic_models_and_compiler():
+    """Directly imported assembly models/compilers must trigger strict media QA.
+
+    The FFmpeg test fixture creates and edits cinematic projects, and the
+    assembly service imports these modules. A PR changing only one of them
+    must not bypass the genuine-media Docker gate.
+    """
+    from fnmatch import fnmatchcase
+
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github/workflows/cinematic-private-master-http-range-qa.yml"
+    )
+    source = workflow.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?m)^on:\n  pull_request:\n    paths:\n(?P<entries>(?:      - .+\n)+)",
+        source,
+    )
+    assert match, "Strict real-media QA needs explicit pull_request paths"
+    watched = set(
+        re.findall(r"(?m)^      - ['\\\"]?([^'\\\"\\n]+)['\\\"]?$", match["entries"])
+    )
+    directly_imported = {
+        "app/video/cinematic_models.py",
+        "app/video/cinematic_compiler.py",
+        "app/video/cinematic_requests.py",
+        "app/video/models.py",
+        "app/video/cinematic_editing.py",
+    }
+    missing = sorted(
+        path for path in directly_imported
+        if not any(fnmatchcase(path, pattern) for pattern in watched)
+    )
+    assert not missing, (
+        "Strict FFmpeg/FFprobe/full-decode HTTP QA is skipped for cinematic "
+        "project/assembly dependency-only edits: " + ", ".join(missing)
+    )
