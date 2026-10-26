@@ -280,3 +280,81 @@ def test_private_master_if_range_rejects_same_size_mtime_atomic_replacement(
     )
     assert dated.content == changed
     assert dated.headers["cache-control"] == "no-store"
+
+def test_private_master_stream_must_not_serve_inplace_rewritten_inode(
+    private_master, monkeypatch, tmp_path: Path,
+):
+    """A pinned descriptor is not a byte snapshot if its inode is rewritten.
+
+    This deterministic race uses two genuine, fully decoded synthetic H.264
+    MP4s. A local same-user writer overwrites the already-opened master inode
+    just before its first pread. The authenticated response must never return
+    200 with bytes different from the original SHA-attested master.
+    This tests a local integrity boundary, not remote exploitability.
+    """
+    if os.name != "posix" or not hasattr(os, "pread"):
+        pytest.skip("POSIX descriptor-stream mutation contract")
+
+    client, auth, url, original = private_master
+    storage = importlib.import_module("app.video.storage")
+    asset_id = url.rsplit("/", 1)[-1].removesuffix(".mp4")
+    asset = storage.video_asset_path(asset_id, "mp4")
+    ffmpeg, ffprobe = _media_tools()
+
+    blue = tmp_path / "synthetic-blue.mp4"
+    _run(ffmpeg, "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=24:d=2",
+         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         "-movflags", "+faststart", str(blue))
+    blue_bytes = blue.read_bytes()
+    padding = len(original) - len(blue_bytes)
+    assert padding >= 8, "Synthetic alternate MP4 must fit original inode size"
+    # A valid trailing ISO-BMFF free box makes the BLUE video exactly the
+    # original master's size, avoiding any short-read/truncation confounder.
+    rewritten = (
+        blue_bytes + padding.to_bytes(4, "big") + b"free"
+        + bytes(padding - 8)
+    )
+    assert len(rewritten) == len(original)
+    assert hashlib.sha256(rewritten).digest() != hashlib.sha256(original).digest()
+    blue_padded = tmp_path / "synthetic-blue-same-length.mp4"
+    blue_padded.write_bytes(rewritten)
+    probe = json.loads(_run(
+        ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,nb_read_frames",
+        "-of", "json", str(blue_padded),
+    ).stdout)
+    assert probe["streams"][0]["codec_name"] == "h264"
+    assert int(probe["streams"][0]["nb_read_frames"]) == 48
+    _run(ffmpeg, "-nostdin", "-v", "error", "-xerror", "-i",
+         str(blue_padded), "-an", "-f", "null", "-")
+
+    opened_identity = (asset.stat().st_dev, asset.stat().st_ino)
+    real_pread = os.pread
+    overwritten = False
+
+    def overwrite_after_open_before_first_read(fd, count, offset):
+        nonlocal overwritten
+        opened = os.fstat(fd)
+        if not overwritten and (opened.st_dev, opened.st_ino) == opened_identity:
+            overwritten = True
+            # In-place write preserves device/inode and file length. A
+            # no-follow open and final lstat cannot detect this by identity.
+            with asset.open("r+b") as stream:
+                stream.write(rewritten)
+                stream.flush()
+                os.fsync(stream.fileno())
+        return real_pread(fd, count, offset)
+
+    monkeypatch.setattr(os, "pread", overwrite_after_open_before_first_read)
+    try:
+        response = client.get(url, headers=auth)
+    finally:
+        monkeypatch.setattr(os, "pread", real_pread)
+
+    assert overwritten, "The test did not reach the pinned descriptor read"
+    assert response.status_code != 200 or response.content == original, (
+        "Authenticated 200 response served different synthetic H.264 bytes "
+        "after the already-opened master inode was rewritten in place; "
+        "descriptor pinning alone does not pin content integrity."
+    )
