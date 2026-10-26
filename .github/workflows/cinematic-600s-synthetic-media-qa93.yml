@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           mkdir -p test-results
           docker run --rm --network none --read-only \
-            --pids-limit 512 --memory 2g \
+            --pids-limit 2048 --memory 4g \
             --tmpfs /tmp:rw,nosuid,nodev,size=768m \
             --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
             --env CINEMATIC_LONGFORM_MEDIA_QA=1 \
