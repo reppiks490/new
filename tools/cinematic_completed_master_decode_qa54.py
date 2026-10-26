@@ -279,7 +279,8 @@ def _opaque_mp4_moov_child_payload_present(
     QA68 checks top-level boxes; QA69 checks immediate moov children; QA70
     checks immediate trak children; QA71 checks immediate mdia children; QA72 checks
     immediate minf children; QA73 checks immediate stbl children.
-    Scan bounded headers and reject unknown child types at these five levels; never\n    inspect encoded payloads or deeper descendants.
+    Scan bounded headers and reject unknown child types at these five levels; never
+    inspect encoded payloads or deeper descendants.
     False is a clean
     *narrow* check, NOT comprehensive MP4 sanitization. None means unstable
     file evidence.
