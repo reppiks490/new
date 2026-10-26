@@ -267,6 +267,9 @@ _SAFE_NESTED_MP4_CHILDREN = {
     # ISO-BMFF meta is a FullBox: skip its four version/flags bytes before
     # validating immediate children; arbitrary opaque siblings are not safe.
     b"meta": frozenset({b"hdlr", b"ilst", b"keys", b"free"}),
+    # FFmpeg normally emits only the tool/encoder metadata item. Unknown
+    # ilst items can hold private bytes without appearing in FFprobe tags.
+    b"ilst": frozenset({b"\xa9too"}),
 }
 
 
@@ -347,6 +350,10 @@ def _opaque_mp4_moov_child_payload_present(
                         return False
                     if child_kind == b"meta" and not meta_container_children_clean(
                         child_position, child_size, child_header_size
+                    ):
+                        return False
+                    if child_kind == b"ilst" and not allowed_container_children_clean(
+                        b"ilst", child_position, child_size, child_header_size
                     ):
                         return False
                     child_position += child_size
