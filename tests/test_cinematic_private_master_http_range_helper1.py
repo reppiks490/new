@@ -544,3 +544,50 @@ def test_private_media_denials_and_missing_assets_are_never_cacheable(private_ma
     assert good.status_code == 200
     assert good.content == original
     assert good.headers["cache-control"] == "no-store"
+
+
+def test_private_master_high_offset_ranges_use_compact_temporary_snapshots(
+    private_master, monkeypatch,
+):
+    """A tiny tail Range must not create a film-sized logical temp file.
+
+    The source is a genuine assembled, FFprobed, fully decoded H.264 master.
+    Sparse seek-to-source-offset snapshots have a logical length as large as
+    the full film even when only 128 bytes were read. On filesystems without
+    reliable sparse allocation, a mobile tail request can exhaust disk.
+    Assert temporary file length, not just the amount read from the source.
+    """
+    client, auth, url, original = private_master
+    router = importlib.import_module("app.video.router")
+    snapshot = router._snapshot_private_asset
+    snapshot_lengths = []
+
+    def inspect_snapshot(fd, opened, directory, ranges=None):
+        result = snapshot(fd, opened, directory, ranges)
+        temporary_fd = result[0] if isinstance(result, tuple) else result
+        snapshot_lengths.append(os.fstat(temporary_fd).st_size)
+        return result
+
+    monkeypatch.setattr(router, "_snapshot_private_asset", inspect_snapshot)
+    assert len(original) > 2048
+
+    suffix = client.get(url, headers={**auth, "Range": "bytes=-128"})
+    assert suffix.status_code == 206, suffix.text[:160]
+    assert suffix.content == original[-128:]
+    assert suffix.headers["cache-control"] == "no-store"
+    assert snapshot_lengths[-1] <= 128, (
+        "A 128-byte tail request produced a film-sized temporary file; "
+        "snapshot ranges must be packed without sparse source offsets."
+    )
+
+    start = len(original) - 64
+    disjoint = client.get(url, headers={
+        **auth, "Range": f"bytes=0-63,{start}-{len(original) - 1}",
+    })
+    assert disjoint.status_code == 206
+    assert disjoint.headers["content-type"].startswith("multipart/byteranges;")
+    assert original[:64] in disjoint.content
+    assert original[-64:] in disjoint.content
+    assert snapshot_lengths[-1] <= 128, (
+        "Disjoint mobile ranges must occupy only their actual snapshot bytes."
+    )
