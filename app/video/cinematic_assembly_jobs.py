@@ -183,6 +183,10 @@ def list_master_assembly_jobs(
     if not 1 <= limit <= 200 or offset < 0:
         raise ValueError("limit must be 1..200 and offset nonnegative")
     with connection() as db:
+        # COUNT and page must observe one WAL read snapshot. Without an
+        # explicit transaction, a concurrent insert can appear only in the
+        # page and make mobile polling's total/has_more inconsistent.
+        db.execute("BEGIN")
         total = db.execute(
             "SELECT COUNT(*) FROM records WHERE kind=? "
             "AND json_extract(data,'$.project_id')=?",
