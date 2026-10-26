@@ -258,6 +258,7 @@ class _OpenedAssetResponse(Response):
             os.close(self._fd)
 
 
+@router.head('/assets/{filename}')
 @router.get('/assets/{filename}')
 def asset(filename: str, request: Request):
     try:
