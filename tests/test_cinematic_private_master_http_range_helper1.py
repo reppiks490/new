@@ -358,3 +358,43 @@ def test_private_master_stream_must_not_serve_inplace_rewritten_inode(
         "after the already-opened master inode was rewritten in place; "
         "descriptor pinning alone does not pin content integrity."
     )
+
+
+def test_private_master_tiny_range_snapshots_only_requested_bytes(
+    private_master, monkeypatch,
+):
+    """A mobile 128-byte range must not copy a whole multi-GB film to disk.
+
+    Snapshotting the entire source for every small range would create an
+    authenticated I/O and temporary-disk amplification regression.
+    """
+    if os.name != "posix" or not hasattr(os, "pread"):
+        pytest.skip("POSIX bounded range-snapshot contract")
+    client, auth, url, original = private_master
+    storage = importlib.import_module("app.video.storage")
+    asset_id = url.rsplit("/", 1)[-1].removesuffix(".mp4")
+    source = storage.video_asset_path(asset_id, "mp4")
+    source_identity = (source.stat().st_dev, source.stat().st_ino)
+    original_pread = os.pread
+    source_bytes_requested = 0
+
+    def count_source_reads(fd, count, offset):
+        nonlocal source_bytes_requested
+        stat_result = os.fstat(fd)
+        if (stat_result.st_dev, stat_result.st_ino) == source_identity:
+            source_bytes_requested += count
+        return original_pread(fd, count, offset)
+
+    monkeypatch.setattr(os, "pread", count_source_reads)
+    try:
+        response = client.get(url, headers={
+            **auth, "Range": "bytes=0-127",
+        })
+    finally:
+        monkeypatch.setattr(os, "pread", original_pread)
+    assert response.status_code == 206
+    assert response.content == original[:128]
+    assert source_bytes_requested <= 128, (
+        "A 128-byte mobile range copied the entire cinematic master to a "
+        "temporary file, multiplying disk I/O and temporary storage."
+    )
