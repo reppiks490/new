@@ -436,6 +436,25 @@ def _opaque_mp4_moov_child_payload_present(
                     return True
                 if _unexpected_nested_mp4_child(b"moov", kind, size, header_size):
                     return True
+                if kind == b"mvhd":
+                    # QA80: a structurally permitted movie header can carry
+                    # trailing opaque bytes invisible to FFprobe and decoding.
+                    # ISO-BMFF mvhd has a fixed size for each FullBox version;
+                    # inspect only four nonprivate version/flags bytes.
+                    if size < header_size + 4:
+                        return True
+                    handle.seek(position + header_size)
+                    fullbox = handle.read(4)
+                    if len(fullbox) != 4 or fullbox[1:] != bytes(3):
+                        return True
+                    if fullbox[0] == 0:
+                        expected_size = header_size + 100
+                    elif fullbox[0] == 1:
+                        expected_size = header_size + 112
+                    else:
+                        return True
+                    if size != expected_size:
+                        return True
                 if kind == b"meta" and not meta_container_children_clean(
                     position, size, header_size
                 ):
