@@ -4,9 +4,6 @@ name: Cinematic private master HTTP Range real-media QA
 # even if that push changes only integration metadata outside PR path filters.
 # Do not expand this expensive Docker matrix to unrelated branch pushes.
 on:
-  push:
-    branches:
-      - 'feat/cinematic-orchestrator-v1'
   pull_request:
     paths:
       - 'tests/test_cinematic_private_master_http_range_helper1.py'
@@ -22,6 +19,9 @@ on:
       - 'app/studio/router.py'
       - 'app/studio/parameters.py'
       - '.github/workflows/cinematic-private-master-http-range-qa.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
   workflow_dispatch:
 
 permissions:
