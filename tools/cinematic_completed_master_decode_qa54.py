@@ -270,6 +270,9 @@ _SAFE_NESTED_MP4_CHILDREN = {
     # FFmpeg normally emits only the tool/encoder metadata item. Unknown
     # ilst items can hold private bytes without appearing in FFprobe tags.
     b"ilst": frozenset({b"\xa9too"}),
+    # QA78: an otherwise allowed encoder item can hide an opaque sibling
+    # beside its legitimate data child without surfacing in FFprobe tags.
+    b"\xa9too": frozenset({b"data"}),
 }
 
 
@@ -338,6 +341,7 @@ def _opaque_mp4_moov_child_payload_present(
                 """Read bounded immediate child headers; never read payload bytes."""
                 child_position = container_position + container_header_size
                 child_limit = container_position + container_size
+                encoder_data_children = 0
                 for _ in range(4096):
                     if child_position >= child_limit:
                         break
@@ -352,13 +356,23 @@ def _opaque_mp4_moov_child_payload_present(
                         child_position, child_size, child_header_size
                     ):
                         return False
+                    if parent_kind == b"\xa9too":
+                        encoder_data_children += 1
+                        if encoder_data_children > 1:
+                            return False
                     if child_kind == b"ilst" and not allowed_container_children_clean(
                         b"ilst", child_position, child_size, child_header_size
                     ):
                         return False
+                    if parent_kind == b"ilst" and child_kind == b"\xa9too" and not allowed_container_children_clean(
+                        b"\xa9too", child_position, child_size, child_header_size
+                    ):
+                        return False
                     child_position += child_size
                 # Reaching the iteration cap without reaching the end is NOT clean.
-                return child_position == child_limit
+                return child_position == child_limit and (
+                    parent_kind != b"\xa9too" or encoder_data_children == 1
+                )
 
             def meta_container_children_clean(
                 meta_position: int, meta_size: int, meta_header_size: int
