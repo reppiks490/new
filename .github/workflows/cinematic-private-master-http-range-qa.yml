@@ -8,7 +8,7 @@ on:
       - 'app/video/storage.py'
       - 'app/video/cinematic_service.py'
       - 'app/video/jobs.py'
-      - 'app/video/**'  # all imported cinematic/queue/model/assembly dependencies
+      - 'app/video/**'
       - 'Dockerfile.cinematic'
       - 'pyproject.toml'
       - 'app/studio/server.py'
