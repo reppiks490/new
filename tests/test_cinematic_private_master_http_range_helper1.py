@@ -163,3 +163,41 @@ def test_private_master_head_preflight_has_metadata_without_media_body(private_m
     assert response.headers["content-type"].startswith("video/mp4")
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["accept-ranges"] == "bytes"
+
+
+def test_private_master_overlapping_ranges_cannot_amplify_large_media(private_master):
+    """Repeated overlapping byte ranges must not multiply a private film download.
+
+    A single authenticated Range header can contain up to sixteen spans.
+    Without canonicalization, sixteen full-film spans turn one request into
+    sixteen complete reads/transfers; this is a bounded synthetic proof of
+    a disproportionate large-master I/O and bandwidth cost.
+    """
+    client, auth, url, original = private_master
+    repeated = ",".join(f"0-{len(original) - 1}" for _ in range(16))
+    response = client.get(url, headers={**auth, "Range": f"bytes={repeated}"})
+    assert response.status_code == 206, response.text[:160]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.content == original, (
+        "Overlapping whole-file ranges must be coalesced, not retransmitted "
+        "sixteen times in a multipart response."
+    )
+    assert response.headers["content-range"] == (
+        f"bytes 0-{len(original) - 1}/{len(original)}"
+    )
+    assert int(response.headers["content-length"]) == len(original)
+
+
+def test_private_master_disjoint_ranges_remain_multipart(private_master):
+    """Normalization must not collapse genuinely disjoint mobile ranges."""
+    client, auth, url, original = private_master
+    response = client.get(url, headers={
+        **auth, "Range": "bytes=0-127,512-639",
+    })
+    assert response.status_code == 206
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-type"].startswith("multipart/byteranges;")
+    assert response.content.count(original[:128]) == 1
+    assert response.content.count(original[512:640]) == 1
+    assert int(response.headers["content-length"]) == len(response.content)
