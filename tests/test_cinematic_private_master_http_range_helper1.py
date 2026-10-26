@@ -224,6 +224,7 @@ def test_private_master_if_range_rejects_same_size_mtime_atomic_replacement(
     before = client.head(url, headers=auth)
     assert before.status_code == 200
     old_etag = before.headers["etag"]
+    old_last_modified = before.headers["last-modified"]
     original_stat = asset.stat()
 
     replacement = tmp_path / "synthetic-blue-replacement.mp4"
@@ -268,3 +269,14 @@ def test_private_master_if_range_rejects_same_size_mtime_atomic_replacement(
     assert response.content == changed
     assert response.headers["etag"] != old_etag
     assert response.headers["cache-control"] == "no-store"
+
+    # Last-Modified has only whole-second precision and cannot act as a
+    # strong validator for quickly replaced private cinematic masters.
+    dated = client.get(url, headers={
+        **auth, "Range": "bytes=0-127", "If-Range": old_last_modified,
+    })
+    assert dated.status_code == 200, (
+        "A stale If-Range HTTP date must not splice different master versions."
+    )
+    assert dated.content == changed
+    assert dated.headers["cache-control"] == "no-store"
