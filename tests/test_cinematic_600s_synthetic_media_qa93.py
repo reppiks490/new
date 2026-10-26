@@ -99,6 +99,23 @@ def test_600_second_master_60_shots_real_ffmpeg(monkeypatch, tmp_path: Path):
         ),
     )
 
+    # QA94 diagnostic only: surface FFmpeg's synthetic-media stderr if the
+    # actual application command fails. Production code still builds/runs the
+    # unmodified command; no command flags or runtime behavior are changed.
+    original_ffmpeg_runner = service._run_master_ffmpeg
+
+    def _diagnostic_ffmpeg_runner(command, **kwargs):
+        execution = original_ffmpeg_runner(command, **kwargs)
+        if execution.returncode != 0:
+            stderr = execution.stderr if isinstance(execution.stderr, str) else ""
+            raise RuntimeError(
+                f"Synthetic QA FFmpeg returned {execution.returncode}; "
+                f"stderr tail: {stderr[-1800:]}"
+            )
+        return execution
+
+    monkeypatch.setattr(service, "_run_master_ffmpeg", _diagnostic_ffmpeg_runner)
+
     result = service.assemble_project_master(
         project.id,
         requests.AssembleMasterRequest(expected_revision=project.revision),
