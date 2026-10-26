@@ -252,7 +252,7 @@ def _opaque_mp4_moov_child_payload_present(
     """Reject opaque moov and immediate trak children in a narrow MP4 envelope.
 
     QA68 checks top-level boxes; QA69 checks immediate moov children; QA70
-    checks immediate trak children; QA71 checks immediate mdia children.
+    checks immediate trak children; QA71 checks immediate mdia children; QA72 checks immediate minf children.
     Scan bounded headers only, never encoded payloads or deeper descendants.
     False is a clean
     *narrow* check, NOT comprehensive MP4 sanitization. None means unstable
@@ -356,6 +356,27 @@ def _opaque_mp4_moov_child_payload_present(
                                     media_kind == b"free" and media_size != media_header_size
                                 ):
                                     return True
+                                if media_kind == b"minf":
+                                    # FFprobe does not report opaque media-
+                                    # information children. Traverse headers
+                                    # only, bounded by the enclosing box.
+                                    info_position = media_position + media_header_size
+                                    info_limit = media_position + media_size
+                                    for _ in range(4096):
+                                        if info_position >= info_limit:
+                                            break
+                                        info_size, info_kind, info_header_size = header_at(
+                                            info_position, info_limit
+                                        )
+                                        if info_size is None:
+                                            return True
+                                        if info_kind == b"uuid" or (
+                                            info_kind == b"free" and info_size != info_header_size
+                                        ):
+                                            return True
+                                        info_position += info_size
+                                    if info_position != info_limit:
+                                        return True
                                 media_position += media_size
                             if media_position != media_limit:
                                 return True
