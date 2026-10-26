@@ -507,3 +507,40 @@ def test_private_master_snapshot_failure_is_noncacheable_and_recovers(
         "Snapshot failure leaked a stream permit or corrupted master bytes."
     )
     assert attempts == 2
+
+
+def test_private_media_denials_and_missing_assets_are_never_cacheable(private_master):
+    """A browser/proxy must not retain bearer-denial or missing-media responses.
+
+    These requests exercise the *actual* private studio middleware and router
+    against a real FFmpeg-assembled, fully decoded synthetic H.264 master.
+    The 401 and 404 paths must be no-store, including HEAD and URL-token
+    bypass attempts; no owner media, credentials, or paid service is involved.
+    """
+    client, auth, url, original = private_master
+    missing_url = url.rsplit("/", 1)[0] + "/" + ("f" * 32) + ".mp4"
+    assert len(original) > 2048
+
+    for method in (client.get, client.head):
+        for headers in ({}, {"Authorization": "Bearer wrong-token"}):
+            response = method(url, headers=headers)
+            assert response.status_code == 401
+            assert response.headers.get("cache-control") == "no-store", (
+                "Private media bearer-denial responses must never be cacheable"
+            )
+        token_query = method(url + "?token=synthetic-range-owner-token")
+        assert token_query.status_code == 401
+        assert token_query.headers.get("cache-control") == "no-store"
+
+        missing = method(missing_url, headers=auth)
+        assert missing.status_code == 404
+        assert missing.headers.get("cache-control") == "no-store", (
+            "Private media 404 responses must not be cached across asset recovery"
+        )
+
+    # The successful path remains authenticated and returns the genuine
+    # original bytes, rather than a cached denial or placeholder.
+    good = client.get(url, headers=auth)
+    assert good.status_code == 200
+    assert good.content == original
+    assert good.headers["cache-control"] == "no-store"
