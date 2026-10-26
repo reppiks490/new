@@ -1,0 +1,69 @@
+name: Cinematic 600s all-shot continuity QA95
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_600s_all_shot_continuity_qa95.py'
+      - '.github/qa/Dockerfile.cinematic-600s'
+      - '.github/workflows/cinematic-600s-all-shot-continuity-qa95.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-duration-ffmpeg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reuse the proven container-side FFmpeg provisioning pattern from
+      # Helper 1 #179. Do not depend on the stalled host Ubuntu apt mirror.
+      # The QA-only image is not a production deployment or model runtime.
+      - name: Build isolated FFmpeg + Python 3.12 QA image
+        run: |
+          set -euo pipefail
+          docker build --file .github/qa/Dockerfile.cinematic-600s \
+            --tag cinematic-600s-base:qa .
+
+      # tests/ is excluded from the repository's .dockerignore. Stage only
+      # the synthetic test in a temporary build context, without altering
+      # the production image, .dockerignore, or other agents' files.
+      - name: Stage QA95 distinct-source test in isolated container
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-600s-qa"
+          cp tests/test_cinematic_600s_all_shot_continuity_qa95.py \
+            "$RUNNER_TEMP/cinematic-600s-qa/test_cinematic_600s_all_shot_continuity_qa95.py"
+          docker build --file - --tag cinematic-600s-tests:qa \
+            "$RUNNER_TEMP/cinematic-600s-qa" <<'DOCKERFILE'
+          FROM cinematic-600s-base:qa
+          USER root
+          RUN mkdir -p /app/tests && chown -R 10001:10001 /app/tests
+          COPY test_cinematic_600s_all_shot_continuity_qa95.py /app/tests/test_cinematic_600s_all_shot_continuity_qa95.py
+          USER 10001:10001
+          DOCKERFILE
+
+      - name: Assemble and audit all 60 synthetic shot centers over 600 seconds
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 2048 --memory 4g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=768m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+            --env CINEMATIC_ALL_SHOT_MEDIA_QA=1 \
+            --entrypoint python cinematic-600s-tests:qa \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_600s_all_shot_continuity_qa95.py \
+            2>&1 | tee test-results/cinematic-600s-all-shot-qa95.txt
+
+      - name: Preserve exact-commit synthetic all-shot continuity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-600s-all-shot-qa95
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
