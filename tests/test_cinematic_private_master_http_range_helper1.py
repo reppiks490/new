@@ -201,3 +201,70 @@ def test_private_master_disjoint_ranges_remain_multipart(private_master):
     assert response.content.count(original[:128]) == 1
     assert response.content.count(original[512:640]) == 1
     assert int(response.headers["content-length"]) == len(response.content)
+
+
+def test_private_master_if_range_rejects_same_size_mtime_atomic_replacement(
+    private_master, tmp_path: Path,
+):
+    """Old If-Range must not splice a different real MP4 with the same stat ETag.
+
+    An atomic replacement changes the inode but can preserve byte length and
+    modification timestamp. This is a separate cross-request integrity case
+    from an in-place rewrite of an already-open descriptor.
+    """
+    if os.name != "posix":
+        pytest.skip("POSIX atomic-replacement identity regression")
+
+    client, auth, url, original = private_master
+    storage = importlib.import_module("app.video.storage")
+    asset_id = url.rsplit("/", 1)[-1].removesuffix(".mp4")
+    asset = storage.video_asset_path(asset_id, "mp4")
+    ffmpeg, ffprobe = _media_tools()
+
+    before = client.head(url, headers=auth)
+    assert before.status_code == 200
+    old_etag = before.headers["etag"]
+    original_stat = asset.stat()
+
+    replacement = tmp_path / "synthetic-blue-replacement.mp4"
+    _run(ffmpeg, "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=24:d=2",
+         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         "-movflags", "+faststart", str(replacement))
+    blue = replacement.read_bytes()
+    padding = len(original) - len(blue)
+    assert padding >= 8, "Alternate real MP4 must fit the original byte length"
+    # Valid ISO-BMFF trailing free box keeps the replacement fully decodable
+    # while matching the original Content-Length exactly.
+    changed = blue + padding.to_bytes(4, "big") + b"free" + bytes(padding - 8)
+    replacement.write_bytes(changed)
+    assert len(changed) == len(original)
+    assert hashlib.sha256(changed).digest() != hashlib.sha256(original).digest()
+    probe = json.loads(_run(
+        ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,nb_read_frames",
+        "-of", "json", str(replacement),
+    ).stdout)
+    assert probe["streams"][0]["codec_name"] == "h264"
+    assert int(probe["streams"][0]["nb_read_frames"]) == 48
+    _run(ffmpeg, "-nostdin", "-v", "error", "-xerror", "-i",
+         str(replacement), "-an", "-f", "null", "-")
+
+    os.chmod(replacement, 0o600)
+    os.utime(replacement, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    os.replace(replacement, asset)
+    replaced_stat = asset.stat()
+    assert replaced_stat.st_ino != original_stat.st_ino
+    assert replaced_stat.st_size == original_stat.st_size
+    assert replaced_stat.st_mtime_ns == original_stat.st_mtime_ns
+
+    response = client.get(url, headers={
+        **auth, "Range": "bytes=0-127", "If-Range": old_etag,
+    })
+    assert response.status_code == 200, (
+        "An obsolete strong If-Range validator was reused after an atomic "
+        "different-content MP4 replacement with identical size and mtime."
+    )
+    assert response.content == changed
+    assert response.headers["etag"] != old_etag
+    assert response.headers["cache-control"] == "no-store"
