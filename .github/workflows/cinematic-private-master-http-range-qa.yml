@@ -12,6 +12,9 @@ on:
       - 'Dockerfile.cinematic'
       - 'pyproject.toml'
       - 'app/studio/server.py'
+      - 'app/studio/storage.py'
+      - 'app/studio/router.py'
+      - 'app/studio/parameters.py'
       - '.github/workflows/cinematic-private-master-http-range-qa.yml'
   workflow_dispatch:
 
