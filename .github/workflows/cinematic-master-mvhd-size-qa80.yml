@@ -1,0 +1,40 @@
+name: Cinematic master movie-header privacy QA80
+
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_completed_master_decode_qa54.py'
+      - 'tests/test_cinematic_master_mvhd_size_qa80.py'
+      - '.github/workflows/cinematic-master-mvhd-size-qa80.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-mvhd-privacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require genuine FFmpeg FFprobe and libx264
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -hide_banner -encoders | grep -q 'libx264'
+      - name: Install Python test requirements
+        run: python -m pip install -e '.[dev]'
+      - name: Run genuine-media movie-header privacy regression
+        env:
+          CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+        run: python -m pytest -q -W error tests/test_cinematic_master_mvhd_size_qa80.py
