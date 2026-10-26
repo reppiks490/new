@@ -42,6 +42,7 @@ from app.video.storage import (
     get_video_record,
     list_video_records,
     put_video_record,
+    recorded_video_master_size,
     video_asset_path,
 )
 
@@ -362,6 +363,19 @@ def asset(filename: str, request: Request):
             raise ValueError('Unsupported public asset type')
         path = video_asset_path(identifier, extension)
         fd, opened = _open_private_asset(path)
+        try:
+            # An assembled master has durable, authoritative byte-length
+            # metadata. Reject post-assembly truncation before HTTP 200/206,
+            # including HEAD, without hashing a multi-GB film for each Range.
+            # Non-master shot MP4s have no matching record and retain their
+            # existing delivery behavior.
+            if extension == 'mp4':
+                expected_size = recorded_video_master_size(identifier)
+                if expected_size is not None and opened.st_size != expected_size:
+                    raise OSError('Assembled master size differs from persisted record')
+        except BaseException:
+            os.close(fd)
+            raise
     except (ValueError, OSError):
         raise HTTPException(404, 'Asset not found')
     snapshot_slot_held = False
