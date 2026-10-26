@@ -41,11 +41,17 @@ jobs:
       - name: Add isolated pytest runner without changing the runtime image
         run: |
           set -euo pipefail
-          docker build --file - --tag cinematic-helper1-range-tests:qa . <<'DOCKERFILE'
+          # The repository .dockerignore excludes tests/ by design. Supply
+          # only this synthetic test file via a minimal temporary QA context.
+          mkdir -p "$RUNNER_TEMP/helper1-range-qa"
+          cp tests/test_cinematic_private_master_http_range_helper1.py \
+            "$RUNNER_TEMP/helper1-range-qa/test_cinematic_private_master_http_range_helper1.py"
+          docker build --file - --tag cinematic-helper1-range-tests:qa \
+            "$RUNNER_TEMP/helper1-range-qa" <<'DOCKERFILE'
           FROM cinematic-helper1-range-base:qa
           USER root
           RUN python -m pip install --no-cache-dir -e '.[dev]'
-          COPY tests/test_cinematic_private_master_http_range_helper1.py /app/tests/test_cinematic_private_master_http_range_helper1.py
+          COPY test_cinematic_private_master_http_range_helper1.py /app/tests/test_cinematic_private_master_http_range_helper1.py
           USER 10001:10001
           DOCKERFILE
 
