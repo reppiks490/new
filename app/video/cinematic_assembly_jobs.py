@@ -323,10 +323,12 @@ def recover_assembly_queue() -> dict:
     mark them failed (retry requires explicit user action). Queued jobs remain
     eligible and are dispatched after the transaction.
     """
-    now = _now()
     failed = 0
     with connection() as db:
         db.execute("BEGIN IMMEDIATE")
+        # Timestamp the serialized restart transition after the write lock,
+        # not before another SQLite writer can commit newer history.
+        now = _now()
         rows = db.execute(
             "SELECT id,data FROM records WHERE kind=? "
             "AND json_extract(data,'$.status')='running'", (_KIND,),
