@@ -139,7 +139,6 @@ def cancel_queued_master_assembly(project_id: str, identifier: str) -> dict:
     Both cancellation and _claim_next take BEGIN IMMEDIATE, so the queue
     never reports an already-claimed running encode as cancelled.
     """
-    now = _now()
     with connection() as db:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
@@ -157,6 +156,9 @@ def cancel_queued_master_assembly(project_id: str, identifier: str) -> dict:
             raise AssemblyCancellationConflict(
                 "Assembly has already started or finished; it cannot be cancelled via the queue."
             )
+        # Timestamp the actual serialized state transition, not a pre-lock
+        # instant that could precede another committed queue update.
+        now = _now()
         payload.update(
             status="cancelled", stage="Cancelled", progress=0,
             error=None, finished_at=now, updated_at=now,
