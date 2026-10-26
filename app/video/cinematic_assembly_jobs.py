@@ -54,10 +54,13 @@ def _store_status(identifier: str, **updates) -> dict | None:
         payload = json.loads(row[0])
         if payload.get("status") != "running":
             return None
+        now = _now()
         payload.update(updates)
+        # Keep API/polling timestamps consistent with SQLite history ordering.
+        payload["updated_at"] = now
         db.execute(
             "UPDATE records SET data=?,updated=? WHERE id=? AND kind=?",
-            (json.dumps(payload, allow_nan=False), _now(), identifier, _KIND),
+            (json.dumps(payload, allow_nan=False), now, identifier, _KIND),
         )
         return {"id": identifier, **payload}
 
