@@ -246,6 +246,31 @@ def _opaque_mp4_top_level_payload_present(
 
 
 
+# Strict private-master delivery recognizes only known FFmpeg/ISO-BMFF
+# structural children at the five inspected depths. FFprobe can silently
+# ignore arbitrary other child box types containing owner-identifying text.
+# This is a conservative *offline* contract, not a complete MP4 sanitizer.
+_SAFE_NESTED_MP4_CHILDREN = {
+    b"moov": frozenset({b"mvhd", b"trak", b"udta", b"meta", b"mvex", b"free"}),
+    b"trak": frozenset({b"tkhd", b"edts", b"mdia", b"tref", b"free"}),
+    b"mdia": frozenset({b"mdhd", b"hdlr", b"minf", b"elng", b"free"}),
+    b"minf": frozenset({b"vmhd", b"smhd", b"hmhd", b"nmhd", b"dinf", b"stbl", b"free"}),
+    b"stbl": frozenset({
+        b"stsd", b"stts", b"ctts", b"stsc", b"stsz", b"stz2",
+        b"stco", b"co64", b"stss", b"stsh", b"stdp", b"padb",
+        b"sdtp", b"sgpd", b"sbgp", b"subs", b"saiz", b"saio", b"free",
+    }),
+}
+
+
+def _unexpected_nested_mp4_child(
+    parent: bytes, kind: bytes, size: int, header_size: int
+) -> bool:
+    return kind not in _SAFE_NESTED_MP4_CHILDREN[parent] or (
+        kind == b"free" and size != header_size
+    )
+
+
 def _opaque_mp4_moov_child_payload_present(
     path: Path, original: os.stat_result
 ) -> bool | None:
@@ -254,7 +279,7 @@ def _opaque_mp4_moov_child_payload_present(
     QA68 checks top-level boxes; QA69 checks immediate moov children; QA70
     checks immediate trak children; QA71 checks immediate mdia children; QA72 checks
     immediate minf children; QA73 checks immediate stbl children.
-    Scan bounded headers only, never encoded payloads or deeper descendants.
+    Scan bounded headers and reject unknown child types at these five levels; never\n    inspect encoded payloads or deeper descendants.
     False is a clean
     *narrow* check, NOT comprehensive MP4 sanitization. None means unstable
     file evidence.
@@ -319,7 +344,7 @@ def _opaque_mp4_moov_child_payload_present(
                 size, kind, header_size = header_at(position, limit)
                 if size is None:
                     return True
-                if kind == b"uuid" or (kind == b"free" and size != header_size):
+                if _unexpected_nested_mp4_child(b"moov", kind, size, header_size):
                     return True
                 if kind == b"trak":
                     # A valid track can hide opaque padding invisible to
@@ -335,8 +360,8 @@ def _opaque_mp4_moov_child_payload_present(
                         )
                         if track_size is None:
                             return True
-                        if track_kind == b"uuid" or (
-                            track_kind == b"free" and track_size != track_header_size
+                        if _unexpected_nested_mp4_child(
+                            b"trak", track_kind, track_size, track_header_size
                         ):
                             return True
                         if track_kind == b"mdia":
@@ -353,8 +378,8 @@ def _opaque_mp4_moov_child_payload_present(
                                 )
                                 if media_size is None:
                                     return True
-                                if media_kind == b"uuid" or (
-                                    media_kind == b"free" and media_size != media_header_size
+                                if _unexpected_nested_mp4_child(
+                                    b"mdia", media_kind, media_size, media_header_size
                                 ):
                                     return True
                                 if media_kind == b"minf":
@@ -371,8 +396,8 @@ def _opaque_mp4_moov_child_payload_present(
                                         )
                                         if info_size is None:
                                             return True
-                                        if info_kind == b"uuid" or (
-                                            info_kind == b"free" and info_size != info_header_size
+                                        if _unexpected_nested_mp4_child(
+                                            b"minf", info_kind, info_size, info_header_size
                                         ):
                                             return True
                                         if info_kind == b"stbl":
@@ -389,9 +414,9 @@ def _opaque_mp4_moov_child_payload_present(
                                                 )
                                                 if sample_size is None:
                                                     return True
-                                                if sample_kind == b"uuid" or (
-                                                    sample_kind == b"free"
-                                                    and sample_size != sample_header_size
+                                                if _unexpected_nested_mp4_child(
+                                                    b"stbl", sample_kind, sample_size,
+                                                    sample_header_size,
                                                 ):
                                                     return True
                                                 sample_position += sample_size
