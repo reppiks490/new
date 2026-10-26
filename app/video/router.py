@@ -408,10 +408,12 @@ def asset(filename: str, request: Request):
             except ValueError as exc:
                 raise HTTPException(
                     409, 'Private asset changed while preparing response',
+                    headers={'Cache-Control': 'no-store'},
                 ) from exc
             except OSError as exc:
                 raise HTTPException(
                     503, 'Private asset snapshot unavailable',
+                    headers={'Cache-Control': 'no-store', 'Retry-After': '1'},
                 ) from exc
             original_fd, fd = fd, snapshot_fd
             os.close(original_fd)
