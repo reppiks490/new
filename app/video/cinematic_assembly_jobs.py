@@ -56,6 +56,10 @@ def _store_status(identifier: str, **updates) -> dict | None:
             return None
         now = _now()
         payload.update(updates)
+        # Terminal completion is the serialized state transition, not a
+        # pre-lock clock read by the FFmpeg worker.
+        if payload.get("status") in ("succeeded", "failed"):
+            payload["finished_at"] = now
         # Keep API/polling timestamps consistent with SQLite history ordering.
         payload["updated_at"] = now
         db.execute(
@@ -273,13 +277,11 @@ def _execute_one(job: dict) -> None:
         _store_status(
             job["id"], status="failed", stage="Stale revision", progress=0,
             error="Project changed after queuing. Review edits and queue a new assembly.",
-            finished_at=_now(),
         )
     except MasterAssemblyNotReady:
         _store_status(
             job["id"], status="failed", stage="Missing clips", progress=0,
             error="One or more completed shot files became unavailable. Re-render missing clips.",
-            finished_at=_now(),
         )
     except Exception:
         # Internal filenames, prompts and executable errors must not appear in
@@ -287,7 +289,6 @@ def _execute_one(job: dict) -> None:
         _store_status(
             job["id"], status="failed", stage="Assembly failed", progress=0,
             error="Local master assembly failed. Inspect the private worker diagnostics.",
-            finished_at=_now(),
         )
     else:
         _store_status(
@@ -295,7 +296,6 @@ def _execute_one(job: dict) -> None:
             master_id=result["id"], asset_id=result["asset_id"],
             asset_url=result["asset_url"], sha256=result["sha256"],
             probe_metadata_verified=bool(result.get("actual_video_probe_verified")),
-            finished_at=_now(),
         )
 
 
