@@ -127,7 +127,7 @@ def test_private_master_range_workflow_runs_on_integrated_branch_push():
     )
     source = workflow.read_text(encoding="utf-8")
     match = re.search(
-        r"(?m)^on:\n  push:\n    branches:\n(?P<branches>(?:      - .+\n)+)",
+        r"(?m)^  push:\n    branches:\n(?P<branches>(?:      - .+\n)+)",
         source,
     )
     assert match, (
