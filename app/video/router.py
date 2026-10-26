@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import threading
 import uuid
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -48,6 +49,11 @@ router = APIRouter(prefix='/api/video', tags=['Local video studio'])
 _MAX_IMAGE_BYTES = 12 * 1024 * 1024
 _MAX_IMAGE_PIXELS = 20_000_000
 _PRIVACY_ID = '0' * 32
+# Per-process cap on simultaneous private master snapshots AND response streams.
+# Two long-film GETs can already consume substantial temporary disk; reject
+# additional concurrent requests rather than admitting unbounded copies.
+# This does not impose a cross-process byte quota or replace storage planning.
+_PRIVATE_ASSET_SNAPSHOT_SLOTS = threading.BoundedSemaphore(value=2)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -237,8 +243,10 @@ def _asset_byte_ranges(header: str, size: int) -> list[tuple[int, int]]:
 class _OpenedAssetResponse(Response):
     """ASGI response reads exclusively from an opened inode, never its path."""
 
-    def __init__(self, fd, size, ranges, media_type, headers, status_code):
+    def __init__(self, fd, size, ranges, media_type, headers, status_code,
+                 snapshot_slot=False):
         self._fd = fd
+        self._snapshot_slot = snapshot_slot
         self._ranges = ranges
         self._size = size
         self._media_type = media_type
@@ -320,7 +328,11 @@ class _OpenedAssetResponse(Response):
                     })
             await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
         finally:
-            os.close(self._fd)
+            try:
+                os.close(self._fd)
+            finally:
+                if self._snapshot_slot:
+                    _PRIVATE_ASSET_SNAPSHOT_SLOTS.release()
 
 
 @router.head('/assets/{filename}')
@@ -334,6 +346,7 @@ def asset(filename: str, request: Request):
         fd, opened = _open_private_asset(path)
     except (ValueError, OSError):
         raise HTTPException(404, 'Asset not found')
+    snapshot_slot_held = False
     try:
         from email.utils import formatdate
 
@@ -382,6 +395,12 @@ def asset(filename: str, request: Request):
         # rewritten by a concurrent local process while pread is streaming.
         # HEAD does not send a body, so it requires no on-disk snapshot.
         if request.method != 'HEAD':
+            if not _PRIVATE_ASSET_SNAPSHOT_SLOTS.acquire(blocking=False):
+                raise HTTPException(
+                    503, 'Private media streaming capacity reached',
+                    headers={'Cache-Control': 'no-store', 'Retry-After': '1'},
+                )
+            snapshot_slot_held = True
             try:
                 snapshot_fd = _snapshot_private_asset(
                     fd, opened, path.parent, ranges,
@@ -396,14 +415,23 @@ def asset(filename: str, request: Request):
                 ) from exc
             original_fd, fd = fd, snapshot_fd
             os.close(original_fd)
-        return _OpenedAssetResponse(
+        response = _OpenedAssetResponse(
             fd, opened.st_size, ranges, media_type, headers,
             status_code=206 if ranges else 200,
+            snapshot_slot=snapshot_slot_held,
         )
+        # Ownership of the permit transfers to the ASGI response; release
+        # only after its final byte or client cancellation closes the fd.
+        snapshot_slot_held = False
+        return response
     except BaseException:
         # The response owns fd only after successful construction.
         # An already-closed 416 descriptor is returned before this handler.
-        os.close(fd)
+        try:
+            os.close(fd)
+        finally:
+            if snapshot_slot_held:
+                _PRIVATE_ASSET_SNAPSHOT_SLOTS.release()
         raise
 
 
