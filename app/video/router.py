@@ -141,6 +141,12 @@ def _open_private_asset(path):
                 or not stat.S_ISREG(current.st_mode)
                 or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
             raise OSError('Asset path changed or is not a regular file')
+        # A standalone MP4 requires at least a complete 16-byte ftyp box
+        # header. An interrupted/truncated master must not be advertised as
+        # successful video/mp4 (including HEAD and byte-range requests).
+        # This is a cheap corruption floor, not a full decode/SHA attestation.
+        if path.suffix == '.mp4' and opened.st_size < 16:
+            raise OSError('Incomplete MP4 asset')
         return fd, opened
     except BaseException:
         os.close(fd)
