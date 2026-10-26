@@ -593,7 +593,10 @@ def test_private_master_high_offset_ranges_use_compact_temporary_snapshots(
     )
 
 
-@pytest.mark.parametrize("truncated_length", [0, 8], ids=["empty", "short-header"])
+@pytest.mark.parametrize(
+    "truncated_length", [0, 8, 16, 128, 512],
+    ids=["empty", "short-header", "header-only", "small-prefix", "larger-prefix"],
+)
 def test_private_master_truncation_fails_closed_and_recovers(
     private_master, truncated_length,
 ):
@@ -603,7 +606,12 @@ def test_private_master_truncation_fails_closed_and_recovers(
     decoded by the fixture. Simulate local disk truncation *after* assembly,
     then verify authorized GET, HEAD and Range cannot return a successful
     video/mp4 response. Restore the exact SHA-attested bytes to prove recovery.
-    No owner media, private keys, or paid service are involved.
+    Also reject partial masters that exceed the earlier 16-byte ftyp floor:
+    the persisted master has a much larger SHA-attested size, so returning
+    HTTP 200 for a 16/128/512-byte prefix misrepresents a broken film as ready.
+    This is an intentionally RED, QA-only release gate; the lead must select
+    a safe authoritative metadata/size validation rather than guessing a new
+    arbitrary byte threshold. No owner media, private keys, or paid service.
     """
     client, auth, url, original = private_master
     storage = importlib.import_module("app.video.storage")
