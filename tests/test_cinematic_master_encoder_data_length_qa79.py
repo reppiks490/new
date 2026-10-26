@@ -47,7 +47,7 @@ def _inject_hidden_data_suffix(media: Path, workspace: Path) -> None:
 
     chain = []
     start, end = 0, len(data)
-    for kind in (b"moov", b"udta", b"meta", b"ilst", b"\\xa9too", b"data"):
+    for kind in (b"moov", b"udta", b"meta", b"ilst", b"\xa9too", b"data"):
         position, size = find_box(start, end, kind)
         chain.append((position, size))
         start = position + (12 if kind == b"meta" else 8)
@@ -57,7 +57,7 @@ def _inject_hidden_data_suffix(media: Path, workspace: Path) -> None:
     assert data_size >= 16
     # A NUL terminates the FFprobe-visible Lavf encoder string, leaving a
     # private suffix inside the legitimate 'data' child, not a new box.
-    suffix = b"\\x00" + CANARY
+    suffix = b"\x00" + CANARY
     insert_at = data_position + data_size
     patched = data[:insert_at] + suffix + data[insert_at:]
     for position, size in chain:
