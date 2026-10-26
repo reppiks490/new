@@ -591,3 +591,48 @@ def test_private_master_high_offset_ranges_use_compact_temporary_snapshots(
     assert snapshot_lengths[-1] <= 128, (
         "Disjoint mobile ranges must occupy only their actual snapshot bytes."
     )
+
+
+@pytest.mark.parametrize("truncated_length", [0, 8], ids=["empty", "short-header"])
+def test_private_master_truncation_fails_closed_and_recovers(
+    private_master, truncated_length,
+):
+    """Never claim an interrupted/corrupted master is playable private media.
+
+    A genuine FFmpeg-assembled H.264 master is first FFprobed and fully
+    decoded by the fixture. Simulate local disk truncation *after* assembly,
+    then verify authorized GET, HEAD and Range cannot return a successful
+    video/mp4 response. Restore the exact SHA-attested bytes to prove recovery.
+    No owner media, private keys, or paid service are involved.
+    """
+    client, auth, url, original = private_master
+    storage = importlib.import_module("app.video.storage")
+    asset_id = url.rsplit("/", 1)[-1].removesuffix(".mp4")
+    asset = storage.video_asset_path(asset_id, "mp4")
+    assert len(original) > 2048
+    assert hashlib.sha256(asset.read_bytes()).digest() == hashlib.sha256(original).digest()
+
+    asset.write_bytes(original[:truncated_length])
+    assert asset.stat().st_size == truncated_length
+    requests = (
+        ("GET", {}),
+        ("HEAD", {}),
+        ("GET", {"Range": "bytes=0-3"}),
+    )
+    try:
+        for method, extra_headers in requests:
+            response = client.request(method, url, headers={**auth, **extra_headers})
+            assert response.status_code == 404, (
+                f"Truncated private master ({truncated_length} bytes) was "
+                f"served as HTTP {response.status_code} to {method}; "
+                "an incomplete MP4 must fail closed before HTTP headers."
+            )
+            assert response.headers.get("cache-control") == "no-store"
+            assert response.content != original
+    finally:
+        asset.write_bytes(original)
+
+    restored = client.get(url, headers=auth)
+    assert restored.status_code == 200
+    assert restored.headers.get("cache-control") == "no-store"
+    assert hashlib.sha256(restored.content).digest() == hashlib.sha256(original).digest()
