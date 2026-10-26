@@ -1,0 +1,30 @@
+name: Cinematic assembly terminal finish timestamp QA89
+
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'tests/test_cinematic_assembly_terminal_finish_timestamp_qa89.py'
+      - '.github/workflows/cinematic-assembly-terminal-finish-timestamp-qa89.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terminal-finish-timestamp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install local test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Verify terminal transition clock and controls
+        run: python -m pytest -q -W error tests/test_cinematic_assembly_terminal_finish_timestamp_qa89.py
