@@ -398,3 +398,59 @@ def test_private_master_tiny_range_snapshots_only_requested_bytes(
         "A 128-byte mobile range copied the entire cinematic master to a "
         "temporary file, multiplying disk I/O and temporary storage."
     )
+
+
+def test_private_master_concurrent_full_gets_have_bounded_snapshot_admission(
+    private_master, monkeypatch,
+):
+    """No third authenticated full-film snapshot while two are in flight.
+
+    The fixture is a real FFmpeg-assembled, FFprobed and fully decoded H.264
+    master. The gate deliberately holds two existing snapshot operations
+    without copying owner media or relying on wall-clock throughput.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+
+    client, auth, url, original = private_master
+    router = importlib.import_module("app.video.router")
+    snapshot = router._snapshot_private_asset
+    release = Event()
+    two_entered = Event()
+    lock = Lock()
+    entered = 0
+
+    def held_snapshot(fd, opened, directory, ranges=None):
+        nonlocal entered
+        with lock:
+            entered += 1
+            ordinal = entered
+            if entered >= 2:
+                two_entered.set()
+        if ordinal <= 2:
+            if not release.wait(timeout=15):
+                raise AssertionError("Timed out releasing synthetic snapshot gate")
+        return snapshot(fd, opened, directory, ranges)
+
+    monkeypatch.setattr(router, "_snapshot_private_asset", held_snapshot)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        first = pool.submit(client.get, url, headers=auth)
+        second = pool.submit(client.get, url, headers=auth)
+        try:
+            assert two_entered.wait(timeout=8), (
+                "Two synthetic authenticated master snapshots never entered"
+            )
+            third = pool.submit(client.get, url, headers=auth).result(timeout=8)
+            assert third.status_code == 503, (
+                "A third concurrent authenticated GET was admitted while "
+                "two full-film snapshots were already occupying temporary "
+                "storage; long-form masters can exhaust private asset disk."
+            )
+            assert third.headers.get("cache-control") == "no-store"
+            assert third.content != original
+        finally:
+            release.set()
+        for future in (first, second):
+            response = future.result(timeout=15)
+            assert response.status_code == 200
+            assert response.content == original
