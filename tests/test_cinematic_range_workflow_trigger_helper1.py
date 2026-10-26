@@ -55,9 +55,10 @@ def test_private_master_range_workflow_tracks_imported_cinematic_models_and_comp
         source,
     )
     assert match, "Strict real-media QA needs explicit pull_request paths"
-    watched = set(
-        re.findall(r"(?m)^      - ['\\\"]?([^'\\\"\\n]+)['\\\"]?$", match["entries"])
-    )
+    watched = {
+        line.split(" - ", 1)[1].strip().strip("'\\\"")
+        for line in match["entries"].splitlines()
+    }
     directly_imported = {
         "app/video/cinematic_models.py",
         "app/video/cinematic_compiler.py",
