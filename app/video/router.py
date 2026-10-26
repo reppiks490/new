@@ -166,7 +166,22 @@ def _asset_byte_ranges(header: str, size: int) -> list[tuple[int, int]]:
                 raise ValueError('Unsatisfiable byte range')
             end = min(end, size - 1)
         ranges.append((start, end))
-    return ranges
+
+    # RFC 7233 permits coalescing overlapping/adjacent ranges. Without it,
+    # one authenticated request can retransmit a large private master up to
+    # sixteen times using duplicate full-file spans. Preserve the order of
+    # the first requested member of each merged group for mobile clients.
+    ordered = sorted(enumerate(ranges), key=lambda item: item[1][0])
+    merged = []
+    for original_index, (start, end) in ordered:
+        if merged and start <= merged[-1][2] + 1:
+            first_index, first_start, first_end = merged[-1]
+            merged[-1] = (
+                min(first_index, original_index), first_start, max(first_end, end),
+            )
+        else:
+            merged.append((original_index, start, end))
+    return [(start, end) for _, start, end in sorted(merged)]
 
 
 class _OpenedAssetResponse(Response):
