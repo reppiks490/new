@@ -264,6 +264,9 @@ _SAFE_NESTED_MP4_CHILDREN = {
     # arbitrary opaque children inside them must not escape strict auditing.
     b"udta": frozenset({b"meta", b"free"}),
     b"edts": frozenset({b"elst", b"free"}),
+    # ISO-BMFF meta is a FullBox: skip its four version/flags bytes before
+    # validating immediate children; arbitrary opaque siblings are not safe.
+    b"meta": frozenset({b"hdlr", b"ilst", b"keys", b"free"}),
 }
 
 
@@ -342,9 +345,28 @@ def _opaque_mp4_moov_child_payload_present(
                         parent_kind, child_kind, child_size, child_header_size
                     ):
                         return False
+                    if child_kind == b"meta" and not meta_container_children_clean(
+                        child_position, child_size, child_header_size
+                    ):
+                        return False
                     child_position += child_size
                 # Reaching the iteration cap without reaching the end is NOT clean.
                 return child_position == child_limit
+
+            def meta_container_children_clean(
+                meta_position: int, meta_size: int, meta_header_size: int
+            ) -> bool:
+                # ISO-BMFF meta is a FullBox with four version/flags bytes.
+                # Treat unexpected flags or truncated headers as unattested,
+                # without copying or logging metadata payloads.
+                if meta_size < meta_header_size + 4:
+                    return False
+                handle.seek(meta_position + meta_header_size)
+                if handle.read(4) != bytes(4):
+                    return False
+                return allowed_container_children_clean(
+                    b"meta", meta_position, meta_size, meta_header_size + 4
+                )
 
             position = 0
             moov_position = None
@@ -372,6 +394,10 @@ def _opaque_mp4_moov_child_payload_present(
                 if size is None:
                     return True
                 if _unexpected_nested_mp4_child(b"moov", kind, size, header_size):
+                    return True
+                if kind == b"meta" and not meta_container_children_clean(
+                    position, size, header_size
+                ):
                     return True
                 if kind == b"udta" and not allowed_container_children_clean(
                     b"udta", position, size, header_size
