@@ -141,6 +141,49 @@ def _open_private_asset(path):
         raise
 
 
+
+def _snapshot_private_asset(fd, opened, directory):
+    """Create an unlinked, owner-private byte snapshot before HTTP headers.
+
+    A pinned source descriptor prevents path swaps but not same-inode writes.
+    Read in bounded chunks, and reject concurrent rewrites using the original
+    descriptor's high-resolution identity/change metadata. TemporaryFile is
+    unlinked (or opened with O_TMPFILE) on POSIX; its duplicate descriptor
+    survives the context manager until the ASGI response closes it.
+
+    This intentionally trades one temporary on-disk copy per GET for stable
+    bytes. Large-film disk/throughput limits require lead review before merge.
+    """
+    import tempfile
+
+    def identity(stat_result):
+        return (
+            stat_result.st_dev, stat_result.st_ino, stat_result.st_size,
+            stat_result.st_mtime_ns, stat_result.st_ctime_ns,
+        )
+
+    expected = identity(opened)
+    if identity(os.fstat(fd)) != expected:
+        raise ValueError('Asset changed before private snapshot')
+    with tempfile.TemporaryFile(mode='w+b', dir=directory) as temporary:
+        offset = 0
+        while offset < opened.st_size:
+            count = min(256 * 1024, opened.st_size - offset)
+            if hasattr(os, 'pread'):
+                chunk = os.pread(fd, count, offset)
+            else:
+                os.lseek(fd, offset, os.SEEK_SET)
+                chunk = os.read(fd, count)
+            if not chunk:
+                raise ValueError('Asset truncated during private snapshot')
+            temporary.write(chunk)
+            offset += len(chunk)
+        if identity(os.fstat(fd)) != expected:
+            raise ValueError('Asset changed during private snapshot')
+        temporary.flush()
+        return os.dup(temporary.fileno())
+
+
 def _asset_byte_ranges(header: str, size: int) -> list[tuple[int, int]]:
     """Parse bounded RFC 7233 byte ranges; reject malformed/unsatisfiable input."""
     import re
@@ -329,6 +372,22 @@ def asset(filename: str, request: Request):
                     'Content-Range': f'bytes */{opened.st_size}',
                 },
             )
+        # Freeze bytes before response.start: an opened inode can otherwise be
+        # rewritten by a concurrent local process while pread is streaming.
+        # HEAD does not send a body, so it requires no on-disk snapshot.
+        if request.method != 'HEAD':
+            try:
+                snapshot_fd = _snapshot_private_asset(fd, opened, path.parent)
+            except ValueError as exc:
+                raise HTTPException(
+                    409, 'Private asset changed while preparing response',
+                ) from exc
+            except OSError as exc:
+                raise HTTPException(
+                    503, 'Private asset snapshot unavailable',
+                ) from exc
+            original_fd, fd = fd, snapshot_fd
+            os.close(original_fd)
         return _OpenedAssetResponse(
             fd, opened.st_size, ranges, media_type, headers,
             status_code=206 if ranges else 200,
