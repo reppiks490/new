@@ -1,40 +1,70 @@
-name: Cinematic 600s synthetic master acceptance QA93
+name: Cinematic 600s synthetic master acceptance QA93 / QA94
 
 on:
   pull_request:
     paths:
       - 'tests/test_cinematic_600s_synthetic_media_qa93.py'
+      - 'tests/test_cinematic_600s_workflow_provisioning_qa94.py'
+      - '.github/qa/Dockerfile.cinematic-600s'
       - '.github/workflows/cinematic-600s-synthetic-media-qa93.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   full-duration-ffmpeg:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      CINEMATIC_LONGFORM_MEDIA_QA: '1'
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Require local FFmpeg and FFprobe
+      # Reuse the proven container-side FFmpeg provisioning pattern from
+      # Helper 1 #179. Do not depend on the stalled host Ubuntu apt mirror.
+      # The QA-only image is not a production deployment or model runtime.
+      - name: Build isolated FFmpeg + Python 3.12 QA image
         run: |
           set -euo pipefail
-          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends ffmpeg
-          fi
-          ffmpeg -version | sed -n '1p'
-          ffprobe -version | sed -n '1p'
+          docker build --file .github/qa/Dockerfile.cinematic-600s \
+            --tag cinematic-600s-base:qa .
 
-      - name: Install application and tests
+      # tests/ is excluded from the repository's .dockerignore. Stage only
+      # the synthetic test in a temporary build context, without altering
+      # the production image, .dockerignore, or other agents' files.
+      - name: Stage synthetic QA93 test in isolated container
         run: |
-          python -m pip install -e '.[dev]'
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-600s-qa"
+          cp tests/test_cinematic_600s_synthetic_media_qa93.py \
+            "$RUNNER_TEMP/cinematic-600s-qa/test_cinematic_600s_synthetic_media_qa93.py"
+          docker build --file - --tag cinematic-600s-tests:qa \
+            "$RUNNER_TEMP/cinematic-600s-qa" <<'DOCKERFILE'
+          FROM cinematic-600s-base:qa
+          USER root
+          RUN mkdir -p /app/tests && chown -R 10001:10001 /app/tests
+          COPY test_cinematic_600s_synthetic_media_qa93.py /app/tests/test_cinematic_600s_synthetic_media_qa93.py
+          USER 10001:10001
+          DOCKERFILE
 
-      - name: Assemble, verify and fully decode 600s of synthetic local media
-        run: >-
-          python -m pytest -q -W error
-          tests/test_cinematic_600s_synthetic_media_qa93.py
+      - name: Assemble, hash, fully decode and inspect synthetic 600-second master
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 512 --memory 2g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=768m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+            --env CINEMATIC_LONGFORM_MEDIA_QA=1 \
+            --entrypoint python cinematic-600s-tests:qa \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_600s_synthetic_media_qa93.py \
+            2>&1 | tee test-results/cinematic-600s-qa94.txt
+
+      - name: Preserve exact-commit synthetic long-form evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-600s-qa94
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
