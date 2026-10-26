@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import uuid
@@ -288,7 +289,16 @@ def asset(filename: str, request: Request):
         from email.utils import formatdate
 
         media_type = 'video/mp4' if extension == 'mp4' else 'image/png'
-        etag = f'"{opened.st_mtime_ns:x}-{opened.st_size:x}"'
+        # A same-length atomic master replacement can preserve mtime while
+        # changing the file identity. Include the opened inode and change
+        # time in an opaque validator, not just the public mtime/size pair.
+        # This is not a cryptographic content attestation: an in-place
+        # concurrent rewrite still needs immutable media publication.
+        identity = (
+            opened.st_dev, opened.st_ino, opened.st_ctime_ns,
+            opened.st_mtime_ns, opened.st_size,
+        )
+        etag = '"' + hashlib.sha256(repr(identity).encode('ascii')).hexdigest() + '"'
         last_modified = formatdate(opened.st_mtime, usegmt=True)
         headers = {
             'Cache-Control': 'no-store',
@@ -297,9 +307,12 @@ def asset(filename: str, request: Request):
             'Last-Modified': last_modified,
         }
         range_header = request.headers.get('range')
-        if range_header and request.headers.get('if-range') not in (
-            None, etag, last_modified,
-        ):
+        # HTTP-date If-Range is not strong enough for a private master:
+        # Last-Modified rounds to seconds, allowing a replaced film to be
+        # spliced into an old byte-range download. A mismatch (including
+        # any date/weak validator) safely falls back to a complete 200.
+        if_range = request.headers.get('if-range')
+        if range_header and if_range is not None and if_range != etag:
             range_header = None
         try:
             ranges = (
