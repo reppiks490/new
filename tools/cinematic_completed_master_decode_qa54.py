@@ -534,6 +534,24 @@ def _opaque_mp4_moov_child_payload_present(
                                     media_position, media_size, media_header_size, b"mdhd"
                                 ):
                                     return True
+                                if media_kind == b"hdlr":
+                                    # QA83: FFprobe exposes only the NUL-terminated
+                                    # handler_name. Extra bytes after the terminator
+                                    # remain hidden even when decoding and SHA match.
+                                    # Known FFmpeg video/audio names are 12 bytes
+                                    # followed by one NUL. Read only structural
+                                    # FullBox fields, never the private name bytes.
+                                    if media_size != media_header_size + 24 + 13:
+                                        return True
+                                    handle.seek(media_position + media_header_size)
+                                    handler_header = handle.read(24)
+                                    if (
+                                        len(handler_header) != 24
+                                        or handler_header[:8] != bytes(8)
+                                        or handler_header[8:12] not in (b"vide", b"soun")
+                                        or handler_header[12:] != bytes(12)
+                                    ):
+                                        return True
                                 if media_kind == b"minf":
                                     # FFprobe does not report opaque media-
                                     # information children. Traverse headers
