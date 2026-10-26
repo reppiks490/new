@@ -264,6 +264,8 @@ _SAFE_NESTED_MP4_CHILDREN = {
     # arbitrary opaque children inside them must not escape strict auditing.
     b"udta": frozenset({b"meta", b"free"}),
     b"edts": frozenset({b"elst", b"free"}),
+    # QA84: FFmpeg data-information containers must not carry opaque siblings.
+    b"dinf": frozenset({b"dref", b"free"}),
     # ISO-BMFF meta is a FullBox: skip its four version/flags bytes before
     # validating immediate children; arbitrary opaque siblings are not safe.
     b"meta": frozenset({b"hdlr", b"ilst", b"keys", b"free"}),
@@ -569,6 +571,12 @@ def _opaque_mp4_moov_child_payload_present(
                                         if _unexpected_nested_mp4_child(
                                             b"minf", info_kind, info_size, info_header_size
                                         ):
+                                            return True
+                                        if info_kind == b"dinf" and not allowed_container_children_clean(
+                                            b"dinf", info_position, info_size, info_header_size
+                                        ):
+                                            # FFprobe does not expose unknown immediate
+                                            # dinf children; strict acceptance must fail.
                                             return True
                                         if info_kind == b"vmhd":
                                             # QA82: ISO-BMFF video media header has a
