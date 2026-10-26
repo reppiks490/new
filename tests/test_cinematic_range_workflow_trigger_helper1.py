@@ -127,7 +127,7 @@ def test_private_master_range_workflow_runs_on_integrated_branch_push():
     )
     source = workflow.read_text(encoding="utf-8")
     match = re.search(
-        r"(?m)^on:\\n  push:\\n    branches:\\n(?P<branches>(?:      - .+\\n)+)",
+        r"(?m)^on:\n  push:\n    branches:\n(?P<branches>(?:      - .+\n)+)",
         source,
     )
     assert match, (
@@ -135,7 +135,7 @@ def test_private_master_range_workflow_runs_on_integrated_branch_push():
         "genuine H.264/FFprobe/full-decode HTTP gate at the combined SHA."
     )
     branches = {
-        line.split(" - ", 1)[1].strip().strip("'\\\"")
+        line.split(" - ", 1)[1].strip().strip("'\"")
         for line in match["branches"].splitlines()
     }
     assert "feat/cinematic-orchestrator-v1" in branches, (
