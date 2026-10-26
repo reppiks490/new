@@ -1,0 +1,40 @@
+name: Cinematic 600s synthetic master acceptance QA93
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_600s_synthetic_media_qa93.py'
+      - '.github/workflows/cinematic-600s-synthetic-media-qa93.yml'
+  workflow_dispatch:
+
+jobs:
+  full-duration-ffmpeg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CINEMATIC_LONGFORM_MEDIA_QA: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Require local FFmpeg and FFprobe
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | sed -n '1p'
+          ffprobe -version | sed -n '1p'
+
+      - name: Install application and tests
+        run: |
+          python -m pip install -e '.[dev]'
+
+      - name: Assemble, verify and fully decode 600s of synthetic local media
+        run: >-
+          python -m pytest -q -W error
+          tests/test_cinematic_600s_synthetic_media_qa93.py
