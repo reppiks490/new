@@ -215,11 +215,13 @@ def _claim_next() -> dict | None:
         identifier, raw = row
         payload = json.loads(raw)
         # FFmpeg progress is not instrumented yet: do not invent a percentage.
+        # Use one claim instant for polling, persisted JSON, and SQLite ordering.
+        now = _now()
         payload.update(status="running", stage="Assembling", progress=None,
-                       started_at=_now(), updated_at=_now())
+                       started_at=now, updated_at=now)
         db.execute(
             "UPDATE records SET data=?,updated=? WHERE id=? AND kind=?",
-            (json.dumps(payload, allow_nan=False), _now(), identifier, _KIND),
+            (json.dumps(payload, allow_nan=False), now, identifier, _KIND),
         )
         return {"id": identifier, **payload}
 
