@@ -454,3 +454,56 @@ def test_private_master_concurrent_full_gets_have_bounded_snapshot_admission(
             response = future.result(timeout=15)
             assert response.status_code == 200
             assert response.content == original
+
+
+@pytest.mark.parametrize(
+    ("snapshot_failure", "expected_status"),
+    [
+        (OSError(28, "Synthetic disk-full during private snapshot"), 503),
+        (ValueError("Synthetic source changed during private snapshot"), 409),
+    ],
+    ids=["disk-full", "source-changed"],
+)
+def test_private_master_snapshot_failure_is_noncacheable_and_recovers(
+    private_master, monkeypatch, snapshot_failure, expected_status,
+):
+    """A failed private snapshot must not be cached or strand stream permits.
+
+    The master is a real FFmpeg/FFprobe/full-decode H.264 assembled by the
+    fixture. Inject one deterministic filesystem failure rather than filling
+    the CI runner disk or touching owner footage; a subsequent GET must serve
+    the same SHA-attested bytes after the failed snapshot releases its slot.
+    """
+    client, auth, url, original = private_master
+    router = importlib.import_module("app.video.router")
+    original_snapshot = router._snapshot_private_asset
+    attempts = 0
+
+    def fail_once(fd, opened, directory, ranges=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise snapshot_failure
+        return original_snapshot(fd, opened, directory, ranges)
+
+    monkeypatch.setattr(router, "_snapshot_private_asset", fail_once)
+    failed = client.get(url, headers=auth)
+    assert failed.status_code == expected_status, failed.text
+    assert failed.content != original, "Failed snapshot served private media"
+    assert failed.headers.get("cache-control") == "no-store", (
+        "Transient private-master failures must never be reusable by a "
+        "browser or intermediary cache, even under disk exhaustion."
+    )
+    if expected_status == 503:
+        assert failed.headers.get("retry-after") == "1", (
+            "A temporary private-snapshot capacity failure needs an "
+            "explicit retry hint, like the concurrent-snapshot 503 path."
+        )
+
+    recovered = client.get(url, headers=auth)
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.headers.get("cache-control") == "no-store"
+    assert recovered.content == original, (
+        "Snapshot failure leaked a stream permit or corrupted master bytes."
+    )
+    assert attempts == 2
