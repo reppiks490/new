@@ -83,9 +83,11 @@ def enqueue_master_assembly(project_id: str, request: AssembleMasterRequest) -> 
     if not status["ready_for_assembly"]:
         raise MasterAssemblyNotReady("Project contains unrendered or unavailable shots")
 
-    now = _now()
     with connection() as db:
         db.execute("BEGIN IMMEDIATE")
+        # Admission timestamps must follow the serialized SQLite write lock;
+        # otherwise another writer can commit newer history before this insert.
+        now = _now()
         # The same project/revision can be requested concurrently from two devices.
         rows = db.execute(
             "SELECT id,data FROM records WHERE kind=? "
