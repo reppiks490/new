@@ -112,3 +112,33 @@ def test_private_master_range_workflow_tracks_shared_studio_persistence_and_rout
         "Shared studio persistence or routing edits could bypass real-media "
         "private master HTTP QA: " + ", ".join(missing)
     )
+
+
+def test_private_master_range_workflow_runs_on_integrated_branch_push():
+    """A merged integration commit needs strict media proof at its own SHA.
+
+    PR-only checks attest a helper's isolated head, not the final combined
+    cinematic integration tree. A push to the canonical integration branch
+    must independently execute the genuine FFmpeg/FFprobe/full-decode gate.
+    """
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github/workflows/cinematic-private-master-http-range-qa.yml"
+    )
+    source = workflow.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?m)^on:\\n  push:\\n    branches:\\n(?P<branches>(?:      - .+\\n)+)",
+        source,
+    )
+    assert match, (
+        "Strict real-media QA is PR-only: integrated branch pushes have no "
+        "genuine H.264/FFprobe/full-decode HTTP gate at the combined SHA."
+    )
+    branches = {
+        line.split(" - ", 1)[1].strip().strip("'\\\"")
+        for line in match["branches"].splitlines()
+    }
+    assert "feat/cinematic-orchestrator-v1" in branches, (
+        "Strict real-media QA must run on the canonical cinematic integration "
+        "branch, not only on isolated helper pull requests."
+    )
