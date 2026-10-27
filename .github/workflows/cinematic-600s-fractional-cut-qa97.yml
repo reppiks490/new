@@ -1,0 +1,67 @@
+name: Cinematic 600s fractional-cut QA97
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_600s_fractional_cut_qa97.py'
+      - 'app/video/cinematic_editing.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_models.py'
+      - 'app/video/storage.py'
+      - '.github/qa/Dockerfile.cinematic-600s'
+      - '.github/workflows/cinematic-600s-fractional-cut-qa97.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fractional-cut-ffmpeg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build existing isolated FFmpeg Python 3.12 test image
+        run: |
+          set -euo pipefail
+          docker build --file .github/qa/Dockerfile.cinematic-600s \
+            --tag cinematic-600s-base:qa .
+
+      - name: Stage QA97 test without modifying production files
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-600s-fractional"
+          cp tests/test_cinematic_600s_fractional_cut_qa97.py \
+            "$RUNNER_TEMP/cinematic-600s-fractional/"
+          docker build --file - --tag cinematic-600s-fractional:qa \
+            "$RUNNER_TEMP/cinematic-600s-fractional" <<'DOCKERFILE'
+          FROM cinematic-600s-base:qa
+          USER root
+          RUN mkdir -p /app/tests && chown -R 10001:10001 /app/tests
+          COPY test_cinematic_600s_fractional_cut_qa97.py /app/tests/
+          USER 10001:10001
+          DOCKERFILE
+
+      - name: Verify independent rounding oracle and real 600s assembly boundaries
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 2048 --memory 4g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=768m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+            --env CINEMATIC_FRACTIONAL_MEDIA_QA=1 \
+            --entrypoint python cinematic-600s-fractional:qa \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_600s_fractional_cut_qa97.py \
+            2>&1 | tee test-results/cinematic-600s-fractional-qa97.txt
+
+      - name: Preserve synthetic-media QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-600s-fractional-qa97
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
