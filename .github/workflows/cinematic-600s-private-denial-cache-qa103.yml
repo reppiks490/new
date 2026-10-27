@@ -1,0 +1,73 @@
+name: Cinematic 600s unauthorized Range cache QA103
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_600s_private_denial_cache_qa103.py'
+      - 'tests/test_cinematic_600s_private_http_range_qa102.py'
+      - 'docs/CINEMATIC_600S_DENIAL_CACHE_QA103.md'
+      - 'app/studio/server.py'
+      - 'app/video/router.py'
+      - 'app/video/storage.py'
+      - '.github/qa/Dockerfile.cinematic-600s'
+      - '.github/workflows/cinematic-600s-private-denial-cache-qa103.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-denial-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build isolated FFmpeg test image
+        run: |
+          set -euo pipefail
+          docker build --file .github/qa/Dockerfile.cinematic-600s \
+            --tag cinematic-600s-base:qa .
+
+      - name: Stage independent QA103 test and frozen QA102 fixture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-denial-cache-qa103"
+          cp tests/test_cinematic_600s_private_denial_cache_qa103.py \
+             tests/test_cinematic_600s_private_http_range_qa102.py \
+             "$RUNNER_TEMP/cinematic-denial-cache-qa103/"
+          docker build --file - --tag cinematic-denial-cache:qa \
+            "$RUNNER_TEMP/cinematic-denial-cache-qa103" <<'DOCKERFILE'
+          FROM cinematic-600s-base:qa
+          USER root
+          RUN mkdir -p /app/tests && chown -R 10001:10001 /app/tests
+          COPY test_cinematic_600s_private_denial_cache_qa103.py /app/tests/
+          COPY test_cinematic_600s_private_http_range_qa102.py /app/tests/
+          USER 10001:10001
+          DOCKERFILE
+
+      - name: Verify genuine 600s unauthorized Range cache policy
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 2048 --memory 4g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=768m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+            --env CINEMATIC_600S_DENIAL_CACHE_QA=1 \
+            --entrypoint python cinematic-denial-cache:qa \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_600s_private_denial_cache_qa103.py \
+            2>&1 | tee test-results/cinematic-600s-denial-cache-qa103.txt
+
+      - name: Preserve synthetic denial-cache evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-600s-denial-cache-qa103
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
