@@ -49,10 +49,10 @@ def _run_probe(executable: str, args: list[str]) -> subprocess.CompletedProcess 
 
 
 def _has_libx264_encoder(output: str) -> bool:
-    """Match an actual FFmpeg encoder listing, not a banner/help mention."""
+    """Require FFmpeg video encoder flags, not an audio/subtitle name match."""
     for line in output.splitlines():
         fields = line.split()
-        if len(fields) >= 2 and re.fullmatch(r"[A-Z.]{6}", fields[0]):
+        if len(fields) >= 2 and re.fullmatch(r"V[A-Z.]{5}", fields[0]):
             if fields[1] == "libx264":
                 return True
     return False
