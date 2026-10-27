@@ -1,0 +1,68 @@
+name: Cinematic real local FFmpeg preflight QA109
+
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_local_media_preflight_qa105.py'
+      - 'tests/test_cinematic_real_local_preflight_qa109.py'
+      - 'docs/CINEMATIC_REAL_LOCAL_PREFLIGHT_QA109_20261027.md'
+      - '.github/qa/Dockerfile.cinematic-600s'
+      - '.github/workflows/cinematic-real-local-preflight-qa109.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-local-preflight-and-synthetic-encode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build isolated FFmpeg test runtime
+        run: |
+          set -euo pipefail
+          docker build --file .github/qa/Dockerfile.cinematic-600s \
+            --tag cinematic-600s-base:qa .
+
+      - name: Stage only QA109 acceptance test
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-preflight-qa109"
+          cp tests/test_cinematic_real_local_preflight_qa109.py \
+            "$RUNNER_TEMP/cinematic-preflight-qa109/"
+          docker build --file - --tag cinematic-preflight:qa109 \
+            "$RUNNER_TEMP/cinematic-preflight-qa109" <<'DOCKERFILE'
+          FROM cinematic-600s-base:qa
+          USER root
+          RUN mkdir -p /app/tests && chown -R 10001:10001 /app/tests
+          COPY test_cinematic_real_local_preflight_qa109.py /app/tests/
+          USER 10001:10001
+          DOCKERFILE
+
+      - name: Check real toolchain metadata and encode disposable synthetic H264
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 1024 --memory 4g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=2g \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+            --env CINEMATIC_REAL_PREFLIGHT_QA109=1 \
+            --entrypoint python cinematic-preflight:qa109 \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_real_local_preflight_qa109.py \
+            2>&1 | tee test-results/cinematic-real-local-preflight-qa109.txt
+
+      - name: Preserve nonprivate synthetic acceptance log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-real-local-preflight-qa109
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
