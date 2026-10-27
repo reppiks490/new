@@ -43,7 +43,7 @@ def test_undecodable_tool_output_fails_closed_without_exposing_bytes(
         stdout = (
             " V....D libx264 H264 encoder\n"
             if argv[-1] == "-encoders"
-            else "synthetic version"
+            else ("ffprobe version 7.0" if "ffprobe" in argv[0] else "ffmpeg version 7.0")
         )
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
@@ -67,7 +67,7 @@ def test_undecodable_binary_lookup_is_a_safe_blocker(monkeypatch):
     monkeypatch.setattr(preflight.shutil, "which", bad_which)
     monkeypatch.setattr(
         preflight.subprocess, "run",
-        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "synthetic version", ""),
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "ffprobe version 7.0", ""),
     )
     report = preflight.audit_local_media_runtime(workspace=None)
     statuses = {item["name"]: item["status"] for item in report["checks"]}
