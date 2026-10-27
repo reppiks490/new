@@ -34,9 +34,13 @@ async def private_api(request: Request, call_next):
         if request.method == 'OPTIONS':
             return await call_next(request)
         secret = os.getenv('CHARACTER3D_STUDIO_TOKEN')
-        supplied = request.headers.get('Authorization','').removeprefix('Bearer ')
+        authorization = request.headers.get('Authorization', '')
+        scheme, separator, supplied = authorization.partition(' ')
+        # A bare secret is not a Bearer credential. HTTP auth schemes are
+        # case-insensitive, but the supplied token must match byte-for-byte.
+        valid_bearer = bool(separator) and scheme.lower() == 'bearer'
         if secret:
-            if not hmac.compare_digest(secret.encode(), supplied.encode()):
+            if not valid_bearer or not hmac.compare_digest(secret.encode(), supplied.encode()):
                 return JSONResponse({'detail':'Studio access token required'},status_code=401, headers={'Cache-Control': 'no-store'})
         elif not request.client or request.client.host not in {'127.0.0.1','::1','testclient'}:
             return JSONResponse({'detail':'Remote API access requires CHARACTER3D_STUDIO_TOKEN'},status_code=403, headers={'Cache-Control': 'no-store'})
