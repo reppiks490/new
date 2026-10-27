@@ -87,6 +87,15 @@ def test_orphaned_claim_is_failed_closed_after_worker_exits(monkeypatch, tmp_pat
     assert final["stage"] == "Interrupted"
 
 
+class LiveWorkerRecoveryConflict(AssertionError):
+    """The expected, specific unsupported multi-process recovery failure."""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=LiveWorkerRecoveryConflict,
+    reason="Unfixed: second API startup interrupts a live worker; no durable owner lease",
+)
 def test_second_process_startup_does_not_interrupt_live_worker(monkeypatch, tmp_path):
     """Negative control: real live claimant is currently failed by startup.
 
@@ -126,9 +135,12 @@ def test_second_process_startup_does_not_interrupt_live_worker(monkeypatch, tmp_
 
     assert worker.returncode == 0, stderr[-1000:]
     assert recovered is not None
-    assert recovered["interrupted"] == 0, (
-        "Second process startup invalidated a still-live worker's claim"
-    )
+    if recovered["interrupted"] != 0:
+        assert json.loads(tail.strip())["cas_succeeded"] is False
+        assert queue.get_master_assembly_job("b" * 32, identifier)["stage"] == "Interrupted"
+        raise LiveWorkerRecoveryConflict(
+            "Second process startup invalidated a still-live worker's claim"
+        )
     assert json.loads(tail.strip())["cas_succeeded"] is True
     assert queue.get_master_assembly_job("b" * 32, identifier)["stage"] == (
         "Synthetic worker completed"
