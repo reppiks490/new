@@ -63,7 +63,7 @@ def _has_expected_version_banner(result: subprocess.CompletedProcess | None, nam
     return bool(
         result is not None
         and isinstance(result.stdout, str)
-        and re.match(rf"^{re.escape(name)} version(?:\\s|$)", result.stdout)
+        and re.match(rf"^{re.escape(name)} version(?:\s|$)", result.stdout)
     )
 
 
