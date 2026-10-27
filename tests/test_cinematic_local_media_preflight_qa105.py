@@ -27,7 +27,7 @@ def _fake_environment(monkeypatch, *, codec=True, version=True, free_gib=24):
         assert kwargs["timeout"] <= 10
         assert kwargs["check"] is False
         if args[-1] == "-version":
-            return subprocess.CompletedProcess(args, 0 if version else 1, stdout="synthetic version", stderr="")
+            return subprocess.CompletedProcess(args, 0 if version else 1, stdout=("ffprobe" if args[0].endswith("ffprobe") else "ffmpeg") + " version 7.0 synthetic", stderr="")
         assert args[-2:] == ["-hide_banner", "-encoders"]
         encoder_lines = " V....D libx264             H.264 synthetic encoder\n" if codec else " V....D mpeg4              MPEG4\n"
         return subprocess.CompletedProcess(args, 0, stdout=encoder_lines, stderr="")
