@@ -1,0 +1,42 @@
+name: Cinematic independent-process SQLite admission QA115
+
+on:
+  pull_request:
+    paths:
+      - 'app/studio/storage.py'
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'app/video/cinematic_requests.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/storage.py'
+      - 'tests/test_cinematic_crossprocess_admission_qa115.py'
+      - 'docs/CINEMATIC_CROSSPROCESS_ADMISSION_QA115_20261027.md'
+      - '.github/workflows/cinematic-crossprocess-admission-qa115.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install local application and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Verify real independent-process SQLite admission only
+        run: |
+          python -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_crossprocess_admission_qa115.py
