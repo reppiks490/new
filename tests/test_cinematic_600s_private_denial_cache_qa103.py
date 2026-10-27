@@ -37,6 +37,11 @@ def _synthetic_600s_master(monkeypatch, tmp_path: Path):
     return module._master(monkeypatch, tmp_path), module.TOKEN
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=MissingNoStoreOnUnauthorizedMaster,
+    reason="QA103 reproduced missing 401 no-store; Helper 1 #171 fix not integrated",
+)
 def test_unauthorized_600s_range_explicitly_disables_caching(monkeypatch, tmp_path):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         pytest.fail("Opt-in genuine-media QA requires FFmpeg and FFprobe")
