@@ -58,6 +58,15 @@ def _has_libx264_encoder(output: str) -> bool:
     return False
 
 
+def _has_expected_version_banner(result: subprocess.CompletedProcess | None, name: str) -> bool:
+    """Check the first metadata line; exit code zero alone proves no tool identity."""
+    return bool(
+        result is not None
+        and isinstance(result.stdout, str)
+        and re.match(rf"^{re.escape(name)} version(?:\\s|$)", result.stdout)
+    )
+
+
 def audit_local_media_runtime(
     *,
     workspace: str | Path | None,
@@ -77,7 +86,7 @@ def audit_local_media_runtime(
     checks: list[dict[str, str]] = []
     ffmpeg_bin = _resolve_executable(ffmpeg)
     ffmpeg_version = _run_probe(ffmpeg_bin, ["-version"]) if ffmpeg_bin else None
-    if ffmpeg_version is None:
+    if not _has_expected_version_banner(ffmpeg_version, "ffmpeg"):
         checks.append(_check("ffmpeg_binary", "blocked", "FFMPEG_UNRESPONSIVE"))
         checks.append(_check("h264_encoder", "not_checked", "FFMPEG_NOT_VERIFIED"))
     else:
@@ -90,7 +99,7 @@ def audit_local_media_runtime(
 
     ffprobe_bin = _resolve_executable(ffprobe)
     ffprobe_version = _run_probe(ffprobe_bin, ["-version"]) if ffprobe_bin else None
-    if ffprobe_version is None:
+    if not _has_expected_version_banner(ffprobe_version, "ffprobe"):
         checks.append(_check("ffprobe_binary", "blocked", "FFPROBE_UNRESPONSIVE"))
     else:
         checks.append(_check("ffprobe_binary", "passed", "FFPROBE_RESPONSIVE"))
