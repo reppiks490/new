@@ -1,0 +1,42 @@
+name: Cinematic independent-process cancellation QA117
+
+on:
+  pull_request:
+    paths:
+      - 'app/studio/storage.py'
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'app/video/cinematic_requests.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/storage.py'
+      - 'tests/test_cinematic_crossprocess_cancellation_qa117.py'
+      - 'docs/CINEMATIC_CROSSPROCESS_CANCELLATION_QA117_20261027.md'
+      - '.github/workflows/cinematic-crossprocess-cancellation-qa117.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cancellation-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install application and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Verify cross-process cancellation and private ownership
+        run: |
+          python -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_crossprocess_cancellation_qa117.py
