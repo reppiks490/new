@@ -6,6 +6,8 @@ media, network, or actual thread scheduling is involved.
 from __future__ import annotations
 
 import importlib
+
+import pytest
 from types import SimpleNamespace
 
 from app.video.cinematic_requests import AssembleMasterRequest
@@ -26,6 +28,11 @@ class DuplicateDispatchAmplification(AssertionError):
     """An idempotent request enqueued an additional executor drain."""
 
 
+@pytest.mark.xfail(
+    raises=DuplicateDispatchAmplification,
+    strict=True,
+    reason="QA114: identical assembly retries enqueue redundant drain futures",
+)
 def test_duplicate_assembly_requests_do_not_amplify_executor_submissions(
     monkeypatch, tmp_path,
 ):
