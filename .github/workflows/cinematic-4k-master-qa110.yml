@@ -1,0 +1,70 @@
+name: Cinematic genuine 4K master acceptance QA110
+
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_models.py'
+      - 'app/video/cinematic_editing.py'
+      - 'tests/test_cinematic_4k_master_qa110.py'
+      - 'docs/CINEMATIC_4K_MASTER_QA110_20261027.md'
+      - '.github/qa/Dockerfile.cinematic-600s'
+      - '.github/workflows/cinematic-4k-master-qa110.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-4k-character3d-master:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build isolated offline FFmpeg test runtime
+        run: |
+          set -euo pipefail
+          docker build --file .github/qa/Dockerfile.cinematic-600s \
+            --tag cinematic-600s-base:qa .
+
+      - name: Stage only QA110 synthetic acceptance
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-4k-qa110"
+          cp tests/test_cinematic_4k_master_qa110.py \
+            "$RUNNER_TEMP/cinematic-4k-qa110/"
+          docker build --file - --tag cinematic-4k:qa110 \
+            "$RUNNER_TEMP/cinematic-4k-qa110" <<'DOCKERFILE'
+          FROM cinematic-600s-base:qa
+          USER root
+          RUN mkdir -p /app/tests && chown -R 10001:10001 /app/tests
+          COPY test_cinematic_4k_master_qa110.py /app/tests/
+          USER 10001:10001
+          DOCKERFILE
+
+      - name: Assemble, probe, fully decode and seek genuine synthetic 4K master
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 1024 --memory 4g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=2g \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+            --env CINEMATIC_4K_MASTER_QA110=1 \
+            --entrypoint python cinematic-4k:qa110 \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_4k_master_qa110.py \
+            2>&1 | tee test-results/cinematic-4k-master-qa110.txt
+
+      - name: Preserve nonprivate synthetic QA log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-4k-master-qa110
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
