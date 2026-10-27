@@ -141,7 +141,14 @@ def test_600s_assembled_master_authenticated_http_ranges(monkeypatch, tmp_path):
             assert response.headers["content-range"] == f"bytes {start}-{end}/{size}"
             assert response.headers["content-type"].startswith("video/mp4")
             assert response.headers["cache-control"] == "no-store"
-            assert response.content == _expected_range(master, start, end)
+            expected = _expected_range(master, start, 1024)
+            if response.content != expected:
+                mismatch = next((i for i, (a, b) in enumerate(zip(response.content, expected)) if a != b), None)
+                pytest.fail(
+                    f"Range {header} body mismatch at byte {mismatch}; "
+                    f"received={len(response.content)} expected={len(expected)}; "
+                    f"head={response.content[:12].hex()} vs {expected[:12].hex()}"
+                )
             assert len(response.content) == 1024
 
     # This is in-process authenticated HTTP acceptance, not an iOS/Android
