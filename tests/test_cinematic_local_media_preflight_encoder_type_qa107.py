@@ -41,7 +41,7 @@ def test_readiness_report_fails_closed_on_audio_only_libx264_listing(monkeypatch
         if argv[-1] == "-encoders":
             output = f" A..... libx264 {private}\n V....D libx264rgb RGB only\n"
         else:
-            output = "synthetic version"
+            output = ("ffprobe version 7.0" if argv[0].endswith("ffprobe") else "ffmpeg version 7.0")
         return subprocess.CompletedProcess(argv, 0, stdout=output, stderr="")
 
     monkeypatch.setattr(preflight.subprocess, "run", fake_run)
