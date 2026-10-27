@@ -1,0 +1,66 @@
+name: Cinematic source audio acceptance QA100
+
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_source_audio_qa100.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_editing.py'
+      - 'app/video/storage.py'
+      - '.github/qa/Dockerfile.cinematic-600s'
+      - '.github/workflows/cinematic-source-audio-qa100.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-source-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build existing isolated local FFmpeg image
+        run: |
+          set -euo pipefail
+          docker build --file .github/qa/Dockerfile.cinematic-600s \
+            --tag cinematic-600s-base:qa .
+
+      - name: Stage QA100 test in separate image
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-audio-qa100"
+          cp tests/test_cinematic_source_audio_qa100.py \
+            "$RUNNER_TEMP/cinematic-audio-qa100/"
+          docker build --file - --tag cinematic-source-audio:qa \
+            "$RUNNER_TEMP/cinematic-audio-qa100" <<'DOCKERFILE'
+          FROM cinematic-600s-base:qa
+          USER root
+          RUN mkdir -p /app/tests && chown -R 10001:10001 /app/tests
+          COPY test_cinematic_source_audio_qa100.py /app/tests/
+          USER 10001:10001
+          DOCKERFILE
+
+      - name: Run actual Character3D assembly with two genuine synthetic AAC sources
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 2048 --memory 4g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=768m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+            --env CINEMATIC_SOURCE_AUDIO_QA=1 \
+            --entrypoint python cinematic-source-audio:qa \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_source_audio_qa100.py \
+            2>&1 | tee test-results/cinematic-source-audio-qa100.txt
+
+      - name: Preserve synthetic source-audio evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-source-audio-qa100
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
