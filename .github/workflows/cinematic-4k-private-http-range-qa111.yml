@@ -1,0 +1,72 @@
+name: Cinematic genuine 4K private HTTP Range QA111
+
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_models.py'
+      - 'app/video/router.py'
+      - 'app/video/storage.py'
+      - 'app/studio/server.py'
+      - 'tests/test_cinematic_4k_private_http_range_qa111.py'
+      - 'docs/CINEMATIC_4K_PRIVATE_HTTP_RANGE_QA111_20261027.md'
+      - '.github/qa/Dockerfile.cinematic-600s'
+      - '.github/workflows/cinematic-4k-private-http-range-qa111.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-4k-private-range:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build isolated FFmpeg test runtime
+        run: |
+          set -euo pipefail
+          docker build --file .github/qa/Dockerfile.cinematic-600s \
+            --tag cinematic-600s-base:qa .
+
+      - name: Stage only QA111 synthetic private HTTP acceptance
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cinematic-4k-private-qa111"
+          cp tests/test_cinematic_4k_private_http_range_qa111.py \
+            "$RUNNER_TEMP/cinematic-4k-private-qa111/"
+          docker build --file - --tag cinematic-4k-private:qa111 \
+            "$RUNNER_TEMP/cinematic-4k-private-qa111" <<'DOCKERFILE'
+          FROM cinematic-600s-base:qa
+          USER root
+          RUN mkdir -p /app/tests && chown -R 10001:10001 /app/tests
+          COPY test_cinematic_4k_private_http_range_qa111.py /app/tests/
+          USER 10001:10001
+          DOCKERFILE
+
+      - name: Verify actual 4K assembly over private authenticated byte ranges
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 1024 --memory 4g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=2g \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=512m,uid=10001,gid=10001 \
+            --env CINEMATIC_4K_PRIVATE_RANGE_QA111=1 \
+            --entrypoint python cinematic-4k-private:qa111 \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_4k_private_http_range_qa111.py \
+            2>&1 | tee test-results/cinematic-4k-private-range-qa111.txt
+
+      - name: Preserve nonprivate synthetic QA log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-4k-private-http-range-qa111
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
