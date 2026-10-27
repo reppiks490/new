@@ -57,6 +57,37 @@ def _color(index: int):
             32 + 64 * (code % 4))
 
 
+
+def _balanced_selector(positions):
+    """Bound FFmpeg expression depth; 179 left-associative '+' terms fail."""
+    terms = [f"eq(n\\,{frame})" for frame in positions]
+    assert terms
+    while len(terms) > 1:
+        terms = [
+            f"max({terms[index]}\\,{terms[index + 1]})"
+            if index + 1 < len(terms) else terms[index]
+            for index in range(0, len(terms), 2)
+        ]
+    return "select=" + terms[0]
+
+
+def test_balanced_selector_accepts_179_terms_with_real_ffmpeg(tmp_path):
+    """Small synthetic negative-control for FFmpeg's expression-depth ceiling."""
+    if not shutil.which("ffmpeg"):
+        pytest.fail("Dedicated media QA requires ffmpeg")
+    sample = tmp_path / "selector-control.mp4"
+    subprocess.run([
+        "ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi",
+        "-i", "color=c=red:s=16x16:r=24:d=2",
+        "-c:v", "mpeg4", str(sample),
+    ], check=True, capture_output=True, timeout=90)
+    decoded = subprocess.run([
+        "ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(sample),
+        "-an", "-vf", _balanced_selector(range(179)),
+        "-vsync", "0", "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
+    ], check=True, capture_output=True, timeout=90).stdout
+    assert len(decoded) == 48 * 16 * 16 * 3
+
 def test_600s_fractional_cut_application_assembly(monkeypatch, tmp_path: Path):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         pytest.fail("Dedicated media QA requires ffmpeg and ffprobe")
@@ -162,7 +193,7 @@ def test_600s_fractional_cut_application_assembly(monkeypatch, tmp_path: Path):
         start = end
     assert len(expected) == 179
     positions = sorted(expected)
-    selector = "select=" + "+".join(f"eq(n\\,{frame})" for frame in positions)
+    selector = _balanced_selector(positions)
     decoded = subprocess.run([
         "ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(master),
         "-an", "-vf", selector + ",scale=1:1:flags=area",
