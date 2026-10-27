@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'tests/test_cinematic_source_audio_qa100.py'
+      - 'docs/CINEMATIC_SOURCE_AUDIO_QA100.md'
       - 'app/video/cinematic_service.py'
       - 'app/video/cinematic_editing.py'
       - 'app/video/storage.py'
