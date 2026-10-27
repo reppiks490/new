@@ -10,6 +10,9 @@ on:
       - 'app/video/storage.py'
       - '.github/qa/Dockerfile.cinematic-600s'
       - '.github/workflows/cinematic-600s-fractional-cut-qa97.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
   workflow_dispatch:
 
 permissions:
