@@ -36,6 +36,24 @@ and is not evidence that audio was exercised. A strict xfail, if added after
 a test-first reproduction, **documents an unresolved capability gap**;
 it does not mean audio preservation passed.
 
+## Test-first RED and preserved expected failure
+
+Test-only commit `e64c18dab907e16b381ff2539993d2b3ff7e0c52`
+ran dedicated [genuine synthetic-media CI #40450976072](https://github.com/reppiks490/new/actions/runs/40450976072).
+The test created and independently decoded both AAC source tones, assembled
+the actual Character3D master, confirmed 240 video frames / 10 seconds and
+full video decode, then failed **specifically** at output audio verification:
+`AssertionError: Source AAC streams were discarded from the assembled master`
+(`assert []`). This is an application-level audio capability gap, not a
+mock-only result or a production fix.
+
+After RED, the test was marked `strict xfail` restricted to
+`SourceAudioDiscarded`; it additionally checks that a silent master reports
+`has_audio=False`. Unrelated failures still fail CI. A future implementation
+must remove the xfail marker after demonstrating passing source-audio
+continuity and updating the product audio policy. Final-commit CI must be
+verified separately.
+
 ## Implementation proposal — lead review required
 
 1. Decide explicit audio policy: source audio vs dialogue/music tracks,
