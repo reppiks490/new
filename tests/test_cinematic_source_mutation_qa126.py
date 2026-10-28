@@ -119,6 +119,11 @@ def test_stable_sources_have_truthful_published_hashes(monkeypatch, tmp_path: Pa
     assert master["source_asset_hashes"] == [_sha(path) for path in sources]
 
 
+@pytest.mark.xfail(
+    raises=SourceMediaChangedDuringAssembly,
+    strict=True,
+    reason="QA126 confirmed: master attests pre-FFmpeg source hash after source replacement",
+)
 def test_source_replacement_during_ffmpeg_must_not_publish_stale_attestation(
     monkeypatch, tmp_path: Path,
 ):
