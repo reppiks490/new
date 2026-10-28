@@ -1,0 +1,44 @@
+name: Cinematic source-mutation provenance QA126
+
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_service.py'
+      - 'app/video/storage.py'
+      - 'tests/test_cinematic_source_mutation_qa126.py'
+      - '.github/workflows/cinematic-source-mutation-qa126.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-mutation-provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_SOURCE_MUTATION_QA126: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install offline FFmpeg and FFprobe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
+      - name: Install application and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Verify stable control and deterministic source replacement
+        run: python -m pytest -q -W error -p no:cacheprovider tests/test_cinematic_source_mutation_qa126.py
