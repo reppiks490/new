@@ -1,0 +1,49 @@
+name: Cinematic cross-process real-media HTTP QA124
+
+on:
+  pull_request:
+    paths:
+      - 'app/studio/server.py'
+      - 'app/studio/storage.py'
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/router.py'
+      - 'app/video/storage.py'
+      - 'tests/test_cinematic_crossprocess_realmedia_http_qa124.py'
+      - '.github/workflows/cinematic-crossprocess-realmedia-http-qa124.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crossprocess-realmedia-http:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_CROSSPROCESS_REALMEDIA_QA124: '1'
+      CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install offline FFmpeg and FFprobe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
+      - name: Install application and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Verify independent SQLite worker, genuine synthetic MP4, and private HTTP
+        run: python -m pytest -q -W error -p no:cacheprovider tests/test_cinematic_crossprocess_realmedia_http_qa124.py
