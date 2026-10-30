@@ -4,9 +4,13 @@ on:
   pull_request:
     paths:
       - 'app/video/cinematic_service.py'
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'app/video/cinematic_editing.py'
       - 'app/video/cinematic_requests.py'
       - 'app/video/storage.py'
       - 'tests/test_cinematic_real_media_integration.py'
+      - 'tests/test_cinematic_async_real_media_integration.py'
+      - 'tests/test_cinematic_master_frame_precision.py'
       - '.github/workflows/cinematic-media-acceptance.yml'
   workflow_dispatch:
 
@@ -40,4 +44,8 @@ jobs:
           python -m pip install -e '.[dev]'
 
       - name: Verify real master container, timeline, decode and cache
-        run: python -m pytest -q -W error tests/test_cinematic_real_media_integration.py
+        run: >-
+          python -m pytest -q -W error
+          tests/test_cinematic_real_media_integration.py
+          tests/test_cinematic_async_real_media_integration.py
+          tests/test_cinematic_master_frame_precision.py

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Iterable
 
 from app.video.cinematic_compiler import compile_project_prompt
@@ -14,6 +15,7 @@ from app.video.cinematic_models import (
     ProjectUpdateRequest,
     RenderPlan,
     merge_continuity,
+    MAX_FILM_DURATION_SECONDS,
 )
 from app.video.cinematic_requests import CompileProjectRequest, ShotRenderRequest
 from app.video.models import EngineCapabilities
@@ -45,12 +47,23 @@ class ProjectRevisionConflict(RuntimeError):
         )
 
 
+class FilmDurationExceeded(ValueError):
+    """The authored target or actual shot timeline exceeds the current limit."""
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _project_payload(project: CinematicProject) -> dict:
     return project.model_dump(mode='json', exclude={'id'})
+
+
+def enforce_film_duration(project: CinematicProject) -> None:
+    """Keep legacy projects readable while blocking overlong edits and work."""
+    actual = sum((Decimal(str(shot.duration_seconds)) for scene in project.scenes for shot in scene.shots), Decimal(0))
+    if project.target_duration_seconds > MAX_FILM_DURATION_SECONDS or actual > Decimal(MAX_FILM_DURATION_SECONDS) + Decimal('0.000001'):
+        raise FilmDurationExceeded('Film duration cannot exceed 600 seconds (10 minutes). Shorten the target and shot timeline before rendering.')
 
 
 def create_project(request: ProjectCreateRequest) -> CinematicProject:
@@ -69,6 +82,7 @@ def create_project(request: ProjectCreateRequest) -> CinematicProject:
         created_at=now,
         updated_at=now,
     )
+    enforce_film_duration(project)
     record = put_video_record('video_project', _project_payload(project))
     return CinematicProject.model_validate(record)
 
@@ -79,6 +93,125 @@ def get_project(project_id: str) -> CinematicProject:
 
 def list_projects() -> list[CinematicProject]:
     return [CinematicProject.model_validate(record) for record in list_video_records('video_project')]
+
+
+
+def _effective_shot_render_intent(
+    project: CinematicProject, scene: CinematicScene, shot: CinematicShot,
+) -> dict:
+    """In-memory rendering-intent comparison, never exported in diagnostics.
+
+    A job link is not durable evidence that its clip matches revised creative
+    instructions. This includes conservative scene/script and delivery changes.
+    It deliberately excludes identifiers, titles and *result* link metadata.
+    """
+    return {
+        'master_prompt': project.master_prompt,
+        'delivery_fps': project.delivery_fps,
+        'delivery_resolution': project.delivery_resolution,
+        'aspect_ratio': project.aspect_ratio,
+        'project_references': project.reference_image_ids,
+        'scene_references': scene.reference_image_ids,
+        'scene_source_text': scene.source_text,
+        'scene_synopsis': scene.synopsis,
+        'scene_ordinal': scene.ordinal,
+        'scene_duration': scene.target_duration_seconds,
+        'shot': shot.model_dump(
+            mode='python',
+            exclude={
+                'title', 'latest_job_id', 'latest_asset_url',
+                'latest_rendered_project_revision',
+            },
+        ),
+        'continuity': merge_continuity(
+            merge_continuity(project.continuity_bible, scene.continuity_patch),
+            shot.continuity_patch,
+        ).model_dump(mode='python'),
+    }
+
+
+def _shot_render_provenance_digest(
+    project: CinematicProject,
+    scene: CinematicScene,
+    shot: CinematicShot,
+    *,
+    engine_name: str,
+    native_fps: int,
+    native_resolution: str,
+    source_digests: dict[str, str] | None = None,
+) -> str:
+    """Bind creative inputs and authentic reference-image bytes to a render.
+
+    The digest is versioned and never contains private text or image data in
+    its persisted form. A cache is valid only within one status/queue/assembly
+    operation; cross-request file changes must always be rehashed.
+    """
+    if not isinstance(engine_name, str) or not engine_name:
+        raise ValueError('Render engine identity is missing')
+    if type(native_fps) is not int or native_fps < 1:
+        raise ValueError('Native render FPS is invalid')
+    if not isinstance(native_resolution, str) or not native_resolution:
+        raise ValueError('Native render resolution is missing')
+    image_hashes: list[tuple[str, str]] = []
+    cache = source_digests if source_digests is not None else {}
+    for identifier in resolve_reference_ids(
+        project, scene, shot, require_assets=False,
+    ):
+        if identifier not in cache:
+            image_file = video_asset_path(identifier, 'png')
+            with image_file.open('rb') as handle:
+                cache[identifier] = hashlib.file_digest(handle, 'sha256').hexdigest()
+        image_hashes.append((identifier, cache[identifier]))
+    envelope = {
+        'format_version': 1,
+        'intent': _effective_shot_render_intent(project, scene, shot),
+        'source_image_sha256': image_hashes,
+        'engine': engine_name,
+        'generation_fps': native_fps,
+        'generation_resolution': native_resolution,
+        'prompt_pack_version': 1,
+    }
+    return hashlib.sha256(json.dumps(
+        envelope, sort_keys=True, ensure_ascii=True, allow_nan=False,
+        separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()
+
+
+def _invalidate_stale_shot_links(
+    previous: CinematicProject, candidate: CinematicProject,
+) -> CinematicProject:
+    """Detach old results when a shot's effective input intent changes.
+
+    Completed asset/job records remain untouched for provenance. The changed
+    shot becomes missing; only explicit owner-initiated retry can render again.
+    This does not prove unchanged bytes behind an opaque reference-image ID.
+    """
+    original_scenes = {scene.scene_id: scene for scene in previous.scenes}
+    scenes: list[CinematicScene] = []
+    for scene in candidate.scenes:
+        prior_scene = original_scenes.get(scene.scene_id)
+        previous_shots = (
+            {shot.shot_id: shot for shot in prior_scene.shots}
+            if prior_scene is not None else {}
+        )
+        shots: list[CinematicShot] = []
+        for shot in scene.shots:
+            earlier = previous_shots.get(shot.shot_id)
+            valid_old_link = (
+                prior_scene is not None
+                and earlier is not None
+                and _effective_shot_render_intent(previous, prior_scene, earlier)
+                == _effective_shot_render_intent(candidate, scene, shot)
+            )
+            if not valid_old_link:
+                shot = shot.model_copy(update={
+                    'latest_job_id': None,
+                    'latest_asset_url': None,
+                    'latest_rendered_project_revision': None,
+                })
+            shots.append(shot)
+        scenes.append(scene.model_copy(update={'shots': shots}))
+    return candidate.model_copy(update={'scenes': scenes})
 
 
 def update_project(project_id: str, request: ProjectUpdateRequest) -> CinematicProject:
@@ -92,6 +225,8 @@ def update_project(project_id: str, request: ProjectUpdateRequest) -> CinematicP
     data['revision'] = current.revision + 1
     data['updated_at'] = _utcnow()
     candidate = CinematicProject.model_validate(data)
+    enforce_film_duration(candidate)
+    candidate = _invalidate_stale_shot_links(current, candidate)
     payload = _project_payload(candidate)
 
     updated, actual_revision, record = compare_and_swap_video_project(
@@ -111,6 +246,8 @@ def compile_project(
     project = get_project(project_id)
     if project.revision != request.expected_revision:
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
+
+    enforce_film_duration(project)
 
     engine_cap = request.engine_max_duration_seconds
     if request.engine_name:
@@ -222,6 +359,7 @@ def build_render_plan_from_objects(
     *,
     require_assets: bool = True,
 ) -> RenderPlan:
+    enforce_film_duration(project)
     if project.id is None:
         raise ValueError('project must have a persisted id before rendering')
     if not capabilities.available:
@@ -312,9 +450,13 @@ def render_shot(
 # Keep master assets separate from mutable project documents.
 import hashlib
 import json
+import os
+import stat
 import math
 import subprocess
+import tempfile
 import uuid
+from pathlib import Path
 from fractions import Fraction
 
 from app.video.cinematic_requests import AssembleMasterRequest, BatchRenderRequest
@@ -326,6 +468,7 @@ class MasterAssemblyNotReady(RuntimeError):
 
 def _linked_shot_job(
     project: CinematicProject, scene: CinematicScene, shot: CinematicShot,
+    *, source_digests: dict[str, str] | None = None,
 ) -> dict | None:
     if not shot.latest_job_id:
         return None
@@ -339,8 +482,23 @@ def _linked_shot_job(
         or job.get('shot_id') != shot.shot_id
     ):
         return None
+    expected_digest = job.get('render_intent_sha256')
+    if expected_digest is not None:
+        # Modern cinematic jobs must match both authored intent and reference
+        # bytes, even when someone copies an old matching-ID job link.
+        try:
+            current_digest = _shot_render_provenance_digest(
+                project, scene, shot, engine_name=job['engine'],
+                native_fps=job['fps'], native_resolution=job['resolution'],
+                source_digests=source_digests,
+            )
+        except (KeyError, ValueError, TypeError, OSError, OverflowError):
+            return None
+        if expected_digest != current_digest:
+            return None
+    # Legacy manually imported jobs without provenance retain historical
+    # compatibility. They are NOT verified source-fresh and need migration.
     return job
-
 
 def _job_has_local_render(job: dict | None) -> bool:
     """Do not trust persisted succeeded state after a file is lost or truncated."""
@@ -359,9 +517,11 @@ def project_render_status(project_id: str) -> dict:
     counts = {'missing': 0, 'active': 0, 'failed': 0, 'succeeded': 0}
     shots: list[dict] = []
     missing_assets = 0
+    legacy_unverified_shots = 0
+    source_digests: dict[str, str] = {}
     for scene in project.scenes:
         for shot in scene.shots:
-            job = _linked_shot_job(project, scene, shot)
+            job = _linked_shot_job(project, scene, shot, source_digests=source_digests)
             state = job.get('status') if job is not None else None
             if state == 'succeeded':
                 category = 'succeeded'
@@ -372,6 +532,10 @@ def project_render_status(project_id: str) -> dict:
             else:
                 category = 'missing'
             counts[category] += 1
+            if category == 'succeeded' and job is not None and not job.get('render_intent_sha256'):
+                # Historical jobs can be displayed for compatibility but do
+                # not carry authoritative SHA-256 input provenance.
+                legacy_unverified_shots += 1
             if category == 'succeeded' and not _job_has_local_render(job):
                 missing_assets += 1
             shots.append({
@@ -380,13 +544,16 @@ def project_render_status(project_id: str) -> dict:
                 'status': category,
                 'job_id': job['id'] if job else None,
             })
+    assembly_ready = bool(shots) and counts['succeeded'] == len(shots) and not missing_assets
     return {
         'project_id': project.id,
         'project_revision': project.revision,
         'total_shots': len(shots),
         **counts,
         'missing_output_assets': missing_assets,
-        'ready_for_assembly': bool(shots) and counts['succeeded'] == len(shots) and not missing_assets,
+        'legacy_unverified_shots': legacy_unverified_shots,
+        'ready_for_assembly': assembly_ready,
+        'ready_with_matching_render_input_digests': assembly_ready and legacy_unverified_shots == 0,
         'shots': shots,
     }
 
@@ -394,13 +561,15 @@ def project_render_status(project_id: str) -> dict:
 def render_project_missing(project_id: str, request: BatchRenderRequest) -> dict:
     """Submit unscheduled/failed shots in order; never duplicate active jobs."""
     project = get_project(project_id)
+    enforce_film_duration(project)
     if project.revision != request.expected_revision:
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
     submitted: list[dict] = []
     skipped = 0
+    source_digests: dict[str, str] = {}
     for scene in project.scenes:
         for shot in scene.shots:
-            job = _linked_shot_job(project, scene, shot)
+            job = _linked_shot_job(project, scene, shot, source_digests=source_digests)
             if job is not None and (
                 job.get('status') in {'queued', 'running'} or _job_has_local_render(job)
             ):
@@ -472,10 +641,12 @@ def _verify_master_probe(
         raise RuntimeError('Master codec does not match the FFmpeg H.264 delivery profile')
     if not math.isfinite(duration) or duration <= 0 or frames <= 0:
         raise RuntimeError('Master duration or video frame count is invalid')
-    tolerance_frames = max(2, shot_count + 1)
-    if abs(frames - expected_seconds * project.delivery_fps) > tolerance_frames:
+    from app.video.cinematic_editing import preflight_editorial_timeline
+    planned_frames = preflight_editorial_timeline(project).actual_frames
+    if frames != planned_frames or frames > MAX_FILM_DURATION_SECONDS * project.delivery_fps:
         raise RuntimeError('Master frame count does not match the authored timeline')
-    if abs(duration - expected_seconds) > max(0.1, tolerance_frames / project.delivery_fps):
+    if (duration > MAX_FILM_DURATION_SECONDS + 0.001
+            or abs(duration - expected_seconds) > 0.5 / project.delivery_fps + 0.002):
         raise RuntimeError('Master duration does not match the authored timeline')
     return {
         'codec': stream['codec_name'],
@@ -505,13 +676,15 @@ def _master_size(project: CinematicProject) -> tuple[int, int]:
 def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> dict:
     """Concatenate ordered local shot videos into a separate, hashed master."""
     project = get_project(project_id)
+    enforce_film_duration(project)
     if project.revision != request.expected_revision:
         raise ProjectRevisionConflict(project_id, request.expected_revision, project.revision)
 
     sources: list[tuple[CinematicScene, CinematicShot, dict]] = []
+    source_digests: dict[str, str] = {}
     for scene in project.scenes:
         for shot in scene.shots:
-            job = _linked_shot_job(project, scene, shot)
+            job = _linked_shot_job(project, scene, shot, source_digests=source_digests)
             if not _job_has_local_render(job):
                 continue
             sources.append((scene, shot, job))
@@ -522,6 +695,9 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             f'{incomplete} shot(s) are missing successful local render assets'
         )
 
+    from app.video.cinematic_editing import preflight_editorial_timeline
+    timeline = preflight_editorial_timeline(project)
+
     source_ids = [job['asset_id'] for _, _, job in sources]
     source_hashes = []
     for identifier in source_ids:
@@ -529,6 +705,7 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             source_hashes.append(hashlib.file_digest(source_file, 'sha256').hexdigest())
     # Hash actual media bytes and timeline controls, not just opaque file IDs.
     source_identity = [
+        'frame-accurate-master-v2', timeline.timeline_digest_sha256,
         project.id, project.revision, project.delivery_resolution,
         project.delivery_fps, project.aspect_ratio,
         [(shot.shot_id, shot.duration_seconds, job['id'], digest)
@@ -547,47 +724,175 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         probe = existing.get('probe')
         if (isinstance(probe, dict) and probe.get('probe_metadata_verified') is True
                 and path.is_file() and path.stat().st_size >= 12):
-            with path.open('rb') as cached_file:
-                cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
+            # The storage resolver's symlink check precedes this open. A
+            # pathname can be replaced after validation, so the cached inode
+            # must be opened without following symlinks on POSIX.
+            if os.name == 'posix' and not hasattr(os, 'O_NOFOLLOW'):
+                raise MasterAssemblyNotReady(
+                    'Safe cached master open is unavailable on this filesystem'
+                )
+            flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+            if os.name == 'posix':
+                flags |= os.O_NOFOLLOW
+            try:
+                descriptor = os.open(path, flags)
+                try:
+                    with os.fdopen(descriptor, 'rb') as cached_file:
+                        descriptor = -1  # fdopen now owns the descriptor.
+                        opened = os.fstat(cached_file.fileno())
+                        if not stat.S_ISREG(opened.st_mode):
+                            raise MasterAssemblyNotReady('Cached master is not a regular file')
+                        cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
+                        cached_mode = opened.st_mode
+                        if os.name == 'posix':
+                            # Reject a pathname replaced while the bytes were
+                            # hashed; do not attest a different external inode.
+                            current = os.lstat(path)
+                            if (not stat.S_ISREG(current.st_mode)
+                                    or (current.st_dev, current.st_ino)
+                                    != (opened.st_dev, opened.st_ino)):
+                                raise MasterAssemblyNotReady(
+                                    'Cached master path changed during lookup; retry'
+                                )
+                finally:
+                    if descriptor != -1:
+                        os.close(descriptor)
+            except OSError as exc:
+                raise MasterAssemblyNotReady(
+                    'Cached master cannot be safely opened; retry'
+                ) from exc
             if cached_hash == existing.get('sha256'):
+                if os.name == 'posix' and cached_mode & 0o077:
+                    raise MasterAssemblyNotReady(
+                        'Cached master permissions are unsafe; private remediation required'
+                    )
+                # A source may change after the initial fingerprint and before
+                # cached-record enumeration. Never return a master for source
+                # bytes that no longer match its recorded provenance.
+                try:
+                    for source_id, expected_hash in zip(source_ids, source_hashes):
+                        with video_asset_path(source_id, 'mp4').open('rb') as source_file:
+                            current_hash = hashlib.file_digest(source_file, 'sha256').hexdigest()
+                        if current_hash != expected_hash:
+                            raise MasterAssemblyNotReady(
+                                'Source media changed during cached master lookup; retry'
+                            )
+                except (OSError, ValueError) as exc:
+                    raise MasterAssemblyNotReady(
+                        'Source media became unavailable during cached master lookup; retry'
+                    ) from exc
+                latest_revision = get_project(project_id).revision
+                if latest_revision != project.revision:
+                    raise ProjectRevisionConflict(project_id, project.revision, latest_revision)
                 return existing
 
     width, height = _master_size(project)
     output_id = uuid.uuid4().hex
     output_path = video_asset_path(output_id, 'mp4')
     filters = []
-    for index, (_, shot, _) in enumerate(sources):
+    for index, clip in enumerate(timeline.clips):
         filters.append(
             f'[{index}:v:0]fps={project.delivery_fps},'
             f'scale={width}:{height}:force_original_aspect_ratio=decrease,'
             f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,'
             f'setsar=1,format=yuv420p,'
-            f'tpad=stop_mode=clone:stop_duration={shot.duration_seconds},'
-            f'trim=duration={shot.duration_seconds},setpts=PTS-STARTPTS[v{index}]'
+            f'tpad=stop_mode=clone:stop={clip.duration_frames},'
+            f'trim=end_frame={clip.duration_frames},setpts=PTS-STARTPTS[v{index}]'
         )
     filters.append(
         ''.join(f'[v{index}]' for index in range(len(sources)))
         + f'concat=n={len(sources)}:v=1:a=0[v]'
     )
-    command = [request.ffmpeg_path, '-nostdin', '-y', '-hide_banner', '-loglevel', 'error']
-    for _, _, job in sources:
-        command.extend(['-i', str(video_asset_path(job['asset_id'], 'mp4'))])
-    command.extend([
-        '-filter_complex', ';'.join(filters),
-        '-map', '[v]', '-an', '-c:v', 'libx264',
-        '-preset', 'medium', '-crf', '18',
-        # Explicit muxer CFR fixes MP4 average FPS and last-frame duration
-        # (filtergraph fps alone is insufficient on some FFmpeg builds).
-        '-r', str(project.delivery_fps), '-fps_mode', 'cfr',
-        '-movflags', '+faststart',
-        str(output_path),
-    ])
+    # A source asset can change (and revert) while FFmpeg is reading it.
+    # Stage independent, private input bytes and verify the snapshot digest
+    # against the cache fingerprint BEFORE passing any input path to FFmpeg.
+    # Never hardlink: hardlinks would share mutable source bytes.
+    snapshots = None
+    output_created = False
     try:
+        try:
+            from app.video.cinematic_source_snapshots import PrivateSourceSnapshots
+            snapshots = PrivateSourceSnapshots(output_path.parent)
+        except OSError as exc:
+            raise MasterAssemblyNotReady(
+                'Unable to stage private master inputs; check local storage'
+            ) from exc
+        staged_sources = []
+        staged_by_id = {}
+        for source_id, expected_source_hash in zip(source_ids, source_hashes):
+            # A legitimate timeline may reuse one source asset in several shots.
+            # Reuse its verified copy rather than duplicating disk consumption.
+            if source_id in staged_by_id:
+                snapshot, staged_hash = staged_by_id[source_id]
+                if staged_hash != expected_source_hash:
+                    raise MasterAssemblyNotReady(
+                        'Source media changed while staging master inputs; retry'
+                    )
+                staged_sources.append(snapshot)
+                continue
+            snapshot = Path(snapshots.name) / f'{source_id}.mp4'
+            snapshot_sha = hashlib.sha256()
+            try:
+                with video_asset_path(source_id, 'mp4').open('rb') as original, open(
+                    snapshot, 'xb', opener=lambda path, flags: os.open(path, flags, 0o600)
+                ) as staged:
+                    while True:
+                        chunk = original.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        staged.write(chunk)
+                        snapshot_sha.update(chunk)
+            except OSError as exc:
+                raise MasterAssemblyNotReady(
+                    'Unable to stage verified source media; retry'
+                ) from exc
+            if snapshot_sha.hexdigest() != expected_source_hash:
+                raise MasterAssemblyNotReady(
+                    'Source media changed while staging master inputs; retry'
+                )
+            staged_by_id[source_id] = (snapshot, expected_source_hash)
+            staged_sources.append(snapshot)
+
+        command = [request.ffmpeg_path, '-nostdin', '-y', '-hide_banner', '-loglevel', 'error']
+        for snapshot in staged_sources:
+            command.extend(['-i', str(snapshot)])
+        command.extend([
+            '-filter_complex', ';'.join(filters),
+            '-map', '[v]', '-an', '-c:v', 'libx264',
+            '-preset', 'medium', '-crf', '18',
+            # Explicit muxer CFR fixes MP4 average FPS and last-frame duration
+            # (filtergraph fps alone is insufficient on some FFmpeg builds).
+            '-r', str(project.delivery_fps), '-fps_mode', 'cfr',
+            '-movflags', '+faststart',
+            str(output_path),
+        ])
+        # FFmpeg normally creates output with the process umask (0644 under
+        # umask 022). A bearer-protected private film must never become
+        # group/other-readable even transiently during encoding. Precreate
+        # the UUID output exclusively as 0600; FFmpeg -y truncates the same
+        # inode, preserving its permissions. O_EXCL also rejects collisions.
+        try:
+            output_fd = os.open(
+                output_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
+                0o600,
+            )
+        except OSError as exc:
+            raise MasterAssemblyNotReady(
+                'Unable to create private master output; retry'
+            ) from exc
+        output_created = True
+        os.close(output_fd)
         execution = _run_master_ffmpeg(
             command, capture_output=True, text=True, timeout=43200, check=False,
         )
         if execution.returncode != 0:
             raise RuntimeError(f'FFmpeg master assembly failed with exit code {execution.returncode}')
+        # Fail closed if a platform/encoder replaced the precreated inode
+        # with a group/other-readable file instead of preserving mode 0600.
+        if os.name == 'posix' and output_path.stat().st_mode & 0o077:
+            raise MasterAssemblyNotReady('Master output permissions are unsafe')
         # A valid MP4 signature guards against absent or empty output.
         # A separate full media probe is required before production release.
         from app.video.jobs import _valid_mp4
@@ -603,6 +908,22 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         latest_revision = get_project(project_id).revision
         if latest_revision != project.revision:
             raise ProjectRevisionConflict(project_id, project.revision, latest_revision)
+        # Source MP4s are mutable after the initial cache fingerprint is read.
+        # Never publish a ready master with pre-FFmpeg hashes if a source changed.
+        # This detects post-fingerprint mutations, but immutable snapshots are
+        # still needed to close mutate-and-revert or mid-encode race windows.
+        for source_id, expected_source_hash in zip(source_ids, source_hashes):
+            try:
+                with video_asset_path(source_id, 'mp4').open('rb') as source_file:
+                    current_source_hash = hashlib.file_digest(source_file, 'sha256').hexdigest()
+            except (OSError, ValueError) as exc:
+                raise MasterAssemblyNotReady(
+                    'Source media became unavailable during master assembly; retry'
+                ) from exc
+            if current_source_hash != expected_source_hash:
+                raise MasterAssemblyNotReady(
+                    'Source media changed during master assembly; retry'
+                )
         with output_path.open('rb') as handle:
             digest = hashlib.file_digest(handle, 'sha256').hexdigest()
         record = put_video_record('video_master', {
@@ -610,6 +931,9 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
             'project_id': project_id,
             'project_revision': project.revision,
             'source_digest': fingerprint,
+            'assembly_version': 2,
+            'timeline_digest_sha256': timeline.timeline_digest_sha256,
+            'timeline_frames': timeline.actual_frames,
             'source_shot_count': len(sources),
             'source_shot_ids': [shot.shot_id for _, shot, _ in sources],
             'timeline_seconds': sum(shot.duration_seconds for _, shot, _ in sources),
@@ -628,6 +952,9 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         })
         return record
     except Exception:
-        if output_path.exists():
+        if output_created and output_path.exists():
             output_path.unlink()
         raise
+    finally:
+        if snapshots is not None:
+            snapshots.cleanup()

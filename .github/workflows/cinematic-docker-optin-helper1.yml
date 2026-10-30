@@ -1,0 +1,76 @@
+name: Cinematic opt-in Docker real-media acceptance (Helper 1)
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile.cinematic'
+      - '.github/workflows/cinematic-docker-optin-helper1.yml'
+      - 'tools/cinematic_docker_runtime_contract_helper1.py'
+      - 'app/studio/server.py'
+      - 'app/video/router.py'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cinematic-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build isolated cinematic image with FFmpeg
+        run: |
+          set -euo pipefail
+          docker build --file Dockerfile.cinematic \
+            --build-arg PYTHON_VERSION=${{ matrix.python-version }} \
+            --tag cinematic-helper1-optin:qa .
+
+      - name: Boot unprivileged, offline, ephemeral studio
+        run: |
+          set -euo pipefail
+          docker run -d --name cinematic-helper1-optin --network none \
+            --read-only --pids-limit 128 --memory 1g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=128m,uid=10001,gid=10001 \
+            cinematic-helper1-optin:qa
+          for i in $(seq 1 40); do
+            if docker exec cinematic-helper1-optin python -c \
+              "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=2)).get('studio') is True" \
+              >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs cinematic-helper1-optin >&2
+          exit 1
+
+      - name: Assert private studio route and real H.264 encode/probe/full decode
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker exec -i cinematic-helper1-optin python - \
+            < tools/cinematic_docker_runtime_contract_helper1.py \
+            2>&1 | tee test-results/cinematic-docker-optin.txt
+
+      - name: Capture container diagnostics and remove ephemeral instance
+        if: always()
+        run: |
+          mkdir -p test-results
+          docker logs cinematic-helper1-optin > test-results/container.log 2>&1 || true
+          docker rm -f cinematic-helper1-optin >/dev/null 2>&1 || true
+
+      - name: Retain exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-optin-docker-py${{ matrix.python-version }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14

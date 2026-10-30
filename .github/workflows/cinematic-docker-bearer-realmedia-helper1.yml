@@ -1,0 +1,80 @@
+name: Cinematic Docker bearer-protected real-media acceptance (Helper 1)
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile.cinematic'
+      - '.github/workflows/cinematic-docker-bearer-realmedia-helper1.yml'
+      - 'tools/cinematic_docker_bearer_realmedia_helper1.py'
+      - 'app/studio/server.py'
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/router.py'
+      - 'app/video/storage.py'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-real-master:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build separate cinematic image with real FFmpeg
+        run: |
+          set -euo pipefail
+          docker build --file Dockerfile.cinematic \
+            --build-arg PYTHON_VERSION=${{ matrix.python-version }} \
+            --tag cinematic-helper1-bearer:qa .
+
+      - name: Start isolated nonroot server with synthetic-only bearer
+        run: |
+          set -euo pipefail
+          docker run -d --name cinematic-helper1-bearer --network none \
+            --read-only --pids-limit 128 --memory 1g \
+            --env CHARACTER3D_STUDIO_TOKEN=SYNTHETIC_ONLY_HELPER1_BEARER_qa_20261024 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=256m,uid=10001,gid=10001 \
+            cinematic-helper1-bearer:qa
+          for i in $(seq 1 40); do
+            if docker exec cinematic-helper1-bearer python -c \
+              "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=2)).get('studio') is True" \
+              >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs cinematic-helper1-bearer >&2
+          exit 1
+
+      - name: Verify real FFmpeg master requires bearer and project isolation
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker exec -i cinematic-helper1-bearer python - \
+            < tools/cinematic_docker_bearer_realmedia_helper1.py \
+            2>&1 | tee test-results/bearer-realmedia.txt
+
+      - name: Collect redacted diagnostics and destroy ephemeral container
+        if: always()
+        run: |
+          mkdir -p test-results
+          docker logs cinematic-helper1-bearer > test-results/container.log 2>&1 || true
+          docker rm -f cinematic-helper1-bearer >/dev/null 2>&1 || true
+
+      - name: Retain exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinematic-docker-bearer-realmedia-py${{ matrix.python-version }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,94 @@
+name: Cinematic private master HTTP Range real-media QA
+
+# Re-run genuine-media proof on the final combined cinematic integration SHA,
+# even if that push changes only integration metadata outside PR path filters.
+# Do not expand this expensive Docker matrix to unrelated branch pushes.
+on:
+  pull_request:
+    paths:
+      - 'tests/test_cinematic_private_master_http_range_helper1.py'
+      - 'app/video/router.py'
+      - 'app/video/storage.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/jobs.py'
+      - 'app/video/**'
+      - 'Dockerfile.cinematic'
+      - 'pyproject.toml'
+      - 'app/studio/server.py'
+      - 'app/studio/storage.py'
+      - 'app/studio/router.py'
+      - 'app/studio/parameters.py'
+      - '.github/workflows/cinematic-private-master-http-range-qa.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  private-master-http-real-media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Test in the same opt-in cinematic image used by the successful
+      # authenticated/actual-master Docker acceptance jobs. This avoids
+      # a second, unbounded host apt mirror dependency for strict media QA.
+      - name: Build real-FFmpeg cinematic runtime for Python ${{ matrix.python-version }}
+        run: |
+          set -euo pipefail
+          docker build --file Dockerfile.cinematic \
+            --build-arg PYTHON_VERSION=${{ matrix.python-version }} \
+            --tag cinematic-helper1-range-base:qa .
+
+      - name: Add isolated pytest runner without changing the runtime image
+        run: |
+          set -euo pipefail
+          # The repository .dockerignore excludes tests/ by design. Supply
+          # only this synthetic test file via a minimal temporary QA context.
+          mkdir -p "$RUNNER_TEMP/helper1-range-qa"
+          cp tests/test_cinematic_private_master_http_range_helper1.py \
+            "$RUNNER_TEMP/helper1-range-qa/test_cinematic_private_master_http_range_helper1.py"
+          docker build --file - --tag cinematic-helper1-range-tests:qa \
+            "$RUNNER_TEMP/helper1-range-qa" <<'DOCKERFILE'
+          FROM cinematic-helper1-range-base:qa
+          USER root
+          RUN python -m pip install --no-cache-dir -e '.[dev]'
+          COPY test_cinematic_private_master_http_range_helper1.py /app/tests/test_cinematic_private_master_http_range_helper1.py
+          USER 10001:10001
+          DOCKERFILE
+
+      - name: Verify real H.264 FFmpeg FFprobe full decode and private HTTP Range
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker run --rm --network none --read-only \
+            --pids-limit 128 --memory 1g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --tmpfs /app/workspace/studio:rw,nosuid,nodev,size=256m,uid=10001,gid=10001 \
+            --env CINEMATIC_REQUIRE_REAL_MEDIA=1 \
+            --entrypoint python cinematic-helper1-range-tests:qa \
+            -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_private_master_http_range_helper1.py \
+            2>&1 | tee test-results/private-range-qa.txt
+
+      - name: Retain exact-commit strict media results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-master-range-py${{ matrix.python-version }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
