@@ -23,7 +23,8 @@ from app.video.cinematic_service import (
     project_render_status,
     enforce_film_duration,
 )
-from app.video.storage import get_video_record
+from app.video.storage import get_video_record, video_asset_path
+from app.video.cinematic_source_snapshots import cleanup_abandoned_source_snapshots
 
 assembly_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-master")
 _MAX_OUTSTANDING = 32
@@ -336,5 +337,8 @@ def recover_assembly_queue() -> dict:
                 (json.dumps(payload, allow_nan=False), now, identifier, _KIND),
             )
             failed += 1
+    # Lease-checked cleanup cannot remove inputs held by an active encoder.
+    # Unsupported or suspicious filesystem entries are deliberately retained.
+    cleanup_abandoned_source_snapshots(video_asset_path("0" * 32, "mp4").parent)
     _dispatch()
     return {"interrupted": failed}

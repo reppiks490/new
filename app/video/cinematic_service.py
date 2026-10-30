@@ -450,9 +450,13 @@ def render_shot(
 # Keep master assets separate from mutable project documents.
 import hashlib
 import json
+import os
+import stat
 import math
 import subprocess
+import tempfile
 import uuid
+from pathlib import Path
 from fractions import Fraction
 
 from app.video.cinematic_requests import AssembleMasterRequest, BatchRenderRequest
@@ -720,9 +724,66 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         probe = existing.get('probe')
         if (isinstance(probe, dict) and probe.get('probe_metadata_verified') is True
                 and path.is_file() and path.stat().st_size >= 12):
-            with path.open('rb') as cached_file:
-                cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
+            # The storage resolver's symlink check precedes this open. A
+            # pathname can be replaced after validation, so the cached inode
+            # must be opened without following symlinks on POSIX.
+            if os.name == 'posix' and not hasattr(os, 'O_NOFOLLOW'):
+                raise MasterAssemblyNotReady(
+                    'Safe cached master open is unavailable on this filesystem'
+                )
+            flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+            if os.name == 'posix':
+                flags |= os.O_NOFOLLOW
+            try:
+                descriptor = os.open(path, flags)
+                try:
+                    with os.fdopen(descriptor, 'rb') as cached_file:
+                        descriptor = -1  # fdopen now owns the descriptor.
+                        opened = os.fstat(cached_file.fileno())
+                        if not stat.S_ISREG(opened.st_mode):
+                            raise MasterAssemblyNotReady('Cached master is not a regular file')
+                        cached_hash = hashlib.file_digest(cached_file, 'sha256').hexdigest()
+                        cached_mode = opened.st_mode
+                        if os.name == 'posix':
+                            # Reject a pathname replaced while the bytes were
+                            # hashed; do not attest a different external inode.
+                            current = os.lstat(path)
+                            if (not stat.S_ISREG(current.st_mode)
+                                    or (current.st_dev, current.st_ino)
+                                    != (opened.st_dev, opened.st_ino)):
+                                raise MasterAssemblyNotReady(
+                                    'Cached master path changed during lookup; retry'
+                                )
+                finally:
+                    if descriptor != -1:
+                        os.close(descriptor)
+            except OSError as exc:
+                raise MasterAssemblyNotReady(
+                    'Cached master cannot be safely opened; retry'
+                ) from exc
             if cached_hash == existing.get('sha256'):
+                if os.name == 'posix' and cached_mode & 0o077:
+                    raise MasterAssemblyNotReady(
+                        'Cached master permissions are unsafe; private remediation required'
+                    )
+                # A source may change after the initial fingerprint and before
+                # cached-record enumeration. Never return a master for source
+                # bytes that no longer match its recorded provenance.
+                try:
+                    for source_id, expected_hash in zip(source_ids, source_hashes):
+                        with video_asset_path(source_id, 'mp4').open('rb') as source_file:
+                            current_hash = hashlib.file_digest(source_file, 'sha256').hexdigest()
+                        if current_hash != expected_hash:
+                            raise MasterAssemblyNotReady(
+                                'Source media changed during cached master lookup; retry'
+                            )
+                except (OSError, ValueError) as exc:
+                    raise MasterAssemblyNotReady(
+                        'Source media became unavailable during cached master lookup; retry'
+                    ) from exc
+                latest_revision = get_project(project_id).revision
+                if latest_revision != project.revision:
+                    raise ProjectRevisionConflict(project_id, project.revision, latest_revision)
                 return existing
 
     width, height = _master_size(project)
@@ -742,25 +803,96 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         ''.join(f'[v{index}]' for index in range(len(sources)))
         + f'concat=n={len(sources)}:v=1:a=0[v]'
     )
-    command = [request.ffmpeg_path, '-nostdin', '-y', '-hide_banner', '-loglevel', 'error']
-    for _, _, job in sources:
-        command.extend(['-i', str(video_asset_path(job['asset_id'], 'mp4'))])
-    command.extend([
-        '-filter_complex', ';'.join(filters),
-        '-map', '[v]', '-an', '-c:v', 'libx264',
-        '-preset', 'medium', '-crf', '18',
-        # Explicit muxer CFR fixes MP4 average FPS and last-frame duration
-        # (filtergraph fps alone is insufficient on some FFmpeg builds).
-        '-r', str(project.delivery_fps), '-fps_mode', 'cfr',
-        '-movflags', '+faststart',
-        str(output_path),
-    ])
+    # A source asset can change (and revert) while FFmpeg is reading it.
+    # Stage independent, private input bytes and verify the snapshot digest
+    # against the cache fingerprint BEFORE passing any input path to FFmpeg.
+    # Never hardlink: hardlinks would share mutable source bytes.
+    snapshots = None
+    output_created = False
     try:
+        try:
+            from app.video.cinematic_source_snapshots import PrivateSourceSnapshots
+            snapshots = PrivateSourceSnapshots(output_path.parent)
+        except OSError as exc:
+            raise MasterAssemblyNotReady(
+                'Unable to stage private master inputs; check local storage'
+            ) from exc
+        staged_sources = []
+        staged_by_id = {}
+        for source_id, expected_source_hash in zip(source_ids, source_hashes):
+            # A legitimate timeline may reuse one source asset in several shots.
+            # Reuse its verified copy rather than duplicating disk consumption.
+            if source_id in staged_by_id:
+                snapshot, staged_hash = staged_by_id[source_id]
+                if staged_hash != expected_source_hash:
+                    raise MasterAssemblyNotReady(
+                        'Source media changed while staging master inputs; retry'
+                    )
+                staged_sources.append(snapshot)
+                continue
+            snapshot = Path(snapshots.name) / f'{source_id}.mp4'
+            snapshot_sha = hashlib.sha256()
+            try:
+                with video_asset_path(source_id, 'mp4').open('rb') as original, open(
+                    snapshot, 'xb', opener=lambda path, flags: os.open(path, flags, 0o600)
+                ) as staged:
+                    while True:
+                        chunk = original.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        staged.write(chunk)
+                        snapshot_sha.update(chunk)
+            except OSError as exc:
+                raise MasterAssemblyNotReady(
+                    'Unable to stage verified source media; retry'
+                ) from exc
+            if snapshot_sha.hexdigest() != expected_source_hash:
+                raise MasterAssemblyNotReady(
+                    'Source media changed while staging master inputs; retry'
+                )
+            staged_by_id[source_id] = (snapshot, expected_source_hash)
+            staged_sources.append(snapshot)
+
+        command = [request.ffmpeg_path, '-nostdin', '-y', '-hide_banner', '-loglevel', 'error']
+        for snapshot in staged_sources:
+            command.extend(['-i', str(snapshot)])
+        command.extend([
+            '-filter_complex', ';'.join(filters),
+            '-map', '[v]', '-an', '-c:v', 'libx264',
+            '-preset', 'medium', '-crf', '18',
+            # Explicit muxer CFR fixes MP4 average FPS and last-frame duration
+            # (filtergraph fps alone is insufficient on some FFmpeg builds).
+            '-r', str(project.delivery_fps), '-fps_mode', 'cfr',
+            '-movflags', '+faststart',
+            str(output_path),
+        ])
+        # FFmpeg normally creates output with the process umask (0644 under
+        # umask 022). A bearer-protected private film must never become
+        # group/other-readable even transiently during encoding. Precreate
+        # the UUID output exclusively as 0600; FFmpeg -y truncates the same
+        # inode, preserving its permissions. O_EXCL also rejects collisions.
+        try:
+            output_fd = os.open(
+                output_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
+                0o600,
+            )
+        except OSError as exc:
+            raise MasterAssemblyNotReady(
+                'Unable to create private master output; retry'
+            ) from exc
+        output_created = True
+        os.close(output_fd)
         execution = _run_master_ffmpeg(
             command, capture_output=True, text=True, timeout=43200, check=False,
         )
         if execution.returncode != 0:
             raise RuntimeError(f'FFmpeg master assembly failed with exit code {execution.returncode}')
+        # Fail closed if a platform/encoder replaced the precreated inode
+        # with a group/other-readable file instead of preserving mode 0600.
+        if os.name == 'posix' and output_path.stat().st_mode & 0o077:
+            raise MasterAssemblyNotReady('Master output permissions are unsafe')
         # A valid MP4 signature guards against absent or empty output.
         # A separate full media probe is required before production release.
         from app.video.jobs import _valid_mp4
@@ -776,6 +908,22 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         latest_revision = get_project(project_id).revision
         if latest_revision != project.revision:
             raise ProjectRevisionConflict(project_id, project.revision, latest_revision)
+        # Source MP4s are mutable after the initial cache fingerprint is read.
+        # Never publish a ready master with pre-FFmpeg hashes if a source changed.
+        # This detects post-fingerprint mutations, but immutable snapshots are
+        # still needed to close mutate-and-revert or mid-encode race windows.
+        for source_id, expected_source_hash in zip(source_ids, source_hashes):
+            try:
+                with video_asset_path(source_id, 'mp4').open('rb') as source_file:
+                    current_source_hash = hashlib.file_digest(source_file, 'sha256').hexdigest()
+            except (OSError, ValueError) as exc:
+                raise MasterAssemblyNotReady(
+                    'Source media became unavailable during master assembly; retry'
+                ) from exc
+            if current_source_hash != expected_source_hash:
+                raise MasterAssemblyNotReady(
+                    'Source media changed during master assembly; retry'
+                )
         with output_path.open('rb') as handle:
             digest = hashlib.file_digest(handle, 'sha256').hexdigest()
         record = put_video_record('video_master', {
@@ -804,6 +952,9 @@ def assemble_project_master(project_id: str, request: AssembleMasterRequest) -> 
         })
         return record
     except Exception:
-        if output_path.exists():
+        if output_created and output_path.exists():
             output_path.unlink()
         raise
+    finally:
+        if snapshots is not None:
+            snapshots.cleanup()

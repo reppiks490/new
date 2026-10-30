@@ -50,6 +50,30 @@ def list_video_records(kind: VideoRecordKind) -> list[dict]:
     return list_records(_validated_kind(kind))
 
 
+def recorded_video_master_size(asset_id: str) -> int | None:
+    """Return the authoritative length of an assembled master, if recorded.
+
+    Look up every persisted master (not the UI's 100-record history window).
+    Ordinary shot MP4s have no master record and remain accessible. Reject
+    ambiguous or malformed master metadata rather than trusting a partial file.
+    The lookup reads only the size, never screenplay or private media bytes.
+    """
+    if not _ID_PATTERN.fullmatch(asset_id):
+        raise ValueError('Invalid video master asset identifier')
+    with connection() as db:
+        rows = db.execute(
+            "SELECT json_extract(data, '$.size_bytes') FROM records "
+            "WHERE kind='video_master' "
+            "AND json_extract(data, '$.asset_id')=? LIMIT 2",
+            (asset_id,),
+        ).fetchall()
+    if not rows:
+        return None
+    if len(rows) != 1 or type(rows[0][0]) is not int or rows[0][0] < 16:
+        raise ValueError('Ambiguous or invalid cinematic master size metadata')
+    return rows[0][0]
+
+
 def compare_and_swap_video_project(
     identifier: str,
     *,

@@ -37,14 +37,19 @@ async def private_api(request: Request, call_next):
         supplied = request.headers.get('Authorization','').removeprefix('Bearer ')
         if secret:
             if not hmac.compare_digest(secret.encode(), supplied.encode()):
-                return JSONResponse({'detail':'Studio access token required'},status_code=401)
+                return JSONResponse({'detail':'Studio access token required'},status_code=401, headers={'Cache-Control': 'no-store'})
         elif not request.client or request.client.host not in {'127.0.0.1','::1','testclient'}:
-            return JSONResponse({'detail':'Remote API access requires CHARACTER3D_STUDIO_TOKEN'},status_code=403)
+            return JSONResponse({'detail':'Remote API access requires CHARACTER3D_STUDIO_TOKEN'},status_code=403, headers={'Cache-Control': 'no-store'})
         if request.method not in {'GET','HEAD'}:
             origin = request.headers.get('Origin')
             if origin and origin not in origins and origin.rstrip('/') != str(request.base_url).rstrip('/'):
-                return JSONResponse({'detail':'Origin is not allowed'},status_code=403)
-    return await call_next(request)
+                return JSONResponse({'detail':'Origin is not allowed'},status_code=403, headers={'Cache-Control': 'no-store'})
+    response = await call_next(request)
+    if request.url.path.startswith('/api/'):
+        # Bearer-protected studio data and negative asset lookups are private.
+        # Never let intermediaries cache them across authorization or recovery.
+        response.headers['Cache-Control'] = 'no-store'
+    return response
 
 app.include_router(router)
 app.include_router(video_router)
