@@ -57,6 +57,16 @@ function defaultSleep(ms,signal){
   });
 }
 
+function isTransientNetworkFailure(error){
+  // Do not treat malformed server payloads, authorization failures, or
+  // deliberate aborts as connectivity interruptions.
+  if(error?.name==='AbortError')return false;
+  if(error?.name==='TimeoutError')return true;
+  return error?.name==='TypeError'
+    && /failed to fetch|fetch failed|network|connection|disconnected|offline|load failed/i
+      .test(String(error.message||''));
+}
+
 export function isTerminalAssemblyStatus(status){
   return TERMINAL.has(status);
 }
@@ -161,28 +171,71 @@ export function createCinematicAssemblyClient({api,sleep=defaultSleep}={}){
     });
   }
 
-  async function findActive(projectId,{pageSize=200}={}){
+  async function findActive(projectId,{pageSize=200,signal,maxPasses=3}={}){
     validInteger(pageSize,'page size',1,200);
-    let offset=0;
-    while(true){
-      const page=await list(projectId,{limit:pageSize,offset});
-      const active=page.jobs.find(item=>ACTIVE.has(item.status));
-      if(active)return active;
-      if(!page.hasMore)return null;
-      offset+=page.jobs.length;
+    validInteger(maxPasses,'reconnect passes',1,10);
+    // Offset pagination is not a snapshot: updated jobs can change position.
+    // Avoid false "no active job" when repeated IDs or totals reveal a race.
+    for(let pass=0;pass<maxPasses;pass++){
+      let offset=0,expectedTotal=null,unstable=false;
+      const seen=new Set();
+      while(true){
+        ensureNotAborted(signal);
+        const page=await list(projectId,{limit:pageSize,offset});
+        ensureNotAborted(signal);
+        if(expectedTotal!==null && page.total!==expectedTotal){
+          unstable=true;
+          break;
+        }
+        expectedTotal=page.total;
+        for(const item of page.jobs){
+          if(seen.has(item.id)){unstable=true;break;}
+          seen.add(item.id);
+        }
+        if(unstable)break;
+        const active=page.jobs.find(item=>ACTIVE.has(item.status));
+        if(active)return active;
+        if(!page.hasMore)return null;
+        offset+=page.jobs.length;
+      }
     }
+    // This mitigation does not replace an atomic server-side active lookup.
+    throw new Error('Assembly history changed during reconnect; retry when stable');
   }
 
   async function waitForTerminal(projectId,jobId,{
-    signal,onUpdate,intervalMs=2000,
+    signal,onUpdate,onConnectionChange,intervalMs=2000,maxTransientFailures=4,
   }={}){
     validInteger(intervalMs,'poll interval',250,60000);
+    validInteger(maxTransientFailures,'transient failure limit',0,20);
     if(onUpdate!==undefined && typeof onUpdate!=='function'){
       throw new TypeError('Invalid status callback');
     }
+    if(onConnectionChange!==undefined && typeof onConnectionChange!=='function'){
+      throw new TypeError('Invalid connection callback');
+    }
+    let failures=0;
     while(true){
       ensureNotAborted(signal);
-      const current=await get(projectId,jobId);
+      let current;
+      try{
+        current=await get(projectId,jobId);
+      }catch(error){
+        ensureNotAborted(signal);
+        if(!isTransientNetworkFailure(error) || failures>=maxTransientFailures){
+          throw error;
+        }
+        failures+=1;
+        onConnectionChange?.('retrying');
+        ensureNotAborted(signal);
+        const backoff=Math.min(60000,intervalMs*(2**(failures-1)));
+        await sleep(backoff,signal);
+        ensureNotAborted(signal);
+        continue;
+      }
+      ensureNotAborted(signal);
+      if(failures)onConnectionChange?.('connected');
+      failures=0;
       ensureNotAborted(signal);
       onUpdate?.(current);
       ensureNotAborted(signal);

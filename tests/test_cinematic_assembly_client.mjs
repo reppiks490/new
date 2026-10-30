@@ -118,7 +118,7 @@ test('resume searches every server page and does not silently lose an old queued
   const client=createCinematicAssemblyClient({api:async(path)=>{
     calls.push(path);
     if(path.includes('offset=0')) return {
-      jobs:[job('succeeded'),job('failed')],total:3,offset:0,limit:2,has_more:true,
+      jobs:[job('succeeded'),job('failed',{id:'d'.repeat(32)})],total:3,offset:0,limit:2,has_more:true,
     };
     return {jobs:[job('queued',{id:'f'.repeat(32)})],
       total:3,offset:2,limit:2,has_more:false};
@@ -150,4 +150,95 @@ test('reject invalid IDs, revisions and malformed server pagination',async()=>{
   await assert.rejects(c.submit(PROJECT,0),/revision/i);
   await assert.rejects(c.get(PROJECT,'Bearer token'),/job ID/i);
   await assert.rejects(c.findActive(PROJECT,{pageSize:2}),/pagination/i);
+});
+
+
+test('temporary iPhone network drops retry serially with bounded backoff and preserve the job identity',async()=>{
+  let reads=0;
+  let concurrent=0;
+  let maxConcurrent=0;
+  const sleeps=[];
+  const phases=[];
+  const client=createCinematicAssemblyClient({
+    api:async()=>{
+      concurrent++;maxConcurrent=Math.max(maxConcurrent,concurrent);
+      try{
+        reads++;
+        if(reads===1)throw new TypeError('Failed to fetch');
+        if(reads===2){const failure=new Error('Request timed out');failure.name='TimeoutError';throw failure;}
+        return job('succeeded',{
+          progress:100,asset_id:ASSET,
+          asset_url:'/api/video/assets/'+ASSET+'.mp4',
+          probe_metadata_verified:true,sha256:'e'.repeat(64),
+        });
+      }finally{concurrent--;}
+    },
+    sleep:async ms=>{sleeps.push(ms);},
+  });
+  const latest=await client.waitForTerminal(PROJECT,JOB,{
+    intervalMs:1000,maxTransientFailures:3,
+    onConnectionChange:state=>phases.push(state),
+  });
+  assert.equal(latest.status,'succeeded');
+  assert.equal(latest.id,JOB);
+  assert.equal(maxConcurrent,1);
+  assert.deepEqual(sleeps,[1000,2000]);
+  assert.deepEqual(phases,['retrying','retrying','connected']);
+});
+
+test('persistent network failure stops after configured finite retries, preserving explicit resume',async()=>{
+  let reads=0;
+  const client=createCinematicAssemblyClient({
+    api:async()=>{reads++;throw new TypeError('Network disconnected');},
+    sleep:async()=>{},
+  });
+  await assert.rejects(
+    client.waitForTerminal(PROJECT,JOB,{intervalMs:250,maxTransientFailures:2}),
+    /Network disconnected/,
+  );
+  assert.equal(reads,3);
+});
+
+test('authentication errors are never retried as network interruptions',async()=>{
+  let reads=0;
+  const client=createCinematicAssemblyClient({
+    api:async()=>{reads++;throw new Error('Video request failed (401)');},
+    sleep:async()=>{throw new Error('Unexpected retry');},
+  });
+  await assert.rejects(
+    client.waitForTerminal(PROJECT,JOB,{maxTransientFailures:8}),
+    /401/,
+  );
+  assert.equal(reads,1);
+});
+
+test('abort during reconnect retry ends polling without another request',async()=>{
+  let reads=0;
+  const controller=new AbortController();
+  const client=createCinematicAssemblyClient({
+    api:async()=>{reads++;throw new TypeError('Fetch failed');},
+    sleep:async()=>{controller.abort();},
+  });
+  await assert.rejects(
+    client.waitForTerminal(PROJECT,JOB,{
+      signal:controller.signal,maxTransientFailures:4,
+    }),
+    error=>error.name==='AbortError',
+  );
+  assert.equal(reads,1);
+});
+
+test('paginated reconnect scanning is abortable after leaving the private cinematic workspace',async()=>{
+  const controller=new AbortController();
+  let reads=0;
+  const client=createCinematicAssemblyClient({api:async()=>{
+    reads++;
+    controller.abort();
+    return {jobs:[job('failed')],total:4,offset:0,limit:2,has_more:true};
+  }});
+  await assert.rejects(
+    client.findActive(PROJECT,{pageSize:2,signal:controller.signal}),
+    error=>error.name==='AbortError',
+  );
+  assert.equal(reads,1);
 });

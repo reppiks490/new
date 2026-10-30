@@ -213,8 +213,8 @@ def test_master_assembly_persists_ordered_master_record_without_mutating_project
     graph = seen["command"][seen["command"].index("-filter_complex") + 1]
     assert "concat=n=2:v=1:a=0[v]" in graph
     assert "scale=3840:2160" in graph
-    assert graph.count("tpad=stop_mode=clone:stop_duration=5.0") == 2
-    assert graph.count("trim=duration=5.0") == 2
+    assert graph.count("tpad=stop_mode=clone:stop=600") == 2
+    assert graph.count("trim=end_frame=600") == 2
     assert result["timeline_seconds"] == 10
     assert result["actual_video_probe_verified"] is True
     assert result["probe"]["full_decode_verified"] is False
@@ -292,6 +292,26 @@ def test_batch_rerenders_successful_shot_whose_mp4_was_lost(monkeypatch, tmp_pat
     refreshed = service.get_project(project.id)
     assert refreshed.revision == 4
     assert refreshed.scenes[0].shots[0].latest_job_id != old["id"]
+
+
+@pytest.mark.parametrize('frames,duration', [(72001,'600.008333'), (71999,'599.991667'), (72000,'600.01')])
+def test_master_probe_rejects_frame_drift_and_overlong_delivery(monkeypatch, tmp_path, frames, duration):
+    _, service, _, project = _project(monkeypatch, tmp_path, shots=120)
+    def probe(*args, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({
+                'streams':[{'codec_type':'video','codec_name':'h264',
+                            'width':3840,'height':2160,'avg_frame_rate':'120/1',
+                            'nb_frames':str(frames),'duration':duration}],
+                'format':{'duration':duration},
+            })
+        return Result()
+    monkeypatch.setattr(service, '_run_master_ffprobe', probe)
+    with pytest.raises(RuntimeError, match='frame count|duration'):
+        service._verify_master_probe(tmp_path/'master.mp4', project=project,
+                                    shot_count=120, expected_seconds=600,
+                                    ffprobe_path='ffprobe')
 
 
 @pytest.mark.parametrize("field,value", [
