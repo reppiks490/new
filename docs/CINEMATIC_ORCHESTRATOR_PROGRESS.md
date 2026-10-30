@@ -1,5 +1,14 @@
 # Cinematic Orchestrator — Verification Ledger
 
+## Resumed proof — 2026-10-23
+
+The integration candidate now includes creative-input freshness, reference-image
+SHA-256 binding, queue/master ownership checks, launcher privacy and mobile-client
+reconnect regressions. It also fixes a newly reproduced preview handoff race.
+See [the proof ledger](FILMMAKING_PROOF_PROGRESS_20261023.md) for exact sources,
+passing checks, the nine local Blender failures, and unresolved live-generation
+and master-UI gates. This is not production sign-off.
+
 ## Continuation — 2026-10-23, ten-minute maximum and proof requirement
 
 The owner now requires a maximum film length of 600 seconds and real evidence

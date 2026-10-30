@@ -102,12 +102,13 @@ def test_drain_executes_and_records_verified_master_without_leaking_scripts(monk
     invocations = []
     def fake_assemble(project_id, request):
         invocations.append((project_id, request.expected_revision))
-        return {
+        return storage.put_video_record("video_master", {
             "id": "b" * 32, "asset_id": "a" * 32,
             "asset_url": "/api/video/assets/" + "a" * 32 + ".mp4",
             "status": "ready", "probe": {"probe_metadata_verified": True},
             "sha256": "f" * 64, "actual_video_probe_verified": True,
-        }
+            "project_id": project_id, "project_revision": request.expected_revision,
+        }, identifier="b" * 32)
     monkeypatch.setattr(queue, "assemble_project_master", fake_assemble)
     queue._drain()
     latest = queue.get_master_assembly_job(project.id, job["id"])
