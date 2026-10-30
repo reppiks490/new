@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import os
+import threading
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.video.cinematic_models import ProjectCreateRequest, ProjectUpdateRequest
+from app.video.cinematic_assembly_jobs import (
+    AssemblyCancellationConflict, AssemblyQueueFull,
+    cancel_queued_master_assembly, enqueue_master_assembly,
+    get_master_assembly_job, list_master_assembly_jobs,
+)
 from app.video.cinematic_requests import (
     AssembleMasterRequest, BatchRenderRequest, CompileProjectRequest, ShotRenderRequest,
 )
 from app.video.cinematic_service import (
     MasterAssemblyNotReady,
+    FilmDurationExceeded,
     ProjectRevisionConflict,
     assemble_project_master,
     build_render_plan,
@@ -34,6 +42,7 @@ from app.video.storage import (
     get_video_record,
     list_video_records,
     put_video_record,
+    recorded_video_master_size,
     video_asset_path,
 )
 
@@ -41,6 +50,11 @@ router = APIRouter(prefix='/api/video', tags=['Local video studio'])
 _MAX_IMAGE_BYTES = 12 * 1024 * 1024
 _MAX_IMAGE_PIXELS = 20_000_000
 _PRIVACY_ID = '0' * 32
+# Per-process cap on simultaneous private master snapshots AND response streams.
+# Two long-film GETs can already consume substantial temporary disk; reject
+# additional concurrent requests rather than admitting unbounded copies.
+# This does not impose a cross-process byte quota or replace storage planning.
+_PRIVATE_ASSET_SNAPSHOT_SLOTS = threading.BoundedSemaphore(value=2)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -98,22 +112,363 @@ async def upload_image(file: UploadFile = File(...)):
     return {'image_id': identifier, 'url': f'/api/video/assets/{identifier}.png'}
 
 
+def _open_private_asset(path):
+    """Pin a regular asset inode before the HTTP response can stream bytes.
+
+    POSIX no-follow directory-relative opens close the check-then-FileResponse
+    symlink race. Windows requires separate reparse-point/ACL verification.
+    """
+    import stat
+
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NONBLOCK', 0)
+    if os.name == 'posix':
+        if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+            raise OSError('Safe asset open is unsupported')
+        directory_fd = os.open(
+            path.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            | getattr(os, 'O_CLOEXEC', 0),
+        )
+        try:
+            fd = os.open(path.name, flags | os.O_NOFOLLOW, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+    else:
+        fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = os.lstat(path)
+        if (not stat.S_ISREG(opened.st_mode)
+                or not stat.S_ISREG(current.st_mode)
+                or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
+            raise OSError('Asset path changed or is not a regular file')
+        # A standalone MP4 requires at least a complete 16-byte ftyp box
+        # header. An interrupted/truncated master must not be advertised as
+        # successful video/mp4 (including HEAD and byte-range requests).
+        # This is a cheap corruption floor, not a full decode/SHA attestation.
+        if path.suffix == '.mp4' and opened.st_size < 16:
+            raise OSError('Incomplete MP4 asset')
+        return fd, opened
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+
+def _snapshot_private_asset(fd, opened, directory, ranges=None):
+    """Create an unlinked, owner-private byte snapshot before HTTP headers.
+
+    A pinned source descriptor prevents path swaps but not same-inode writes.
+    Read in bounded chunks, and reject concurrent rewrites using the original
+    descriptor's high-resolution identity/change metadata. TemporaryFile is
+    unlinked (or opened with O_TMPFILE) on POSIX; its duplicate descriptor
+    survives the context manager until the ASGI response closes it.
+
+    This intentionally trades one temporary on-disk copy per GET for stable
+    bytes. Large-film disk/throughput limits require lead review before merge.
+    """
+    import tempfile
+
+    def identity(stat_result):
+        return (
+            stat_result.st_dev, stat_result.st_ino, stat_result.st_size,
+            stat_result.st_mtime_ns, stat_result.st_ctime_ns,
+        )
+
+    expected = identity(opened)
+    if identity(os.fstat(fd)) != expected:
+        raise ValueError('Asset changed before private snapshot')
+    with tempfile.TemporaryFile(mode='w+b', dir=directory) as temporary:
+        # Only snapshot requested byte spans for mobile Range GETs. A tiny
+        # metadata/sample request must not duplicate a multi-GB film on disk.
+        # Pack only the selected byte spans contiguously. Seeking to the
+        # original source offsets creates a film-sized *logical* temp file
+        # for a tiny tail Range; non-sparse filesystems may allocate it all.
+        # The response uses these packed offsets to read the right bytes.
+        spans = ranges if ranges is not None else [(0, opened.st_size - 1)]
+        packed_offsets = []
+        for start, end in spans:
+            packed_offsets.append(temporary.tell())
+            offset = start
+            while offset <= end:
+                count = min(256 * 1024, end - offset + 1)
+                if hasattr(os, 'pread'):
+                    chunk = os.pread(fd, count, offset)
+                else:
+                    os.lseek(fd, offset, os.SEEK_SET)
+                    chunk = os.read(fd, count)
+                if not chunk:
+                    raise ValueError('Asset truncated during private snapshot')
+                temporary.write(chunk)
+                offset += len(chunk)
+        if identity(os.fstat(fd)) != expected:
+            raise ValueError('Asset changed during private snapshot')
+        temporary.flush()
+        return os.dup(temporary.fileno()), packed_offsets
+
+
+def _asset_byte_ranges(header: str, size: int) -> list[tuple[int, int]]:
+    """Parse bounded RFC 7233 byte ranges; reject malformed/unsatisfiable input."""
+    import re
+
+    if not header.startswith('bytes='):
+        raise ValueError('Unsupported range unit')
+    components = header[6:].split(',')
+    if not 1 <= len(components) <= 16:
+        raise ValueError('Invalid range count')
+    ranges = []
+    for component in components:
+        match = re.fullmatch(r'(\d*)-(\d*)', component.strip())
+        if not match or (not match.group(1) and not match.group(2)):
+            raise ValueError('Invalid byte range')
+        if not match.group(1):
+            suffix = int(match.group(2))
+            if suffix <= 0 or size <= 0:
+                raise ValueError('Unsatisfiable suffix range')
+            start, end = max(0, size - suffix), size - 1
+        else:
+            start = int(match.group(1))
+            end = int(match.group(2)) if match.group(2) else size - 1
+            if start >= size or end < start:
+                raise ValueError('Unsatisfiable byte range')
+            end = min(end, size - 1)
+        ranges.append((start, end))
+
+    # RFC 7233 permits coalescing overlapping/adjacent ranges. Without it,
+    # one authenticated request can retransmit a large private master up to
+    # sixteen times using duplicate full-file spans. Preserve the order of
+    # the first requested member of each merged group for mobile clients.
+    ordered = sorted(enumerate(ranges), key=lambda item: item[1][0])
+    merged = []
+    for original_index, (start, end) in ordered:
+        if merged and start <= merged[-1][2] + 1:
+            first_index, first_start, first_end = merged[-1]
+            merged[-1] = (
+                min(first_index, original_index), first_start, max(first_end, end),
+            )
+        else:
+            merged.append((original_index, start, end))
+    return [(start, end) for _, start, end in sorted(merged)]
+
+
+class _OpenedAssetResponse(Response):
+    """ASGI response reads exclusively from an opened inode, never its path."""
+
+    def __init__(self, fd, size, ranges, media_type, headers, status_code,
+                 snapshot_slot=False, snapshot_offsets=None):
+        self._fd = fd
+        self._snapshot_slot = snapshot_slot
+        self._snapshot_offsets = snapshot_offsets
+        self._ranges = ranges
+        self._size = size
+        self._media_type = media_type
+        self._boundary = uuid.uuid4().hex if ranges and len(ranges) > 1 else None
+        if self._boundary:
+            headers['Content-Type'] = f'multipart/byteranges; boundary={self._boundary}'
+            headers['Content-Length'] = str(
+                sum(
+                    len(self._part_header(start, end)) + end - start + 1 + 2
+                    for start, end in ranges
+                ) + len(self._closing_boundary())
+            )
+        elif ranges:
+            start, end = ranges[0]
+            headers['Content-Range'] = f'bytes {start}-{end}/{size}'
+            headers['Content-Length'] = str(end - start + 1)
+        else:
+            headers['Content-Length'] = str(size)
+        super().__init__(
+            content=b'', status_code=status_code,
+            media_type=media_type, headers=headers,
+        )
+
+    def _part_header(self, start, end):
+        return (
+            f'--{self._boundary}\r\nContent-Type: {self._media_type}\r\n'
+            f'Content-Range: bytes {start}-{end}/{self._size}\r\n\r\n'
+        ).encode('ascii')
+
+    def _closing_boundary(self):
+        return f'--{self._boundary}--\r\n'.encode('ascii')
+
+    async def __call__(self, scope, receive, send):
+        import anyio
+
+        def read_at(offset, count):
+            if hasattr(os, 'pread'):
+                return os.pread(self._fd, count, offset)
+            os.lseek(self._fd, offset, os.SEEK_SET)
+            return os.read(self._fd, count)
+
+        try:
+            await send({
+                'type': 'http.response.start',
+                'status': self.status_code,
+                'headers': self.raw_headers,
+            })
+            if scope.get('method') != 'HEAD':
+                spans = self._ranges if self._ranges is not None else [(0, self._size - 1)]
+                for index, (start, end) in enumerate(spans):
+                    # Snapshot files store requested ranges back-to-back,
+                    # rather than at their potentially huge source offsets.
+                    packed_start = (
+                        self._snapshot_offsets[index]
+                        if self._snapshot_offsets is not None else start
+                    )
+                    if self._boundary:
+                        await send({
+                            'type': 'http.response.body',
+                            'body': self._part_header(start, end),
+                            'more_body': True,
+                        })
+                    offset = start
+                    while offset <= end:
+                        data = await anyio.to_thread.run_sync(
+                            read_at, packed_start + offset - start,
+                            min(256 * 1024, end - offset + 1),
+                        )
+                        if not data:
+                            raise OSError('Asset changed during descriptor-backed streaming')
+                        await send({
+                            'type': 'http.response.body',
+                            'body': data,
+                            'more_body': True,
+                        })
+                        offset += len(data)
+                    if self._boundary:
+                        await send({
+                            'type': 'http.response.body', 'body': b'\r\n',
+                            'more_body': True,
+                        })
+                if self._boundary:
+                    await send({
+                        'type': 'http.response.body',
+                        'body': self._closing_boundary(), 'more_body': True,
+                    })
+            await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
+        finally:
+            try:
+                os.close(self._fd)
+            finally:
+                if self._snapshot_slot:
+                    _PRIVATE_ASSET_SNAPSHOT_SLOTS.release()
+
+
+@router.head('/assets/{filename}')
 @router.get('/assets/{filename}')
-def asset(filename: str):
+def asset(filename: str, request: Request):
     try:
         identifier, extension = filename.rsplit('.', 1)
         if extension not in {'png', 'mp4'}:
             raise ValueError('Unsupported public asset type')
         path = video_asset_path(identifier, extension)
-    except ValueError:
+        fd, opened = _open_private_asset(path)
+        try:
+            # An assembled master has durable, authoritative byte-length
+            # metadata. Reject post-assembly truncation before HTTP 200/206,
+            # including HEAD, without hashing a multi-GB film for each Range.
+            # Non-master shot MP4s have no matching record and retain their
+            # existing delivery behavior.
+            if extension == 'mp4':
+                expected_size = recorded_video_master_size(identifier)
+                if expected_size is not None and opened.st_size != expected_size:
+                    raise OSError('Assembled master size differs from persisted record')
+        except BaseException:
+            os.close(fd)
+            raise
+    except (ValueError, OSError):
         raise HTTPException(404, 'Asset not found')
-    if not path.is_file():
-        raise HTTPException(404, 'Asset not found')
-    return FileResponse(
-        path,
-        media_type='video/mp4' if extension == 'mp4' else 'image/png',
-        headers={'Cache-Control': 'no-store'},
-    )
+    snapshot_slot_held = False
+    try:
+        from email.utils import formatdate
+
+        media_type = 'video/mp4' if extension == 'mp4' else 'image/png'
+        # A same-length atomic master replacement can preserve mtime while
+        # changing the file identity. Include the opened inode and change
+        # time in an opaque validator, not just the public mtime/size pair.
+        # This is not a cryptographic content attestation: an in-place
+        # concurrent rewrite still needs immutable media publication.
+        identity = (
+            opened.st_dev, opened.st_ino, opened.st_ctime_ns,
+            opened.st_mtime_ns, opened.st_size,
+        )
+        etag = '"' + hashlib.sha256(repr(identity).encode('ascii')).hexdigest() + '"'
+        last_modified = formatdate(opened.st_mtime, usegmt=True)
+        headers = {
+            'Cache-Control': 'no-store',
+            'Accept-Ranges': 'bytes',
+            'ETag': etag,
+            'Last-Modified': last_modified,
+        }
+        range_header = request.headers.get('range')
+        # HTTP-date If-Range is not strong enough for a private master:
+        # Last-Modified rounds to seconds, allowing a replaced film to be
+        # spliced into an old byte-range download. A mismatch (including
+        # any date/weak validator) safely falls back to a complete 200.
+        if_range = request.headers.get('if-range')
+        if range_header and if_range is not None and if_range != etag:
+            range_header = None
+        try:
+            ranges = (
+                _asset_byte_ranges(range_header, opened.st_size)
+                if range_header else None
+            )
+        except ValueError:
+            os.close(fd)
+            return Response(
+                status_code=416,
+                headers={
+                    'Cache-Control': 'no-store',
+                    'Accept-Ranges': 'bytes',
+                    'Content-Range': f'bytes */{opened.st_size}',
+                },
+            )
+        # Freeze bytes before response.start: an opened inode can otherwise be
+        # rewritten by a concurrent local process while pread is streaming.
+        # HEAD does not send a body, so it requires no on-disk snapshot.
+        snapshot_offsets = None
+        if request.method != 'HEAD':
+            if not _PRIVATE_ASSET_SNAPSHOT_SLOTS.acquire(blocking=False):
+                raise HTTPException(
+                    503, 'Private media streaming capacity reached',
+                    headers={'Cache-Control': 'no-store', 'Retry-After': '1'},
+                )
+            snapshot_slot_held = True
+            try:
+                snapshot_fd, snapshot_offsets = _snapshot_private_asset(
+                    fd, opened, path.parent, ranges,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    409, 'Private asset changed while preparing response',
+                    headers={'Cache-Control': 'no-store'},
+                ) from exc
+            except OSError as exc:
+                raise HTTPException(
+                    503, 'Private asset snapshot unavailable',
+                    headers={'Cache-Control': 'no-store', 'Retry-After': '1'},
+                ) from exc
+            original_fd, fd = fd, snapshot_fd
+            os.close(original_fd)
+        response = _OpenedAssetResponse(
+            fd, opened.st_size, ranges, media_type, headers,
+            status_code=206 if ranges else 200,
+            snapshot_slot=snapshot_slot_held,
+            snapshot_offsets=snapshot_offsets,
+        )
+        # Ownership of the permit transfers to the ASGI response; release
+        # only after its final byte or client cancellation closes the fd.
+        snapshot_slot_held = False
+        return response
+    except BaseException:
+        # The response owns fd only after successful construction.
+        # An already-closed 416 descriptor is returned before this handler.
+        try:
+            os.close(fd)
+        finally:
+            if snapshot_slot_held:
+                _PRIVATE_ASSET_SNAPSHOT_SLOTS.release()
+        raise
 
 
 @router.get('/privacy', response_model=PrivacyPreferences)
@@ -274,6 +629,56 @@ def cinematic_assemble_project(project_id: str, request: AssembleMasterRequest):
         raise HTTPException(422, str(exc)) from exc
     except (RuntimeError, OSError) as exc:
         raise HTTPException(503, 'Local FFmpeg master assembly failed; check worker diagnostics') from exc
+
+
+@router.post('/projects/{project_id}/assembly-jobs', status_code=202)
+def queue_cinematic_master_assembly(project_id: str, request: AssembleMasterRequest):
+    """Return immediately with a durable job ID, never the actual MP4 bytes."""
+    try:
+        return enqueue_master_assembly(project_id, request)
+    except ProjectRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except MasterAssemblyNotReady as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except AssemblyQueueFull as exc:
+        raise HTTPException(429, str(exc)) from exc
+    except FilmDurationExceeded as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project not found') from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, 'Local assembly worker not available; inspect queued jobs') from exc
+
+
+@router.get('/projects/{project_id}/assembly-jobs')
+def cinematic_assembly_jobs(project_id: str, limit: int = 50, offset: int = 0):
+    try:
+        get_project(project_id)
+        return list_master_assembly_jobs(project_id, limit=limit, offset=offset)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project not found or invalid pagination') from exc
+
+
+@router.get('/projects/{project_id}/assembly-jobs/{job_id}')
+def cinematic_assembly_job(project_id: str, job_id: str):
+    try:
+        get_project(project_id)
+        return get_master_assembly_job(project_id, job_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project or assembly job not found') from exc
+
+
+
+@router.post('/projects/{project_id}/assembly-jobs/{job_id}/cancel')
+def cinematic_cancel_queued_assembly(project_id: str, job_id: str):
+    """Cancel only queued work; never imply an active FFmpeg job was stopped."""
+    try:
+        get_project(project_id)
+        return cancel_queued_master_assembly(project_id, job_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, 'Cinematic project or assembly job not found') from exc
+    except AssemblyCancellationConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get('/jobs')

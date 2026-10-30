@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 _ID_PATTERN = r'^[a-f0-9]{32}$'
+MAX_FILM_DURATION_SECONDS = 600
 DeliveryResolution = Literal['480p', '720p', '1080p', '1440p', '2160p']
 EngineProfile = Literal['low_vram', 'balanced', 'high_quality']
 
@@ -168,7 +169,7 @@ class ProjectCreateRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     title: str = Field(min_length=1, max_length=160)
     master_prompt: str = Field(min_length=1, max_length=100_000)
-    target_duration_seconds: float = Field(default=600, ge=10, le=28_800)
+    target_duration_seconds: float = Field(default=600, ge=10, le=MAX_FILM_DURATION_SECONDS)
     delivery_fps: int = Field(default=24, ge=1, le=120)
     delivery_resolution: DeliveryResolution = '1080p'
     aspect_ratio: str = Field(default='16:9', min_length=3, max_length=16)
@@ -191,7 +192,7 @@ class ProjectUpdateRequest(BaseModel):
     expected_revision: int = Field(ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=160)
     master_prompt: str | None = Field(default=None, min_length=1, max_length=100_000)
-    target_duration_seconds: float | None = Field(default=None, ge=10, le=28_800)
+    target_duration_seconds: float | None = Field(default=None, ge=10, le=MAX_FILM_DURATION_SECONDS)
     delivery_fps: int | None = Field(default=None, ge=1, le=120)
     delivery_resolution: DeliveryResolution | None = None
     aspect_ratio: str | None = Field(default=None, min_length=3, max_length=16)
