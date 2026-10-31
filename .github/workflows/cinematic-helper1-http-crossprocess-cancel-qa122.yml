@@ -1,0 +1,38 @@
+name: Helper 1 HTTP cross-process cancellation QA122
+
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'app/video/router.py'
+      - 'app/studio/server.py'
+      - 'app/video/storage.py'
+      - 'tests/test_cinematic_helper1_http_crossprocess_cancel_claim_qa122.py'
+      - '.github/workflows/cinematic-helper1-http-crossprocess-cancel-qa122.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  http-crossprocess-cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install local application and test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Verify HTTP cancellation against an independent SQLite claim process
+        run: >-
+          python -m pytest -q -W error -p no:cacheprovider
+          tests/test_cinematic_helper1_http_crossprocess_cancel_claim_qa122.py
