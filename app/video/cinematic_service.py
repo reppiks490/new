@@ -669,7 +669,12 @@ def _master_size(project: CinematicProject) -> tuple[int, int]:
             raise ValueError
     except (ValueError, TypeError) as exc:
         raise ValueError('aspect_ratio must be positive integers like 16:9') from exc
+    # Historic projects remain readable, but may not allocate unsafe FFmpeg frames.
+    from app.video.cinematic_models import _bounded_cinematic_aspect
+    _bounded_cinematic_aspect(project.aspect_ratio)
     width = max(2, 2 * round((height * numerator / denominator) / 2))
+    if width > 8192 or width * height > 8192 * 2160:
+        raise ValueError('aspect_ratio exceeds local cinematic geometry limits')
     return width, height
 
 

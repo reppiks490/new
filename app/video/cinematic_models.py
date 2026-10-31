@@ -36,6 +36,22 @@ def _validate_prompt(value: str) -> str:
     return value
 
 
+def _bounded_cinematic_aspect(value: str) -> str:
+    """Reject invalid or unrenderably large film geometry before persistence.
+
+    The maximum delivery canvas is 2160 px high, 8192 px wide.
+    """
+    import re
+    if not re.fullmatch(r'[0-9]+:[0-9]+', value):
+        raise ValueError('aspect_ratio must be positive integers like 16:9')
+    width_ratio, height_ratio = (int(part) for part in value.split(':'))
+    if width_ratio <= 0 or height_ratio <= 0:
+        raise ValueError('aspect_ratio must be positive integers like 16:9')
+    if 2160 * width_ratio > 8192 * height_ratio or 480 * width_ratio < 2 * height_ratio:
+        raise ValueError('aspect_ratio exceeds local cinematic geometry limits')
+    return value
+
+
 class ContinuityState(BaseModel):
     model_config = ConfigDict(extra='forbid')
     characters: Any | None = None
@@ -176,6 +192,11 @@ class ProjectCreateRequest(BaseModel):
     continuity_bible: ContinuityState = Field(default_factory=ContinuityState)
     reference_image_ids: list[str] = Field(default_factory=list)
 
+    @field_validator('aspect_ratio')
+    @classmethod
+    def validate_aspect_ratio(cls, value: str | None) -> str | None:
+        return None if value is None else _bounded_cinematic_aspect(value)
+
     @field_validator('master_prompt')
     @classmethod
     def reject_blank_master_prompt(cls, value: str) -> str:
@@ -199,6 +220,11 @@ class ProjectUpdateRequest(BaseModel):
     continuity_bible: ContinuityState | None = None
     reference_image_ids: list[str] | None = None
     scenes: list[CinematicScene] | None = None
+
+    @field_validator('aspect_ratio')
+    @classmethod
+    def validate_aspect_ratio(cls, value: str | None) -> str | None:
+        return None if value is None else _bounded_cinematic_aspect(value)
 
     @field_validator('master_prompt')
     @classmethod
