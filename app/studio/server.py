@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager
 import hmac
 import os
+import re
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -28,24 +29,46 @@ origins = [o.strip() for o in os.getenv('CHARACTER3D_STUDIO_ORIGINS','').split('
 app.add_middleware(CORSMiddleware, allow_origins=origins,
                    allow_methods=['GET','POST','PUT'], allow_headers=['Authorization','Content-Type'])
 
+# Require a literal local Host as well as a loopback peer for tokenless API access.
+_LOCAL_HOST = re.compile(r"(?:localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?", re.I)
+_TEST_HOST = re.compile(r"testserver(?::([0-9]{1,5}))?", re.I)
+
+def _trusted_tokenless_host(request: Request) -> bool:
+    hosts = request.headers.getlist('host')
+    if len(hosts) != 1:
+        return False
+    peer = request.client.host if request.client else None
+    match = _LOCAL_HOST.fullmatch(hosts[0])
+    if match is None and peer == 'testclient':
+        match = _TEST_HOST.fullmatch(hosts[0])
+    if match is None:
+        return False
+    port = match.group(1)
+    return port is None or 1 <= int(port) <= 65535
+
+
 @app.middleware('http')
 async def private_api(request: Request, call_next):
-    if request.url.path.startswith('/api/'):
+    if request.scope.get('path', '').startswith('/api/'):
         if request.method == 'OPTIONS':
             return await call_next(request)
         secret = os.getenv('CHARACTER3D_STUDIO_TOKEN')
-        supplied = request.headers.get('Authorization','').removeprefix('Bearer ')
+        authorization = request.headers.get('Authorization', '')
+        scheme, separator, supplied = authorization.partition(' ')
+        valid_bearer = bool(separator) and scheme.lower() == 'bearer'
         if secret:
-            if not hmac.compare_digest(secret.encode(), supplied.encode()):
+            if not valid_bearer or not hmac.compare_digest(secret.encode(), supplied.encode()):
                 return JSONResponse({'detail':'Studio access token required'},status_code=401, headers={'Cache-Control': 'no-store'})
-        elif not request.client or request.client.host not in {'127.0.0.1','::1','testclient'}:
-            return JSONResponse({'detail':'Remote API access requires CHARACTER3D_STUDIO_TOKEN'},status_code=403, headers={'Cache-Control': 'no-store'})
+        elif (not request.client
+              or request.client.host not in {'127.0.0.1', '::1', 'testclient'}
+              or not _trusted_tokenless_host(request)):
+            return JSONResponse({'detail':'Tokenless API requires trusted local peer and Host'},status_code=403, headers={'Cache-Control': 'no-store'})
         if request.method not in {'GET','HEAD'}:
             origin = request.headers.get('Origin')
             if origin and origin not in origins and origin.rstrip('/') != str(request.base_url).rstrip('/'):
                 return JSONResponse({'detail':'Origin is not allowed'},status_code=403, headers={'Cache-Control': 'no-store'})
     response = await call_next(request)
-    if request.url.path.startswith('/api/'):
+    if request.scope.get('path', '').startswith('/api/'):
         # Bearer-protected studio data and negative asset lookups are private.
         # Never let intermediaries cache them across authorization or recovery.
         response.headers['Cache-Control'] = 'no-store'

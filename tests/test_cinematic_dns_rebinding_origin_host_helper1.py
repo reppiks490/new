@@ -1,0 +1,926 @@
+"""Helper 1: loopback-only API access must not trust a rebinding Host/Origin.
+
+Conditional in-process DNS-rebinding threat model. No DNS server, public tunnel,
+real owner media, or actual browser exploit is used. Media proof is genuine
+synthetic FFmpeg/FFprobe/full decode, not mocked FFmpeg.
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+def _tools():
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") == "1":
+            pytest.fail("Strict rebinding QA requires real FFmpeg and FFprobe")
+        pytest.skip("Real FFmpeg/FFprobe unavailable in ordinary CI")
+    return ffmpeg, ffprobe
+
+
+def _run(*args):
+    return subprocess.run(args, check=True, capture_output=True, timeout=120)
+
+
+def test_rebinding_host_and_matching_origin_cannot_mutate_local_studio_without_token(
+    monkeypatch, tmp_path: Path,
+):
+    ffmpeg, ffprobe = _tools()
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    storage = importlib.import_module("app.video.storage")
+    service = importlib.import_module("app.video.cinematic_service")
+    asset_id = "7" * 32
+    source = storage.video_asset_path(asset_id, "mp4")
+    _run(
+        ffmpeg, "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=red:s=160x90:r=24:d=2",
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart", str(source),
+    )
+    payload = source.read_bytes()
+    assert len(payload) > 2048
+    digest = hashlib.sha256(payload).hexdigest()
+    metadata = json.loads(_run(
+        ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,nb_read_frames",
+        "-of", "json", str(source),
+    ).stdout)
+    assert metadata["streams"][0]["codec_name"] == "h264"
+    assert int(metadata["streams"][0]["nb_read_frames"]) == 48
+    _run(ffmpeg, "-nostdin", "-v", "error", "-xerror",
+         "-i", str(source), "-an", "-f", "null", "-")
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+    url = f"/api/video/assets/{asset_id}.mp4"
+    project_request = {
+        "title": "Synthetic origin/Host boundary QA",
+        "master_prompt": "SYNTHETIC_PRIVATE_REBINDING_SCREENPLAY_f81d",
+        "target_duration_seconds": 10,
+        "delivery_fps": 24,
+        "delivery_resolution": "480p",
+        "aspect_ratio": "16:9",
+    }
+
+    # Control: actual local access is supported without a configured token.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42000)) as local:
+        media = local.get(url)
+        assert media.status_code == 200
+        assert media.headers["cache-control"] == "no-store"
+        assert media.content == payload
+        good = local.post(
+            "/api/video/projects", json=project_request,
+            headers={"Origin": "http://localhost"},
+        )
+        assert good.status_code == 200
+        project_id = good.json()["id"]
+        assert good.json()["master_prompt"] == project_request["master_prompt"]
+        assert local.get(f"/api/video/projects/{project_id}").json()[
+            "master_prompt"
+        ] == project_request["master_prompt"]
+    before = len(service.list_projects())
+
+    # Control: a genuinely remote peer cannot read private media or screenplay
+    # and cannot write when no token is configured.
+    private_routes = (
+        ("project-list", "/api/video/projects"),
+        ("project-detail", f"/api/video/projects/{project_id}"),
+        ("private-mp4", url),
+    )
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42001)) as remote:
+        for label, route in private_routes:
+            denied_read = remote.get(route)
+            assert denied_read.status_code == 403, label
+        denied = remote.post(
+            "/api/video/projects", json=project_request,
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        assert denied.status_code == 403
+    assert len(service.list_projects()) == before
+
+    # Conditional DNS-rebinding simulation: an attacker-owned Host and Origin
+    # both name a domain resolved to loopback. Read and write access must be
+    # denied, even if the peer IP appears local. Collect all outcomes rather
+    # than failing on the first route so CI identifies each distinct exposure.
+    # This is NOT proof of a real DNS/browser attack or deployed exposure.
+    violations = []
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("127.0.0.1", 42002)) as rebound:
+        for label, route in private_routes:
+            exposed = rebound.get(
+                route, headers={"Origin": "http://cinema.attacker.invalid"},
+            )
+            assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+            if exposed.status_code not in (401, 403):
+                violations.append(f"{label}:HTTP-{exposed.status_code}")
+                # Establish the *synthetic* data really crossed the boundary,
+                # not just that a handler returned an empty success response.
+                if exposed.status_code == 200 and label == "private-mp4":
+                    assert exposed.content == payload
+                elif exposed.status_code == 200 and label == "project-detail":
+                    assert exposed.json()["master_prompt"] == project_request[
+                        "master_prompt"
+                    ]
+                elif exposed.status_code == 200 and label == "project-list":
+                    assert any(
+                        item.get("master_prompt") == project_request["master_prompt"]
+                        for item in exposed.json()
+                    )
+        response = rebound.post(
+            "/api/video/projects", json=project_request,
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        if response.status_code not in (401, 403):
+            violations.append(f"project-write:HTTP-{response.status_code}")
+    # Browser navigation GETs frequently omit Origin entirely. Host validation
+    # must not depend on an Origin header being present. A non-browser client
+    # can also send POST without Origin; reject that untrusted Host too.
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("127.0.0.1", 42003)) as originless:
+        for label, route in private_routes:
+            exposed = originless.get(route)
+            assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+            assert "origin" not in exposed.request.headers
+            if exposed.status_code not in (401, 403):
+                violations.append(f"originless-navigation-{label}:HTTP-{exposed.status_code}")
+                if exposed.status_code == 200 and label == "private-mp4":
+                    assert exposed.content == payload
+                elif exposed.status_code == 200 and label == "project-detail":
+                    assert exposed.json()["master_prompt"] == project_request["master_prompt"]
+                elif exposed.status_code == 200 and label == "project-list":
+                    assert any(
+                        item.get("master_prompt") == project_request["master_prompt"]
+                        for item in exposed.json()
+                    )
+        no_origin_write = originless.post("/api/video/projects", json=project_request)
+        assert "origin" not in no_origin_write.request.headers
+        if no_origin_write.status_code not in (401, 403):
+            violations.append(f"originless-project-write:HTTP-{no_origin_write.status_code}")
+
+    # A trusted-looking Origin must not override an untrusted Host. This is
+    # an in-process header combination, not a claim of browser exploitability.
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("127.0.0.1", 42004)) as spoofed:
+        for label, route in private_routes:
+            exposed = spoofed.get(route, headers={"Origin": "http://localhost"})
+            assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+            if exposed.status_code not in (401, 403):
+                violations.append(f"trusted-origin-untrusted-host-{label}:HTTP-{exposed.status_code}")
+                if exposed.status_code == 200 and label == "private-mp4":
+                    assert exposed.content == payload
+                elif exposed.status_code == 200 and label == "project-detail":
+                    assert exposed.json()["master_prompt"] == project_request["master_prompt"]
+                elif exposed.status_code == 200 and label == "project-list":
+                    assert any(
+                        item.get("master_prompt") == project_request["master_prompt"]
+                        for item in exposed.json()
+                    )
+        spoofed_write = spoofed.post(
+            "/api/video/projects", json=project_request,
+            headers={"Origin": "http://localhost"},
+        )
+        if spoofed_write.status_code not in (401, 403):
+            violations.append(f"trusted-origin-untrusted-host-write:HTTP-{spoofed_write.status_code}")
+
+    # Owner privacy controls are also private API state. A rebinding Host must
+    # not read preferences or disable protections, even with a local TCP peer.
+    # These are synthetic settings in tmp_path, never owner preferences.
+    privacy_url = "/api/video/privacy"
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42005)) as local:
+        baseline_privacy = local.get(privacy_url)
+        assert baseline_privacy.status_code == 200
+        original_privacy = baseline_privacy.json()
+        assert local.put(privacy_url, json=original_privacy).status_code == 200
+
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42006)) as remote:
+        assert remote.get(privacy_url).status_code == 403
+        assert remote.put(privacy_url, json=original_privacy).status_code == 403
+
+    changed_privacy = {
+        **original_privacy,
+        "privacy_mode": not original_privacy["privacy_mode"],
+        "idle_lock_seconds": 77,
+    }
+    privacy_variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (variant, headers) in enumerate(privacy_variants):
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42010 + offset)) as rebound_privacy:
+            exposed = rebound_privacy.get(privacy_url, headers=headers)
+            assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+            if exposed.status_code not in (401, 403):
+                violations.append(f"{variant}-privacy-read:HTTP-{exposed.status_code}")
+                if exposed.status_code == 200:
+                    assert "privacy_mode" in exposed.json()
+                    assert "idle_lock_seconds" in exposed.json()
+            modified = rebound_privacy.put(
+                privacy_url, headers=headers, json=changed_privacy,
+            )
+            if modified.status_code not in (401, 403):
+                violations.append(f"{variant}-privacy-write:HTTP-{modified.status_code}")
+                if modified.status_code == 200:
+                    assert modified.json()["privacy_mode"] == changed_privacy["privacy_mode"]
+                    assert modified.json()["idle_lock_seconds"] == 77
+
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42020)) as local:
+        if local.get(privacy_url).json() != original_privacy:
+            violations.append("unauthorized-privacy-preferences-mutation")
+
+    if len(service.list_projects()) != before:
+        violations.append("unauthorized-project-mutation")
+    assert not violations, (
+        "Tokenless DNS-rebound Host/Origin accepted private synthetic media, "
+        "screenplay or writes: " + ", ".join(violations)
+    )
+
+
+def test_rebound_host_cannot_read_or_cancel_durable_master_jobs(
+    monkeypatch, tmp_path: Path,
+):
+    """Reject hostile Host on async metadata and cancellation, not just project CRUD.
+
+    The jobs are inert synthetic SQLite records. Suppressing queue dispatch
+    avoids starting FFmpeg or GPU work; this tests the HTTP security boundary,
+    project-ID isolation and durable cancellation state, not media rendering.
+    """
+    # Ordinary pytest runs may lack FFmpeg and must remain a neutral baseline;
+    # this negative security acceptance belongs to the dedicated strict matrix.
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Strict Host/async-job security acceptance runs in dedicated real-media CI")
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    storage = importlib.import_module("app.video.storage")
+    assembly = importlib.import_module("app.video.cinematic_assembly_jobs")
+    monkeypatch.setattr(assembly, "_dispatch", lambda: None)
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+
+    project_request = {
+        "title": "Synthetic queued master Host boundary",
+        "master_prompt": "PRIVATE_SYNTHETIC_QUEUE_PROMPT_4f19",
+        "target_duration_seconds": 10,
+        "delivery_fps": 24,
+        "delivery_resolution": "480p",
+        "aspect_ratio": "16:9",
+    }
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42100)) as local:
+        a = local.post("/api/video/projects", json=project_request)
+        b = local.post("/api/video/projects", json={
+            **project_request, "title": "Other synthetic project",
+        })
+        assert a.status_code == b.status_code == 200
+        project_id, other_id = a.json()["id"], b.json()["id"]
+        assert project_id != other_id
+
+    def seed_queued(identifier: str) -> str:
+        storage.put_video_record(
+            "video_assembly_job",
+            {
+                "project_id": project_id,
+                "project_revision": a.json()["revision"],
+                "ffmpeg_path": "ffmpeg",
+                "status": "queued",
+                "stage": "Queued",
+                "created_at": 1.0,
+                "updated_at": 1.0,
+                "progress": 0,
+            },
+            identifier=identifier,
+        )
+        return f"/api/video/projects/{project_id}/assembly-jobs/{identifier}"
+
+    legitimate_url = seed_queued("1" * 32)
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42101)) as local:
+        listing = local.get(f"/api/video/projects/{project_id}/assembly-jobs")
+        assert listing.status_code == 200
+        assert any(job["id"] == "1" * 32 for job in listing.json()["jobs"])
+        assert local.get(legitimate_url).json()["status"] == "queued"
+        assert local.get(
+            f"/api/video/projects/{other_id}/assembly-jobs/" + "1" * 32
+        ).status_code == 404
+        cancelled = local.post(legitimate_url + "/cancel",
+                               headers={"Origin": "http://localhost"})
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert storage.get_video_record("video_assembly_job", "1" * 32)[
+            "status"
+        ] == "cancelled"
+
+    variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}, "2" * 32),
+        ("originless", {}, "3" * 32),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}, "4" * 32),
+    )
+    violations = []
+    for offset, (label, headers, job_id) in enumerate(variants):
+        job_url = seed_queued(job_id)
+        collection = f"/api/video/projects/{project_id}/assembly-jobs"
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("198.51.100.24", 42110 + offset)) as remote:
+            assert remote.get(collection).status_code == 403
+            assert remote.get(job_url).status_code == 403
+            assert remote.post(job_url + "/cancel", headers=headers).status_code == 403
+        assert storage.get_video_record("video_assembly_job", job_id)[
+            "status"
+        ] == "queued"
+
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42120 + offset)) as rebound:
+            for route_name, route in (("collection", collection), ("detail", job_url)):
+                exposed = rebound.get(route, headers=headers)
+                assert exposed.request.headers["host"] == "cinema.attacker.invalid"
+                if exposed.status_code not in (401, 403):
+                    violations.append(f"{label}-{route_name}:HTTP-{exposed.status_code}")
+                    if exposed.status_code == 200:
+                        body = exposed.json()
+                        if route_name == "collection":
+                            assert any(job["id"] == job_id for job in body["jobs"])
+                        else:
+                            assert body["id"] == job_id
+                            assert body["project_id"] == project_id
+            changed = rebound.post(job_url + "/cancel", headers=headers)
+            assert changed.request.headers["host"] == "cinema.attacker.invalid"
+            if changed.status_code not in (401, 403):
+                violations.append(f"{label}-cancel:HTTP-{changed.status_code}")
+                if changed.status_code == 200:
+                    assert changed.json()["status"] == "cancelled"
+
+        stored_status = storage.get_video_record("video_assembly_job", job_id)["status"]
+        if stored_status != "queued":
+            violations.append(f"{label}-unauthorized-durable-job-mutation:{stored_status}")
+
+    assert not violations, (
+        "Untrusted Host reached private async assembly metadata/cancellation: "
+        + ", ".join(violations)
+    )
+
+
+def test_rebound_host_cannot_persist_private_image_upload(
+    monkeypatch, tmp_path: Path,
+):
+    """Host validation must protect private image writes, not only JSON state.
+
+    Uses only a synthetic PNG in an isolated workspace.  The remote bearer
+    control is important: a future Host fix must not disable authenticated
+    remote access.  No owner images, GPU jobs or external services are used.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Strict Host/private-upload regression is dedicated security CI")
+
+    from io import BytesIO
+    from PIL import Image
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+    storage = importlib.import_module("app.video.storage")
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+
+    png = BytesIO()
+    Image.new("RGB", (17, 13), (41, 73, 109)).save(png, format="PNG")
+    upload = {"file": ("synthetic-private-reference.png", png.getvalue(), "image/png")}
+    endpoint = "/api/video/images"
+    asset_dir = tmp_path / "video-assets"
+
+    def saved_assets():
+        return set(asset_dir.glob("*.png")) if asset_dir.exists() else set()
+
+    # Legitimate tokenless localhost uploads and private PNG downloads work.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42200)) as local:
+        good = local.post(endpoint, files=upload,
+                          headers={"Origin": "http://localhost"})
+        assert good.status_code == 200, good.text
+        asset_id = good.json()["image_id"]
+        private_url = f"/api/video/assets/{asset_id}.png"
+        assert good.json()["url"] == private_url
+        media = local.get(private_url)
+        assert media.status_code == 200
+        assert media.headers["cache-control"] == "no-store"
+        with Image.open(BytesIO(media.content)) as decoded:
+            assert decoded.size == (17, 13)
+            assert decoded.getpixel((0, 0)) == (41, 73, 109)
+
+    # A truly remote peer cannot use tokenless private image APIs.
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42201)) as remote:
+        assert remote.get(private_url).status_code == 403
+        assert remote.post(endpoint, files=upload,
+                           headers={"Origin": "http://cinema.attacker.invalid"}
+                           ).status_code == 403
+
+    # Positive remote Bearer control prevents an overbroad Host fix from
+    # accidentally disabling authenticated mobile / remote operation.
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-qa-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42202)) as authorized_remote:
+        headers = {
+            "Authorization": "Bearer synthetic-qa-bearer",
+            "Origin": "http://cinema.attacker.invalid",
+        }
+        assert authorized_remote.get(private_url, headers=headers).status_code == 200
+        allowed = authorized_remote.post(endpoint, files=upload, headers=headers)
+        assert allowed.status_code == 200, allowed.text
+        assert storage.video_asset_path(allowed.json()["image_id"], "png").is_file()
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    before = saved_assets()
+    violations = []
+    variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (label, headers) in enumerate(variants):
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42210 + offset)) as rebound:
+            attempted = rebound.post(endpoint, files=upload, headers=headers)
+            assert attempted.request.headers["host"] == "cinema.attacker.invalid"
+            if attempted.status_code not in (401, 403):
+                violations.append(f"{label}-private-image-upload:HTTP-{attempted.status_code}")
+                if attempted.status_code == 200:
+                    # Confirm an actual synthetic private PNG was durably
+                    # created, rather than mistaking an empty 200 for exposure.
+                    uploaded_id = attempted.json()["image_id"]
+                    saved = storage.video_asset_path(uploaded_id, "png")
+                    assert saved.is_file()
+                    with Image.open(saved) as decoded:
+                        assert decoded.size == (17, 13)
+                        assert decoded.getpixel((0, 0)) == (41, 73, 109)
+    new_files = saved_assets() - before
+    if new_files:
+        violations.append(f"unauthorized-persisted-private-pngs:{len(new_files)}")
+    assert not violations, (
+        "Untrusted Host accepted private synthetic PNG uploads: "
+        + ", ".join(violations)
+    )
+
+
+def test_rebound_host_cannot_enqueue_private_gpu_generation(
+    monkeypatch, tmp_path: Path,
+):
+    """An untrusted Host must not reach the local GPU job admission boundary.
+
+    No GPU worker, video model, FFmpeg process, or paid provider is invoked:
+    enqueue_video_job is replaced with a spy returning inert synthetic metadata.
+    The test checks whether the HTTP authorization gate permits that call.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Dedicated strict Host/generation admission security matrix")
+
+    from PIL import Image
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    storage = importlib.import_module("app.video.storage")
+    asset_id = "9" * 32
+    Image.new("RGB", (19, 11), (29, 59, 89)).save(
+        storage.video_asset_path(asset_id, "png")
+    )
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+    router = importlib.import_module("app.video.router")
+
+    admitted = []
+
+    def inert_enqueue(request):
+        admitted.append((request.image_id, request.prompt))
+        return {"id": "a" * 32, "status": "queued"}
+
+    monkeypatch.setattr(router, "enqueue_video_job", inert_enqueue)
+    endpoint = "/api/video/generate"
+    payload = {
+        "image_id": asset_id,
+        "prompt": "SYNTHETIC_PRIVATE_GPU_ADMISSION_ONLY_6e42",
+        "duration_seconds": 1.0,
+    }
+
+    # Positive controls: legitimate local and explicitly authenticated remote
+    # users may reach admission. The spy guarantees no real worker dispatch.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42300)) as local:
+        accepted = local.post(endpoint, json=payload,
+                              headers={"Origin": "http://localhost"})
+        assert accepted.status_code == 200, accepted.text
+    assert admitted == [(asset_id, payload["prompt"])]
+
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42301)) as remote:
+        denied = remote.post(
+            endpoint, json=payload,
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        assert denied.status_code == 403
+    assert len(admitted) == 1
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-gpu-admission-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42302)) as authorized_remote:
+        accepted = authorized_remote.post(
+            endpoint, json=payload,
+            headers={
+                "Authorization": "Bearer synthetic-gpu-admission-bearer",
+                "Origin": "http://cinema.attacker.invalid",
+            },
+        )
+        assert accepted.status_code == 200, accepted.text
+    assert len(admitted) == 2
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    violations = []
+    variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (label, headers) in enumerate(variants):
+        before = len(admitted)
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42310 + offset)) as rebound:
+            result = rebound.post(endpoint, json=payload, headers=headers)
+            assert result.request.headers["host"] == "cinema.attacker.invalid"
+            if not headers:
+                assert "origin" not in result.request.headers
+            if result.status_code not in (401, 403):
+                violations.append(f"{label}-gpu-admission:HTTP-{result.status_code}")
+            if len(admitted) != before:
+                violations.append(f"{label}-unauthorized-enqueue-spy-invoked")
+                assert admitted[-1] == (asset_id, payload["prompt"])
+
+    assert not violations, (
+        "Untrusted Host reached private local generation admission (inert "
+        "spy only; no GPU/paid work): " + ", ".join(violations)
+    )
+
+
+def test_rebound_host_cannot_admit_private_ffmpeg_master_assembly(
+    monkeypatch, tmp_path: Path,
+):
+    """Untrusted Host must not admit an async local FFmpeg assembly request.
+
+    The enqueue function is an inert spy. No real FFmpeg assembly, queue
+    persistence, worker, paid service, or owner media is touched here.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Dedicated strict Host/master-assembly admission security matrix")
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+    router = importlib.import_module("app.video.router")
+
+    project_request = {
+        "title": "Synthetic FFmpeg admission Host boundary",
+        "master_prompt": "SYNTHETIC_PRIVATE_ASSEMBLY_ADMISSION_7e19",
+        "target_duration_seconds": 10,
+        "delivery_fps": 24,
+        "delivery_resolution": "480p",
+        "aspect_ratio": "16:9",
+    }
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42400)) as local:
+        created = local.post("/api/video/projects", json=project_request)
+        assert created.status_code == 200, created.text
+        project_id = created.json()["id"]
+        revision = created.json()["revision"]
+
+    admitted = []
+
+    def inert_enqueue(identifier, request):
+        admitted.append((identifier, request.expected_revision, request.ffmpeg_path))
+        return {
+            "id": "b" * 32, "project_id": identifier,
+            "project_revision": request.expected_revision, "status": "queued",
+        }
+
+    monkeypatch.setattr(router, "enqueue_master_assembly", inert_enqueue)
+    endpoint = f"/api/video/projects/{project_id}/assembly-jobs"
+    payload = {"expected_revision": revision}
+    expected = (project_id, revision, "ffmpeg")
+
+    # Positive controls: local tokenless and remote explicit Bearer admission.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42401)) as local:
+        response = local.post(
+            endpoint, json=payload, headers={"Origin": "http://localhost"},
+        )
+        assert response.status_code == 202, response.text
+        assert response.json()["project_id"] == project_id
+    assert admitted == [expected]
+
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42402)) as remote:
+        response = remote.post(
+            endpoint, json=payload,
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        assert response.status_code == 403
+    assert admitted == [expected]
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-master-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42403)) as authorized_remote:
+        response = authorized_remote.post(
+            endpoint, json=payload,
+            headers={
+                "Authorization": "Bearer synthetic-master-bearer",
+                "Origin": "http://cinema.attacker.invalid",
+            },
+        )
+        assert response.status_code == 202, response.text
+    assert admitted == [expected, expected]
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    violations = []
+    variants = (
+        ("matching-attacker-origin", {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (label, headers) in enumerate(variants):
+        before = len(admitted)
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42410 + offset)) as rebound:
+            response = rebound.post(endpoint, json=payload, headers=headers)
+            assert response.request.headers["host"] == "cinema.attacker.invalid"
+            if not headers:
+                assert "origin" not in response.request.headers
+            if response.status_code not in (401, 403):
+                violations.append(f"{label}-ffmpeg-admission:HTTP-{response.status_code}")
+            if len(admitted) != before:
+                violations.append(f"{label}-unauthorized-master-enqueue-spy-invoked")
+                assert admitted[-1] == expected
+
+    assert not violations, (
+        "Untrusted Host reached private FFmpeg master-assembly admission "
+        "(inert spy only; no worker or media output): " + ", ".join(violations)
+    )
+
+
+def test_rebound_host_cannot_compile_private_screenplay(
+    monkeypatch, tmp_path: Path,
+):
+    """An untrusted Host cannot persist generated screenplay scenes.
+
+    Genuine SQLite project/revision state is used. Compiling is deterministic
+    local editorial work, not GPU inference, paid generation, or FFmpeg.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Dedicated strict Host/screenplay compilation security matrix")
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+    service = importlib.import_module("app.video.cinematic_service")
+
+    def new_project(client, suffix):
+        created = client.post("/api/video/projects", json={
+            "title": f"Synthetic compilation boundary {suffix}",
+            "master_prompt": f"SYNTHETIC_PRIVATE_COMPILE_{suffix}_a91d",
+            "target_duration_seconds": 10,
+            "delivery_fps": 24,
+            "delivery_resolution": "480p",
+            "aspect_ratio": "16:9",
+        })
+        assert created.status_code == 200, created.text
+        assert created.json()["revision"] == 1
+        assert not created.json()["scenes"]
+        return created.json()
+
+    def compile_url(project):
+        return f"/api/video/projects/{project['id']}/compile"
+
+    def compile_body(project):
+        return {
+            "expected_revision": project["revision"],
+            "preferred_shot_seconds": 2,
+            "engine_max_duration_seconds": 2,
+        }
+
+    # Local positive control: the real deterministic compiler persists scenes.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42500)) as local:
+        local_project = new_project(local, "local")
+        allowed = local.post(
+            compile_url(local_project), json=compile_body(local_project),
+            headers={"Origin": "http://localhost"},
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["project"]["revision"] == 2
+        assert allowed.json()["project"]["scenes"]
+        assert service.get_project(local_project["id"]).revision == 2
+
+        # Distinct project per variant prevents a successful unauthorized
+        # compile from making later requests fail only due to stale revision.
+        variants = (
+            ("matching-attacker-origin",
+             {"Origin": "http://cinema.attacker.invalid"}),
+            ("originless", {}),
+            ("trusted-looking-origin", {"Origin": "http://localhost"}),
+        )
+        projects = [(label, headers, new_project(local, label))
+                    for label, headers in variants]
+        remote_project = new_project(local, "remote-control")
+        bearer_project = new_project(local, "bearer-control")
+
+    # Genuinely remote unauthenticated peers must be rejected with no mutation.
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42501)) as remote:
+        denied = remote.post(
+            compile_url(remote_project), json=compile_body(remote_project),
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        assert denied.status_code == 403
+    assert service.get_project(remote_project["id"]).revision == 1
+
+    # Supported authenticated remote usage must survive a future Host fix.
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-compile-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42502)) as authenticated:
+        accepted = authenticated.post(
+            compile_url(bearer_project), json=compile_body(bearer_project),
+            headers={
+                "Authorization": "Bearer synthetic-compile-bearer",
+                "Origin": "http://cinema.attacker.invalid",
+            },
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["project"]["scenes"]
+    assert service.get_project(bearer_project["id"]).revision == 2
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    violations = []
+    for offset, (label, headers, project) in enumerate(projects):
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42510 + offset)) as rebound:
+            result = rebound.post(
+                compile_url(project), json=compile_body(project),
+                headers=headers,
+            )
+            assert result.request.headers["host"] == "cinema.attacker.invalid"
+            if not headers:
+                assert "origin" not in result.request.headers
+            if result.status_code not in (401, 403):
+                violations.append(f"{label}-compile:HTTP-{result.status_code}")
+                if result.status_code == 200:
+                    compiled = result.json()["project"]
+                    assert compiled["master_prompt"] == project["master_prompt"]
+                    assert compiled["scenes"]
+                    assert compiled["revision"] == 2
+            stored = service.get_project(project["id"])
+            if stored.revision != project["revision"] or stored.scenes:
+                violations.append(
+                    f"{label}-unauthorized-durable-compile:revision-{stored.revision}"
+                )
+
+    assert not violations, (
+        "Untrusted Host compiled private synthetic screenplay into durable "
+        "project scenes (no model or paid work): " + ", ".join(violations)
+    )
+
+
+def test_rebound_host_cannot_admit_private_batch_render(
+    monkeypatch, tmp_path: Path,
+):
+    """A hostile Host must not schedule up to 10,000 private shot renders.
+
+    The batch scheduler is an inert spy. This tests admission only, not GPU
+    execution, queue persistence, paid inference or actual media generation.
+    """
+    if os.getenv("CINEMATIC_REQUIRE_REAL_MEDIA") != "1":
+        pytest.skip("Dedicated strict Host/batch-render admission security matrix")
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+    monkeypatch.setenv("CHARACTER3D_STUDIO_ORIGINS", "")
+
+    for name in ("app.studio.server", "app.video.router"):
+        sys.modules.pop(name, None)
+    server = importlib.import_module("app.studio.server")
+    router = importlib.import_module("app.video.router")
+
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42600)) as local:
+        created = local.post("/api/video/projects", json={
+            "title": "Synthetic private batch admission boundary",
+            "master_prompt": "SYNTHETIC_BATCH_ADMISSION_ONLY_6f27",
+            "target_duration_seconds": 10,
+            "delivery_fps": 24,
+            "delivery_resolution": "480p",
+            "aspect_ratio": "16:9",
+        })
+        assert created.status_code == 200, created.text
+        project_id, revision = created.json()["id"], created.json()["revision"]
+
+    admitted = []
+
+    def inert_batch(identifier, request):
+        admitted.append((
+            identifier, request.expected_revision, request.max_shots,
+        ))
+        return {"project_id": identifier, "scheduled": 0, "status": "spy-only"}
+
+    monkeypatch.setattr(router, "render_project_missing", inert_batch)
+    endpoint = f"/api/video/projects/{project_id}/render-missing"
+    payload = {"expected_revision": revision, "max_shots": 10000}
+    expected = (project_id, revision, 10000)
+
+    # Legitimate tokenless localhost and authenticated remote use are controls.
+    with TestClient(server.app, base_url="http://localhost",
+                    client=("127.0.0.1", 42601)) as local:
+        accepted = local.post(
+            endpoint, json=payload, headers={"Origin": "http://localhost"},
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["status"] == "spy-only"
+    assert admitted == [expected]
+
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42602)) as remote:
+        denied = remote.post(
+            endpoint, json=payload,
+            headers={"Origin": "http://cinema.attacker.invalid"},
+        )
+        assert denied.status_code == 403
+    assert admitted == [expected]
+
+    monkeypatch.setenv("CHARACTER3D_STUDIO_TOKEN", "synthetic-batch-bearer")
+    with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                    client=("198.51.100.24", 42603)) as authenticated:
+        accepted = authenticated.post(
+            endpoint, json=payload,
+            headers={
+                "Authorization": "Bearer synthetic-batch-bearer",
+                "Origin": "http://cinema.attacker.invalid",
+            },
+        )
+        assert accepted.status_code == 200, accepted.text
+    assert admitted == [expected, expected]
+    monkeypatch.delenv("CHARACTER3D_STUDIO_TOKEN", raising=False)
+
+    violations = []
+    variants = (
+        ("matching-attacker-origin",
+         {"Origin": "http://cinema.attacker.invalid"}),
+        ("originless", {}),
+        ("trusted-looking-origin", {"Origin": "http://localhost"}),
+    )
+    for offset, (label, headers) in enumerate(variants):
+        before = len(admitted)
+        with TestClient(server.app, base_url="http://cinema.attacker.invalid",
+                        client=("127.0.0.1", 42610 + offset)) as rebound:
+            response = rebound.post(endpoint, json=payload, headers=headers)
+            assert response.request.headers["host"] == "cinema.attacker.invalid"
+            if not headers:
+                assert "origin" not in response.request.headers
+            if response.status_code not in (401, 403):
+                violations.append(f"{label}-batch-admission:HTTP-{response.status_code}")
+            if len(admitted) != before:
+                violations.append(f"{label}-unauthorized-batch-scheduler-spy-invoked")
+                assert admitted[-1] == expected
+
+    assert not violations, (
+        "Untrusted Host reached private 10,000-shot batch admission "
+        "(inert spy only; no GPU or jobs): " + ", ".join(violations)
+    )

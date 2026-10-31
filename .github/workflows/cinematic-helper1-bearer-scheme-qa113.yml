@@ -1,0 +1,43 @@
+name: Helper 1 strict private API Bearer scheme QA113
+
+on:
+  push:
+    branches:
+      - chatgpt/helper1-bearer-scheme-hardening-qa113-20261027
+  pull_request:
+    branches:
+      - chatgpt/helper1-private-api-no-store-denials-20261026
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  strict-bearer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install app test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Exercise actual private API middleware (no startup or media)
+        run: |
+          mkdir -p test-results
+          python -m pytest -q -W error tests/test_cinematic_helper1_bearer_scheme_qa113.py --junitxml=test-results/helper1-bearer-${{ matrix.python-version }}.xml
+      - name: Preserve targeted test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: helper1-bearer-${{ matrix.python-version }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
