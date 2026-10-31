@@ -1,0 +1,36 @@
+name: Cinematic extreme aspect geometry QA29
+
+on:
+  pull_request:
+    paths:
+      - 'app/video/cinematic_geometry_guard_qa29.py'
+      - 'tests/test_cinematic_geometry_guard_qa29.py'
+      - 'tests/test_cinematic_extreme_geometry_contract_qa29.py'
+      - '.github/workflows/cinematic-extreme-geometry-qa29.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-geometry-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    env:
+      CINEMATIC_REQUIRE_EXTREME_GEOMETRY_QA: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install application and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Verify optional guard and reproduce app-level geometry admission defect
+        run: >-
+          python -m pytest -q -W error
+          tests/test_cinematic_geometry_guard_qa29.py
+          tests/test_cinematic_extreme_geometry_contract_qa29.py
