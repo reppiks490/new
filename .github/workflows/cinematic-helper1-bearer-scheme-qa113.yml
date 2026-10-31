@@ -5,8 +5,10 @@ on:
     branches:
       - chatgpt/helper1-bearer-scheme-hardening-qa113-20261027
   pull_request:
-    branches:
-      - chatgpt/helper1-private-api-no-store-denials-20261026
+    paths:
+      - 'app/studio/server.py'
+      - 'tests/test_cinematic_helper1_bearer_scheme_qa113.py'
+      - '.github/workflows/cinematic-helper1-bearer-scheme-qa113.yml'
   workflow_dispatch:
 
 permissions:
