@@ -1,0 +1,50 @@
+name: Cinematic zero-byte completed MP4 QA53
+
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_orphan_media_audit_qa49.py'
+      - 'tests/test_cinematic_orphan_zero_byte_completed_qa53.py'
+      - 'tests/test_cinematic_orphan_filesystem_identity_qa52.py'
+      - 'tests/test_cinematic_orphan_record_integrity_qa51.py'
+      - 'tests/test_cinematic_orphan_queue_quiescence_qa50.py'
+      - 'tests/test_cinematic_orphan_media_audit_qa49.py'
+      - '.github/workflows/cinematic-orphan-zero-byte-completed-qa53.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-sqlite-media-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Require FFmpeg H.264 for inherited genuine synthetic media test
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx264
+      - name: Install pytest
+        run: python -m pip install 'pytest>=8,<10'
+      - name: Strict QA49-QA53 acceptance
+        env:
+          CINEMATIC_REQUIRE_REAL_MEDIA: '1'
+        run: |
+          python -m pytest -q -W error \
+            tests/test_cinematic_orphan_media_audit_qa49.py \
+            tests/test_cinematic_orphan_queue_quiescence_qa50.py \
+            tests/test_cinematic_orphan_record_integrity_qa51.py \
+            tests/test_cinematic_orphan_filesystem_identity_qa52.py \
+            tests/test_cinematic_orphan_zero_byte_completed_qa53.py

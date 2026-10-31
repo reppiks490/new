@@ -1,0 +1,26 @@
+name: Cinematic queue payload shape QA46
+on:
+  pull_request:
+    paths:
+      - 'tools/cinematic_queue_payload_audit_qa46.py'
+      - 'tests/test_cinematic_queue_payload_audit_qa46.py'
+      - 'docs/CINEMATIC_QUEUE_PAYLOAD_QA46.md'
+      - '.github/workflows/cinematic-queue-payload-audit-qa46.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-sqlite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install pytest
+      - run: python -m pytest -q tests/test_cinematic_queue_payload_audit_qa46.py
