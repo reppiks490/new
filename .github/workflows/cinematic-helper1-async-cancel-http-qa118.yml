@@ -1,0 +1,40 @@
+name: Helper 1 async cancellation HTTP privacy QA118
+
+on:
+  pull_request:
+    paths:
+      - 'app/studio/server.py'
+      - 'app/video/router.py'
+      - 'app/video/cinematic_assembly_jobs.py'
+      - 'app/video/cinematic_service.py'
+      - 'app/video/storage.py'
+      - 'tests/test_cinematic_helper1_async_cancel_http_privacy_qa118.py'
+      - '.github/workflows/cinematic-helper1-async-cancel-http-qa118.yml'
+  push:
+    branches:
+      - 'feat/cinematic-orchestrator-v1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cancel-http-privacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install local application and tests
+        run: |
+          python -m pip install -e ".[dev]"
+      - name: Verify async cancellation HTTP privacy and project isolation
+        run: |
+          python -m pytest -q -W error -p no:cacheprovider \
+            tests/test_cinematic_helper1_async_cancel_http_privacy_qa118.py
